@@ -8,7 +8,9 @@
 
 打包只带只读资源（frontend / resources）。用户数据永远写在 exe 同目录的
 config/（含加密 token 与账号练度），不会被打进包里；程序任何模式下都不向上
-找目录。压缩发版请用全新构建产物（运行过会多出 config/、debug/）。
+找目录。PyInstaller 先在 work/dist/ 出全新包，再同名文件覆盖合并进
+build/MAA-PRTS/，原地运行产生的 config/、debug/ 等一律不动（不属于本次
+构建的旧文件也不清理）。压缩发版前请剔除 config/、debug/。
 """
 from __future__ import annotations
 
@@ -81,21 +83,51 @@ def make_icon():
     return ICON
 
 
+def merge_overwrite(src, dst):
+    """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动"""
+    for base, _dirs, files in os.walk(src):
+        rel = os.path.relpath(base, src)
+        target = dst if rel == '.' else os.path.join(dst, rel)
+        os.makedirs(target, exist_ok=True)
+        for f in files:
+            shutil.copy2(os.path.join(base, f), os.path.join(target, f))
+
+
+def count_stale(fresh, pkg):
+    """发布包里不属于全新产物、也不是 config/debug 运行时数据的旧文件个数"""
+    keep = ('config', 'debug')
+    fresh_set = set()
+    for base, _d, files in os.walk(fresh):
+        for f in files:
+            fresh_set.add(os.path.relpath(os.path.join(base, f), fresh).lower())
+    n = 0
+    for base, dirs, files in os.walk(pkg):
+        if os.path.relpath(base, pkg) == '.':
+            dirs[:] = [d for d in dirs if d not in keep]
+        for f in files:
+            if os.path.relpath(os.path.join(base, f), pkg).lower() not in fresh_set:
+                n += 1
+    return n
+
+
 def build():
     icon = make_icon()
-    # 构建只写 build/ 一个目录：work/ 是中间产物，MAA-PRTS/ 是发布包本体。
-    # 每次全清这两个子目录（build/ 本身无入库文件，全部是产物）。
+    # 构建只写 build/ 一个目录：work/ 是中间产物（每次全清），PyInstaller 在
+    # work/dist/ 出全新包，再合并覆盖到 MAA-PRTS/（发布包本体）。不能让
+    # PyInstaller 直接输出到 MAA-PRTS/：--noconfirm 下它会先删掉整个输出
+    # 目录，等于全清，原地运行产生的 config/、debug/ 就没了。
     build_dir = os.path.join(HERE, 'build')
     work_dir = os.path.join(build_dir, 'work')
-    for d in (work_dir, os.path.join(build_dir, 'MAA-PRTS')):
-        if os.path.isdir(d):
-            shutil.rmtree(d, ignore_errors=True)
+    dist_dir = os.path.join(work_dir, 'dist')
+    pkg_dir = os.path.join(build_dir, 'MAA-PRTS')
+    if os.path.isdir(work_dir):
+        shutil.rmtree(work_dir, ignore_errors=True)
 
     cmd = [
         sys.executable, '-m', 'PyInstaller',
         '--noconfirm', '--clean',
         '--name', 'MAA-PRTS',
-        '--distpath', build_dir,
+        '--distpath', dist_dir,
         '--workpath', work_dir,
         '--specpath', work_dir,
         '--windowed',
@@ -118,14 +150,28 @@ def build():
         print('\n打包失败，退出码 %d（中间产物保留在 build\\work 以便排查）' % rc)
         return rc
 
+    # 全新产物合并覆盖进发布包：同名文件覆盖，config/、debug/ 等一律不动。
+    # exe 正在运行时 Windows 文件锁会让覆盖失败，保留现场让用户处理。
+    fresh = os.path.join(dist_dir, 'MAA-PRTS')
+    try:
+        merge_overwrite(fresh, pkg_dir)
+    except PermissionError:
+        print('\n覆盖发布包失败：build\\MAA-PRTS 里有文件被占用（MAA-PRTS.exe 是否还在运行？）。')
+        print('关闭程序后重跑本脚本即可；全新产物保留在 %s。' % fresh)
+        return 1
+    stale = count_stale(fresh, pkg_dir)
+
     # 每次构建都是 --clean 全量重建，中间产物没有复用价值，成功即删
     shutil.rmtree(work_dir, ignore_errors=True)
 
-    exe = os.path.join(build_dir, 'MAA-PRTS', 'MAA-PRTS.exe')
+    exe = os.path.join(pkg_dir, 'MAA-PRTS.exe')
     print('\n完成：%s' % exe)
     if os.path.isfile(exe):
         size = os.path.getsize(exe) / 1024 / 1024
         print('  主程序 %.1f MB' % size)
+    if stale:
+        print('  提示：发布包里有 %d 个旧版本残留文件未清理（config/、debug/ 不计），'
+              '发版压缩前可手动删除整个 build\\MAA-PRTS 重新打包' % stale)
     return 0
 
 
