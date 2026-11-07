@@ -18,6 +18,24 @@ _lock = threading.RLock()
 _cache = {}
 _pack_cache = [None]
 
+# 剧情关：有剧情没战斗，作业站永远不会有作业。
+# 新资源包带官方标记 stage['story']（来自 stage_table 的 isStoryOnly，共 208 条）；
+# 用户本地还挂着旧包时没有这个字段，就用代号/id 兜底，实测这两条规则
+# 正好覆盖全部 208 条且不误伤任何战斗关：
+#   xx-ST-n / OF-ST1 ── 内部 id 形如 act13side_st01 / a003_st01（_stNN 结尾）
+#   10-1 / EG-3      ── 主线纯剧情节点，id 形如 st_08-01 / spst_08-01（st_ 开头）
+_STORY_CODE = re.compile(r'-ST-?\d+$', re.I)
+_STORY_ID = re.compile(r'_st\d+$', re.I)
+_STORY_PREFIX = re.compile(r'^(?:sp)?st_', re.I)
+
+
+def _is_story(st: dict) -> bool:
+    if 'story' in st:
+        return bool(st.get('story'))
+    return bool(_STORY_CODE.search(st.get('code') or '')
+                or _STORY_ID.search(st.get('id') or '')
+                or _STORY_PREFIX.match(st.get('id') or ''))
+
 
 def pack() -> dict:
     """资源包（整个进程只读一次）"""
@@ -58,6 +76,10 @@ def _stages():
             # 把它们也列出来只会得到「同一个代号两行、第二行永远没作业」，
             # 所以这里直接跳过，突袭能力用 raid 标记挂在主关上。
             if '#' in st['id']:
+                continue
+            # 剧情关不进搜索，也不参与活动展开（以前每个活动都多出几行
+            # 「共 0 份 / 打不了」，用户点了也永远没作业）
+            if _is_story(st):
                 continue
             zid = st.get('zone') or ''
             zone = zones.get(zid) or {}

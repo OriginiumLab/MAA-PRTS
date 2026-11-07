@@ -45,7 +45,7 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 | 方法 | 用途 |
 |---|---|
 | `choose_folder(title, initial)` | 设置页/引导页的「浏览」按钮，调系统文件夹选择框 |
-| `open_folder(which)` | 打开 `skland` / `config` / `accounts` 目录 |
+| `open_folder(which)` | 打开 `accounts` / `config` / `root` 目录 |
 | `app_info()` | 版本、是否打包、数据目录，用于设置页底部信息 |
 
 `boot()` 里用 `waitPywebview()` 轮询等桥就绪，最多 2 秒；拿不到就当普通网页跑。
@@ -55,14 +55,16 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 | 函数 | 负责区块 |
 |---|---|
 | `renderAccounts()` | 左侧账号列表 |
-| `renderHero()` | 顶部账号信息卡 + 四个统计块（「缺卡」是可点按钮） |
+| `renderHero()` | 顶部账号信息卡 + 四个统计块（「缺卡」是可点按钮）；有选中账号时显示「从 MAA 更新干员信息」按钮 |
 | `showMissing()` | 缺卡清单弹窗，按星级分组，只显示名字 |
+| `importFromMaa()` | 「从 MAA 更新干员信息」（已有账号的手动更新入口）：确认弹窗（目录 + OperBoxData.json）→ `POST /api/account/import-maa` → 摘要弹窗并刷新当前账号；本地识别不含技能/专精/模组会明示 |
 | `renderUpdate()` | 资源包更新提示条（顶部的绿色条） |
 | `renderQuick()` | 快捷活动胶囊：活动名 + 关卡代号字母 + NEW 角标 |
 | `toggleBasket()` | 窄屏抽屉开关（≤1180px），控制 `.basket.show`、遮罩与浮动按钮 |
 | `renderResult()` | 单关卡卡片 / 活动关卡列表两套版式 |
 | `renderBasket()` | 右侧作业集（含拖动排序） |
-| `openOnboarding()` | 首次启动的两步引导（含 token 获取说明） |
+| `openAccountWizard(mode)` | 账号向导共用组件（首次引导 `onboard` / 添加账号 `add`）：第 1 页选 MAA 根目录，第 2 页二选一——森空岛 token（一行一个批量导入，成功后自动从 MAA 导入练度）或「直接从选定的 MAA 导入」（不用 token，调 `POST /api/account/create-from-maa` 建本地账号） |
+| `openOnboarding()` / `openAddAccount()` | 上面的薄包装（引导多一个「稍后设置」，成功后把目录存为全局默认） |
 | `openSettings()` | 设置弹窗 |
 | `pollTask()` | 任务日志轮询（同步账号、写入 MAA 共用） |
 
@@ -97,8 +99,11 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 
 `/api/bootstrap` 返回 `setup.needsToken`（没有账号）与 `setup.needsMaa`（找不到 MAA.exe）。
 `boot()` 在「没有账号」或「没填 MAA 目录」时弹引导；用户点「稍后设置」后本次会话不再弹。
+首次引导与「添加账号」是同一个向导组件（`openAccountWizard`），只差标题文案与
+「稍后设置」按钮：第 1 页选 MAA 根目录，第 2 页二选一（森空岛 token / 直接从选定的
+MAA 导入建号），两种入口行为完全一致。
 
-引导页与「添加账号」弹窗共用同一段 token 获取说明（`TOKEN_GUIDE` 常量）：
+向导共用同一段 token 获取说明（`TOKEN_GUIDE` 常量）：
 引导用户自己去森空岛社区登录后从 `zonai.skland.com` 的请求头里取 token，
 **不放任何示例 token**（示例容易被当成可直接用的值抄走）。
 

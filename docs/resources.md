@@ -20,7 +20,7 @@
 | `arknights.json` | 内置资源包（已生成，直接提交） |
 | `make_pack.py` | 生成脚本，只在游戏大版本更新后跑一次 |
 | `paradox.json` | 悖论模拟清单（316 条，约 38 KB，纯 json 不含图片） |
-| `assets/app.ico` | 程序图标（`build.py` 会用 Pillow 重新画） |
+| `assets/app.ico` | 程序图标（`tools/build.py` 会用 Pillow 重新画） |
 
 `paradox.json` 由 `tools/build_paradox_data.py` 生成，字段是
 `charId → {name, pname, stage, elite, level}`；它只用来算「哪些干员能开打悖论」，
@@ -46,7 +46,8 @@
   },
   "skills": { "skchr_xxx_2": "技能名" },
   "equips": { "uniequip_xxx": { "uniEquipName": "模组名", "typeIcon": "original|xxx" } },
-  "stages": [{ "id": "act55side_10", "code": "TL-10", "name": "活着的重量", "zone": "act55side" }],
+  "stages": [{ "id": "act55side_10", "code": "TL-10", "name": "活着的重量",
+               "zone": "act55side_zone1", "story": false }],
   "zones":  { "act55side_zone1": { "name": "残照终尽", "type": "ACTIVITY" } },
   // 活动正式名，界面显示用这个（zone 名只是地图分区名，不是活动名）
   "activities": { "act55side": { "name": "时间啊，向前！", "start": 1793487600, "end": 1795291199 } },
@@ -59,7 +60,7 @@
 活动代号字母（如 `TL`）不入包，运行时从关卡代号里现算（`resources._code_prefix()`）。
 
 分支中文名（`subProfessions`）没有公开静态表，是从森空岛接口学来的种子（73 条），
-运行时还会继续学，学到的写进 `skland/subprof_cache.json`。
+运行时还会继续学，学到的写进 `config/subprof_cache.json`。
 
 ## 更新方法
 
@@ -78,7 +79,7 @@ python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 | 参数 | 说明 |
 |---|---|
 | `--out` | 输出路径，默认就是 `resources/arknights.json` |
-| `--subprof` | 分支名缓存，默认自动找 `config/skland/subprof_cache.json`（旧版 `skland/subprof_cache.json` 兜底） |
+| `--subprof` | 分支名缓存，默认自动找 `config/subprof_cache.json`（旧版 `config/skland/…` 与 `skland/…` 兜底） |
 
 跑完会打印各表条数和体积，并逐项和旧包对比（`+3` / `持平` / `-2 <- 变少`）。
 条数只该增不减，有变少时退出码为 `2`，多半是资源库没 `git pull`。
@@ -87,8 +88,8 @@ python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 生成时会**先继承旧包里已有的条目，再用运行时缓存覆盖**，所以缓存文件不存在也不会
 把已有的 73 条清零。
 
-当前基准（2026-11-05）：`chars 469`（可获取 440）/ `stages 3647` / `skills 1846` /
-`equips 924` / `zones 492` / `activities 325` / `subProfessions 73`，体积 0.52 MB。
+当前基准（2026-11-07）：`chars 469`（可获取 440）/ `stages 3647`（其中剧情关 208）/
+`skills 1846` / `equips 924` / `zones 492` / `activities 325` / `subProfessions 73`，体积 0.57 MB。
 
 把新的 `arknights.json` 提交，下次启动缺卡统计就会用新数据。
 
@@ -107,3 +108,6 @@ python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 - 关卡表里排除了没有 `code` 的内部关卡（剿灭、教程占位等），`stages` 3647 条足够覆盖
   主线、活动、悖论模拟、资源关。
 - `stages` 里同时保留了 `TR-` 系列与塔模式重名关，解析时在 `resources.resolve()` 里排除。
+- `story: true` 是剧情关（`stage_table` 的 `isStoryOnly`，当前 208 条）：只有剧情没有战斗，
+  作业站永远不会有作业，`resources._stages()` 会把它们整体剔掉，不参与搜索与活动展开。
+  旧包没有这个字段时靠代号/id 兜底（`xx-ST-n` / `10-1` / `EG-3` 三种形态），见 `_is_story()`。

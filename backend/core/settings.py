@@ -7,8 +7,10 @@
       frontend/     页面（只读）
       backend/      服务端代码（只读）
       resources/    内置游戏资源包（只读）
-      config/       ★ 用户数据：settings.json、gamedata.json、
-                                 skland/（tokens.json 加密、accounts/、缓存）
+      config/       ★ 用户数据：settings.json、gamedata.json、账号 *.json
+                                 （token 密文随账号文件的 skd 段）、
+                                 _index/_removed/作业站、subprof_cache.json、
+                                 tokens.json（旧版密文库，只读兜底）
       debug/        运行日志 app.log（随时可删）
 
 「运行根」＝程序在哪个目录运行，数据就落在哪个目录，任何模式都不向上找：
@@ -42,8 +44,11 @@ PACK_PATH = os.path.join(RES, 'resources', 'arknights.json')
 PARADOX_PATH = os.path.join(RES, 'resources', 'paradox.json')
 
 CONFIG_DIR = os.path.join(ROOT, 'config')
-SKLAND_DIR = os.path.join(CONFIG_DIR, 'skland')
-ACCOUNTS_DIR = os.path.join(SKLAND_DIR, 'accounts')
+# 账号数据直接放 config/ 本层；config/skland 是旧布局，启动时压平迁移
+# （_migrate_legacy_layout），迁空的目录会删掉，平时不要再引用它
+ACCOUNTS_DIR = CONFIG_DIR
+# 旧布局中转站（值同旧版 SKLAND_DIR），只供下面两段迁移使用
+LEGACY_SKLAND_DIR = os.path.join(CONFIG_DIR, 'skland')
 SETTINGS_PATH = os.path.join(CONFIG_DIR, 'settings.json')
 DEBUG_DIR = os.path.join(ROOT, 'debug')
 LOG_PATH = os.path.join(DEBUG_DIR, 'app.log')
@@ -62,25 +67,25 @@ def _migrate_legacy_log():
 
 
 def _migrate_legacy_skland():
-    """旧版账号数据在 <项目根>/skland/，启动时并入 config/skland/
+    """更旧版账号数据在 <项目根>/skland/，启动时并入 config/skland/（中转站）
 
     只搬文件不动内容：tokens.txt 的加密转换在 accounts.load_tokens() 里做。
     新位置已有同名文件时跳过（宁可不搬也不覆盖），目录搬空才删。
     """
     old = os.path.join(ROOT, 'skland')
-    if not os.path.isdir(old) or os.path.abspath(old) == os.path.abspath(SKLAND_DIR):
+    if not os.path.isdir(old) or os.path.abspath(old) == os.path.abspath(LEGACY_SKLAND_DIR):
         return
     import shutil
-    os.makedirs(SKLAND_DIR, exist_ok=True)
+    os.makedirs(LEGACY_SKLAND_DIR, exist_ok=True)
     for name in os.listdir(old):
-        src, dst = os.path.join(old, name), os.path.join(SKLAND_DIR, name)
+        src, dst = os.path.join(old, name), os.path.join(LEGACY_SKLAND_DIR, name)
         if os.path.exists(dst):
             continue
         try:
             shutil.move(src, dst)
         except Exception:
             pass
-    # 搬空了才删目录；README.md 是旧版的入库说明，一并清掉（新版文档在 config/skland/）
+    # 搬空了才删目录；README.md 是旧版的入库说明，一并清掉（新版文档在 docs/）
     try:
         left = [n for n in os.listdir(old) if n != 'README.md']
         if not left:
@@ -91,15 +96,73 @@ def _migrate_legacy_skland():
         pass
 
 
+def _migrate_legacy_layout():
+    """旧布局 config/skland/ 压平进 config/ 本层（R5）
+
+    每个文件按相对路径搬到 CONFIG_DIR，并剥掉路径里第一级 accounts/ 成分：
+      accounts/A.json            → config/A.json
+      accounts/作业站/*.json     → config/作业站/*.json
+      accounts/_removed/*        → config/_removed/*
+      顶层 tokens.json/tokens.txt/subprof_cache.json → config/ 同名
+    安全手法与 _migrate_legacy_skland 一致：目标已有同名文件跳过不覆盖、
+    单个文件搬失败留在原地下次再试、自底向上只删真正搬空的目录——
+    config/skland 只要还有东西就整体保留，绝不删含数据的目录。
+    tokens 密文原样搬运（不解密不重加密），明文 tokens.txt 的转换仍延后到
+    accounts.load_tokens() 里做。
+    """
+    old = LEGACY_SKLAND_DIR
+    if not os.path.isdir(old) or os.path.abspath(old) == os.path.abspath(CONFIG_DIR):
+        return
+    import shutil
+    for dirpath, _dirnames, filenames in os.walk(old):
+        for name in filenames:
+            src = os.path.join(dirpath, name)
+            parts = os.path.relpath(src, old).split(os.sep)
+            if parts and parts[0] == 'accounts':
+                parts = parts[1:] or [name]
+            dst = os.path.join(CONFIG_DIR, *parts)
+            if os.path.exists(dst):
+                continue
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+            except Exception:
+                pass
+    # 自底向上只删搬空的目录；old 本身非空就保留（下次启动接着试）
+    try:
+        for dirpath, dirnames, _filenames in os.walk(old, topdown=False):
+            for d in dirnames:
+                p = os.path.join(dirpath, d)
+                try:
+                    if not os.listdir(p):
+                        os.rmdir(p)
+                except Exception:
+                    pass
+        if not os.listdir(old):
+            os.rmdir(old)
+    except Exception:
+        pass
+
+
 try:
     _migrate_legacy_skland()
+    _migrate_legacy_layout()
     _migrate_legacy_log()
 except Exception:
     pass
 
-for _d in (SKLAND_DIR, ACCOUNTS_DIR, CONFIG_DIR, DEBUG_DIR):
+def ensure_dirs():
+    """预建 config（=账号目录）；config/skland 绝不再建，
+    否则迁移刚删掉的目录每次启动又回来。
+
+    debug/ 不在这里建——只有 main 的 log() 写它，首写自建即可，
+    免得纯落盘路径把运行根的 debug/ 也一并建出来。
+    import 时什么都不建——纯导入不该有副作用（冒烟测试 / 工具脚本
+    import 本模块会在运行根留空壳目录），真正写盘的入口
+    （main 启动、账号/设置落盘）自己调用。
+    """
     try:
-        os.makedirs(_d, exist_ok=True)
+        os.makedirs(ACCOUNTS_DIR, exist_ok=True)
     except Exception:
         pass
 
@@ -108,6 +171,7 @@ DEFAULTS = {
     'maaDirs': [],          # 用过的 MAA 根目录历史（添加账号时「已存过」列表的数据源）
     'autoStartMaa': True,
     'lastAccount': '',
+    'accountOrder': [],     # 账号列表手动排序（长按拖动保存的文件名顺序）
 }
 
 _lock = threading.RLock()
@@ -170,6 +234,8 @@ def save(patch: dict) -> dict:
                 continue
             if k == 'maaDir':
                 v = _norm_dir(v)
+            elif k == 'accountOrder':
+                v = [str(x) for x in (v or []) if str(x).endswith('.json')][:200]
             cur[k] = v
         # maaDir 每次保存都并入历史列表（大小写不敏感去重）
         if cur.get('maaDir'):
@@ -185,21 +251,23 @@ def save(patch: dict) -> dict:
 
 
 # ---------------------------------------------------------------- 派生路径
-def skland_dir() -> str:
-    return SKLAND_DIR
-
-
 def accounts_dir() -> str:
+    """账号数据目录（R5 起就是 config/ 本层）"""
     return ACCOUNTS_DIR
 
 
 def tokens_file() -> str:
-    """加密的 token 存储（内容经 Windows DPAPI 加密，见 core/vault.py）"""
-    return os.path.join(SKLAND_DIR, 'tokens.json')
+    """旧版密文 token 库（config/tokens.json）。
+
+    R4/R5 之后 token 密文随各账号 json 的 skd 段存放，这个文件只是
+    迁移产物 + 只读兜底（「同步全部」仍会读它），程序不再写入。
+    """
+    return os.path.join(CONFIG_DIR, 'tokens.json')
 
 
 def subprof_cache() -> str:
-    return os.path.join(SKLAND_DIR, 'subprof_cache.json')
+    """分支中文名缓存（config/subprof_cache.json）"""
+    return os.path.join(CONFIG_DIR, 'subprof_cache.json')
 
 
 def static_dir() -> str:

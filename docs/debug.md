@@ -14,6 +14,6 @@
 ## 注意
 
 - 整个目录随时可以删，程序下次启动会重建
-- 日志不含 token（token 是密文存在 `config/skland/tokens.json`），但可能含
-  路径和账号昵称，贴给别人看前自己过一眼
+- 日志不含 token（token 是密文存在各账号 json 的 `skd` 段与旧版
+  `config/tokens.json`），但可能含路径和账号昵称，贴给别人看前自己过一眼
 - 旧版日志在 `config/app.log`，升级后首次启动会自动挪到这里

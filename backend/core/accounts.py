@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""账号配置：读取 accounts/*.json、内置 token 同步"""
+"""账号配置：读取 config/*.json 账号文件、内置 token 同步"""
 from __future__ import annotations
 
 import base64
@@ -35,6 +35,8 @@ def list_accounts():
     for name in sorted(os.listdir(d)):
         if not name.endswith('.json') or name.startswith(('_', '作业站')):
             continue
+        if name in updater.NON_ACCOUNT_JSON:      # 同层的全局文件，不是账号
+            continue
         snap = _load(os.path.join(d, name))
         if not snap or not (snap.get('account') or {}).get('uid'):
             continue
@@ -62,7 +64,11 @@ def list_accounts():
                 'byRarity': s.get('byRarity') or {},
             },
         })
-    out.sort(key=lambda r: (-(r['stats']['charCount'] or 0), r['nickName']))
+    # 排序：settings.accountOrder（长按拖动保存的手动序）里的按其顺序在前，
+    # 没排过的按默认序（干员数降序、昵称）跟在后面；排序列表里的幽灵文件名忽略
+    order = {f: i for i, f in enumerate(settings.load().get('accountOrder') or [])}
+    out.sort(key=lambda r: (order.get(r['file'], 1 << 30),
+                            -(r['stats']['charCount'] or 0), r['nickName']))
     return out
 
 
@@ -108,6 +114,7 @@ def account_detail(file: str) -> dict:
 
 def save_account(file: str, snap: dict) -> None:
     """把整份账号快照写回磁盘（原子替换）"""
+    settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
     tmp = path + '.tmp'
     with io.open(tmp, 'w', encoding='utf-8') as f:
@@ -117,6 +124,7 @@ def save_account(file: str, snap: dict) -> None:
 
 def save_maa_meta(file: str, patch: dict) -> dict:
     """把 MAA 配置名等用户字段写回账号 json"""
+    settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
     snap = _load(path)
     if not snap:
@@ -132,20 +140,22 @@ def save_maa_meta(file: str, patch: dict) -> dict:
 
 
 # ---------------------------------------------------------------- token 存储
-# config/skland/tokens.json：多账号列表，逐条经 Windows DPAPI（CurrentUser）
-# 加密后存放，密钥绑定本机 + 当前 Windows 用户，拷到别的电脑无法解密。
-# 文件格式与迁移说明见 config/skland/README.md。
+# R4/R5：token 密文随各账号 json 的 skd 段存放（{alias, addedAt, data}，
+# data = base64(DPAPI(token))，与该账号绑定的 maa.dir 同处一个文件），
+# 密钥绑定本机 + 当前 Windows 用户，拷到别的电脑无法解密。
+# 旧版全局 config/tokens.json 只读兜底，不再写入；密文格式与迁移说明见
+# docs/config.md。
 
 from . import vault  # noqa: E402
 
 
 def _migrate_txt_if_any():
-    """旧版明文 tokens.txt → 加密 tokens.json
+    """旧版明文 tokens.txt（现落 config/ 本层）→ 加密 tokens.json
 
     先写 tokens.json 成功、再把原 txt 改名 .bak——中途任何一步失败，
     原数据都还在；txt 读不了（编码坏等）则改名 .broken 留证并报错。
     """
-    txt = os.path.join(settings.skland_dir(), 'tokens.txt')
+    txt = os.path.join(settings.CONFIG_DIR, 'tokens.txt')
     path = settings.tokens_file()
     if not os.path.isfile(txt) or os.path.isfile(path):
         return
@@ -162,7 +172,11 @@ def _migrate_txt_if_any():
 
 
 def _save_tokens(items: list):
-    """逐条加密落盘：文件里能看到有几条、备注是什么，token 本身是密文"""
+    """逐条加密落盘：文件里能看到有几条、备注是什么，token 本身是密文。
+
+    新布局下只在 tokens.txt 迁移时写 config/tokens.json（迁移产物），
+    平时不再有别的写它的地方。
+    """
     path = settings.tokens_file()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     env = {
@@ -188,66 +202,91 @@ def _save_tokens(items: list):
 
 
 def load_tokens() -> list:
-    """读出 token 条目 [{"alias", "token", "addedAt"}]；解不开时给出明确报错"""
-    path = settings.tokens_file()
+    """读出 token 条目 [{"alias","token","addedAt","data"}]。
+
+    来源 = 各账号 json 的 skd 段 ∪ 旧版 config/tokens.json 兜底，
+    按明文 token 去重（账号文件优先）。单条解不开只跳过并把受影响的
+    文件记进 TOKENS_WARNINGS，不让整库失败——密文绑定本机当前用户，
+    换电脑后旧条目解不开是常态，不能拖死其他账号的同步。
+    """
+    global TOKENS_WARNINGS
+    items, seen, warns = [], set(), []
+
+    def add(alias, token, added_at, data):
+        t = (token or '').strip()
+        if t and t not in seen:
+            seen.add(t)
+            items.append({'alias': (alias or '').strip(), 'token': t,
+                          'addedAt': added_at or '', 'data': data or ''})
+
+    d = _accounts_dir()
+    if os.path.isdir(d):
+        for name in sorted(os.listdir(d)):
+            if not name.endswith('.json') or name.startswith(('_', '作业站')):
+                continue
+            if name in updater.NON_ACCOUNT_JSON:
+                continue
+            skd = (_load(os.path.join(d, name)) or {}).get('skd')
+            if not isinstance(skd, dict) or not skd.get('data'):
+                continue
+            try:
+                token = vault.unprotect(
+                    base64.b64decode(skd.get('data') or '')).decode('utf-8')
+            except Exception:
+                warns.append('%s 里的 token 密文无法解密（换电脑/换用户后需重新粘贴）' % name)
+                continue
+            add(skd.get('alias'), token, skd.get('addedAt'), skd.get('data'))
+
     _migrate_txt_if_any()
-    if not os.path.isfile(path):
-        return []
-    env = _load(path) or {}
-    if env.get('cipher') != 'dpapi' or not isinstance(env.get('tokens'), list):
-        raise ValueError('%s 不是有效的加密 token 文件' % os.path.basename(path))
-    items = []
-    for i, ent in enumerate(env['tokens'], 1):
-        try:
-            token = vault.unprotect(base64.b64decode(ent.get('data') or '')).decode('utf-8')
-        except Exception:
-            raise ValueError(
-                'tokens.json 第 %d 条无法解密：密钥绑定本机与当前 Windows 用户，'
-                '换电脑 / 换用户后需要重新粘贴 token。' % i)
-        if token.strip():
-            items.append({'alias': (ent.get('alias') or '').strip(),
-                          'token': token.strip(),
-                          'addedAt': ent.get('addedAt') or ''})
+    path = settings.tokens_file()
+    txt = os.path.join(settings.CONFIG_DIR, 'tokens.txt')
+    if os.path.isfile(txt) and os.path.isfile(path):
+        # 并存时迁移按「json 已在就不动」跳过，txt 里的 token 永不参与同步
+        # ——必须点名警告让用户知道少同步了，不能静默
+        warns.append('tokens.txt 与 tokens.json 并存：txt 未迁移、里面的 token '
+                     '不参与同步（文件原样保留未动）；如需并入请在界面重新添加，'
+                     '确认后删除 txt')
+    if os.path.isfile(path):
+        env = _load(path) or {}
+        if env.get('cipher') == 'dpapi' and isinstance(env.get('tokens'), list):
+            for i, ent in enumerate(env['tokens'], 1):
+                try:
+                    token = vault.unprotect(
+                        base64.b64decode(ent.get('data') or '')).decode('utf-8')
+                except Exception:
+                    warns.append('tokens.json 第 %d 条无法解密：密钥绑定本机与当前 '
+                                 'Windows 用户，换电脑 / 换用户后需要重新粘贴 token。' % i)
+                    continue
+                add(ent.get('alias'), token, ent.get('addedAt'), ent.get('data'))
+        else:
+            warns.append('%s 不是有效的加密 token 文件，已忽略' % os.path.basename(path))
+    TOKENS_WARNINGS = warns
     return items
 
 
-# 启动自检发现 token 文件读不开时，把原因存这里，main 起来后写进 app.log
+# 启动自检把读不开的条目原因存这里，main 起来后写进 app.log
 TOKENS_WARNING = ''
+# load_tokens 每次重算：单条解密失败被跳过的受影响文件列表
+TOKENS_WARNINGS = []
 
 
 def ensure_tokens() -> list:
-    """启动自检：迁移旧 txt → 读加密文件；读不开就把坏文件改名留证、重建空的"""
+    """启动自检：读出全部可用 token。
+
+    坏条目逐个跳过（TOKENS_WARNING 点名受影响文件），不再改名/重建
+    任何文件——账号数据本身还在，重新同步一次就恢复了。
+    """
     global TOKENS_WARNING
     TOKENS_WARNING = ''
     try:
         items = load_tokens()
     except ValueError as e:
-        broken = settings.tokens_file() + '.broken'
-        try:
-            os.replace(settings.tokens_file(), broken)
-        except Exception:
-            pass
-        _save_tokens([])
+        # 只剩 tokens.txt 迁移失败的留证报错（文件已改名 .broken，数据不丢）
         items = []
-        TOKENS_WARNING = ('%s；已把原文件改名为 %s，请在界面里重新添加账号。'
-                          % (e, os.path.basename(broken)))
-    if not os.path.isfile(settings.tokens_file()):
-        _save_tokens([])
+        TOKENS_WARNING = '%s。请手动检查后，在界面里重新添加账号。' % e
+    if TOKENS_WARNINGS:
+        TOKENS_WARNING = (TOKENS_WARNING + '；' if TOKENS_WARNING else '') + '；'.join(TOKENS_WARNINGS)
     return items
-
-
-def remember_token(token: str, alias: str = '') -> bool:
-    """把界面上粘贴的 token 记入加密存储，返回是否新增"""
-    token = (token or '').strip()
-    if not token:
-        return False
-    items = load_tokens()
-    if any(e.get('token') == token for e in items):
-        return False
-    items.append({'alias': (alias or '').strip(), 'token': token,
-                  'addedAt': updater.now_iso()})
-    _save_tokens(items)
-    return True
 
 
 # ---------------------------------------------------------------- 刷新
@@ -255,17 +294,26 @@ def _run_updater(tid, token=None, alias=None, with_skins=False):
     """内置同步（不依赖外部 python 脚本，可直接打包进 exe）"""
     log = tasks.log_factory(tid)
 
-    if token:
-        if remember_token(token, alias or ''):
-            log('已把 token 记到 %s' % settings.tokens_file())
-
     # 让 skland 把重试提示也打到界面日志里
     updater.skland.set_logger(log)
 
     if token:
+        # token 密文随同步成功的账号文件落盘（R4）。DPAPI 不可用（罕见）
+        # 就跳过加密，不影响同步本身——失败时 token 不落盘，界面里还能重试
+        skd_meta = None
+        try:
+            skd_meta = {
+                'alias': alias or '',
+                'addedAt': updater.now_iso(),
+                'data': base64.b64encode(
+                    vault.protect(token.encode('utf-8'))).decode('ascii'),
+            }
+        except Exception as e:
+            log('[提示] token 无法加密保存（%s），本次同步结果里不携带 token' % e)
         return updater.sync_one(token, alias or '', settings.accounts_dir(),
                                 log, with_skins=with_skins,
-                                cache_path=settings.subprof_cache())
+                                cache_path=settings.subprof_cache(),
+                                skd_meta=skd_meta)
     return updater.sync_many(load_tokens(), settings.accounts_dir(),
                              log, with_skins=with_skins,
                              cache_path=settings.subprof_cache())

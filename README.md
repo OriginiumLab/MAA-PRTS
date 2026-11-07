@@ -17,10 +17,10 @@
 MAA-PRTS\
   MAA-PRTS.exe
   _internal\        ← 必须一起保留
-  README.txt        ← token 获取步骤 + 常见问题
+  README.md         ← token 获取步骤 + 常见问题
 ```
 
-首次启动会引导两步：粘贴森空岛 token → 选择 MAA 根目录（含 `MAA.exe` 的那一层）。
+首次启动会引导两步：选择 MAA 根目录（含 `MAA.exe` 的那一层）→ 粘贴森空岛 token。
 不想下载成品也可以按下面的「快速开始」从源码跑。
 
 ---
@@ -76,11 +76,12 @@ py -3 -m venv .venv
 
 第一次打开会弹一个两步引导：
 
-1. **森空岛 Token** —— 粘贴 token（可加备注）。点击「怎么拿 token」有获取步骤：
-   浏览器登录森空岛社区 → F12 → Network → 找发往 `zonai.skland.com` 的请求头里的 `token`。
-   程序会把它加密记到 `config/skland/tokens.json`（Windows DPAPI，仅本机可解），以后点左上角的刷新按钮即可一键同步全部账号。
-2. **MAA 根目录** —— 选包含 `MAA.exe` 的文件夹，点「检测」确认能找到
+1. **MAA 根目录** —— 选包含 `MAA.exe` 的文件夹，点「检测」确认能找到
    `MAA.exe` 与 `config/gui.new.json`。
+2. **森空岛 Token** —— 粘贴 token（可加备注）。点击「怎么拿 token」有获取步骤：
+   浏览器登录森空岛社区 → F12 → Network → 找发往 `zonai.skland.com` 的请求头里的 `token`。
+   同步成功后 token 会加密记进各账号文件的 `skd` 段（Windows DPAPI，仅本机可解），
+   以后点左上角的刷新按钮即可一键同步全部账号。
 
 两步都过了点「保存并同步账号」，窗口会实时打印同步日志，完成后自动切到该账号。
 如果暂时没有 MAA，可以先点「稍后设置」——搜作业、复制代码都不受影响，只有「写入 MAA」需要它。
@@ -94,16 +95,16 @@ MAA-PRTS-1/
 ├── frontend/            页面（HTML/CSS/JS），由后端本地服务托管
 ├── backend/             服务端：窗口、HTTP 接口、匹配算法、MAA 读写
 ├── resources/           内置游戏资源包（干员表/关卡表）与打包脚本
-├── config/              ★ 用户数据：settings.json、skland/（加密 token、账号练度）
+├── docs/                各目录的说明文档（backend.md、config.md 等）
+├── config/              ★ 用户数据：settings.json、账号练度 *.json（token 密文随账号文件）
 ├── debug/               运行日志 app.log（可随手删）
 ├── build/               构建产物（MAA-PRTS/ 发布包；中间文件用后即删）
-├── build.py             打包脚本
-├── tools/               setup/（启动打包的环境引导）、smoketest/（冒烟测试）
+├── tools/               setup/（启动打包的环境引导）、build.py（打包脚本）、smoketest/（冒烟测试）
 ├── 启动.bat / 调试启动.bat / 打包.bat
 └── README.md
 ```
 
-每个目录下都有自己的 `README.md`，写明用途和实现细节。
+各目录的用途与实现细节集中写在 `docs/` 下（如 `backend.md`、`config.md`、`tools-smoketest.md`）。
 
 ---
 
@@ -111,16 +112,16 @@ MAA-PRTS-1/
 
 | 内容 | 位置 | 说明 |
 |---|---|---|
-| token 列表 | `config/skland/tokens.json` | Windows DPAPI 加密，仅本机当前 Windows 用户可解 |
-| 账号配置 | `config/skland/accounts/<昵称> <服务器>.json` | 干员练度 + 缺卡清单 |
-| 分支名缓存 | `config/skland/subprof_cache.json` | 分支中文名边用边学 |
+| 账号配置 | `config/<昵称> <服务器>.json` | 干员练度 + 缺卡清单 |
+| token 密文 | `config/<昵称> <服务器>.json` 的 `skd` 段 | Windows DPAPI 加密，仅本机当前 Windows 用户可解；旧版 `config/tokens.json` 兜底 |
+| 分支名缓存 | `config/subprof_cache.json` | 分支中文名边用边学 |
 | 应用设置 | `config/settings.json` | MAA 路径、默认配置名、上次选中的账号 |
 | 资源版本记录 | `config/gamedata.json` | 上次见到的资源包版本，用来判断要不要提示更新 |
 | 运行日志 | `debug/app.log` | 超过 2 MB 自动轮转，随时可删 |
 
 - 上传 GitHub 时这些都会由 `.gitignore` 排除，仓库里只有代码和资源包。
-- token 密文绑定本机与 Windows 用户：换电脑时拷 `tokens.json` 过去**解不开**，
-  到新机器上重新粘贴一次 token 即可（账号练度 JSON 不加密，可以直接拷）。
+- token 密文绑定本机与 Windows 用户：换电脑时把账号 JSON 拷过去，练度数据
+  还能看，但里面的 token **解不开**，到新机器上重新粘贴一次 token 即可。
 - 例外只有一个：MAA 根目录本身在你指定的位置，程序只按你填的路径去读写它的 `config/`。
 - 例外只有一个：MAA 根目录本身在你指定的位置，程序只按你填的路径去读写它的 `config/`。
 
@@ -129,7 +130,7 @@ MAA-PRTS-1/
 ## 打包
 
 ```bat
-python build.py
+python tools\build.py
 ```
 
 产物：`build\MAA-PRTS\MAA-PRTS.exe`（onedir，约 30 MB）。
@@ -157,7 +158,7 @@ python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 ```
 
 同时新活动会被顶到快捷栏最前面并标上 `NEW`。提示条点「知道了」才消失，
-不点就每次启动都提醒一次。详见 `resources\README.md`、`backend\README.md`。
+不点就每次启动都提醒一次。详见 `docs\resources.md`、`docs\backend.md`。
 
 ---
 

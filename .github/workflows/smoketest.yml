@@ -1,5 +1,5 @@
 # 冒烟测试 CI：任意分支上有提交就在该分支上跑一遍 tools/smoketest
-# （A 静态检查 / B DPAPI 与 token 存储 / C 启动冒烟，详见 tools/smoketest/README.md）
+# （A 静态检查 / B DPAPI 与 token 存储 / C 启动冒烟，详见 docs/tools-smoketest.md）
 name: Smoke Test
 
 on:

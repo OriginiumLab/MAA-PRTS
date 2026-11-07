@@ -3,24 +3,17 @@
 # 用户数据（token、账号练度、配置、日志）一律不入库
 # ============================================================
 
-# 账号数据（tokens.json 为 DPAPI 加密，仅本机可解；README 入库）
-config/skland/*
-!config/skland/README.md
-# 旧版数据目录（升级后首次启动会自动并入 config/skland/；锚定根目录，
-# 不锚定的话会连 config/skland/ 一起排除，README 就没法入库了）
+# 用户数据：设置、账号练度（token 密文随账号文件）、迁移产物，一律不入库
+config/*
+# 旧旧版数据目录（升级后首次启动会自动并入 config/；锚定根目录，
+# 不锚定的话会连任意位置的 skland/ 一起排除）
 /skland/
 
-# 本机配置
-config/settings.json
-config/gamedata.json
-
-# 运行日志（README 入库，日志本身可随手删）
+# 运行日志（可随手删）
 debug/*
-!debug/README.md
 
-# 打包产物（只有 build/README.md 入库）
+# 打包产物（整个目录不入库）
 build/*
-!build/README.md
 dist/
 *.spec
 

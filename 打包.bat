@@ -4,7 +4,7 @@ chcp 65001 >nul 2>&1
 
 cd /d "%~dp0"
 if errorlevel 1 goto :CannotEnter
-if not exist "build.py" goto :MissingBuildScript
+if not exist "tools\build.py" goto :MissingBuildScript
 if not exist "tools\setup\prepare-python.bat" goto :MissingBuildScript
 
 call "tools\setup\prepare-python.bat"
@@ -16,7 +16,7 @@ if not "%INSTALL_RC%"=="0" goto :InstallFailed
 
 echo.
 echo [打包] 正在生成 MAA-PRTS.exe...
-"%PYTHON%" -u "build.py"
+"%PYTHON%" -u "tools\build.py"
 set "BUILD_RC=%ERRORLEVEL%"
 if not "%BUILD_RC%"=="0" goto :BuildFailed
 
@@ -49,7 +49,7 @@ exit /b 1
 
 
 :MissingBuildScript
-echo [错误] 未找到 build.py 或 tools\setup\prepare-python.bat。
+echo [错误] 未找到 tools\build.py 或 tools\setup\prepare-python.bat。
 echo 请在完整的 MAA-PRTS 项目目录中运行本脚本。
 pause
 exit /b 1

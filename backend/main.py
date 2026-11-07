@@ -79,7 +79,7 @@ def trusted_request(headers, server_address):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'MAA-PRTS/%s' % version.APP_VERSION
+    server_version = 'MAA-PRTS/%s' % version.app_version()
     protocol_version = 'HTTP/1.1'
 
     def log_message(self, fmt, *args):
@@ -207,26 +207,25 @@ class Bridge:
 
     def app_info(self):
         return {
-            'version': version.APP_VERSION,
+            'version': version.app_version(),
             'gamedata': version.pack_meta()['version'],
             'frozen': settings.FROZEN,
             'root': settings.project_root(),
-            'sklandDir': settings.skland_dir(),
+            'accountsDir': settings.accounts_dir(),
             'configDir': settings.CONFIG_DIR,
             'webDir': WEB,
             'logPath': LOG_PATH,
             'native': True,
         }
 
-    def open_folder(self, which='skland'):
-        """打开项目内的数据目录（skland / config / accounts）"""
+    def open_folder(self, which='accounts'):
+        """打开项目内的数据目录（accounts / config / root）"""
         table = {
-            'skland': settings.skland_dir(),
             'accounts': settings.accounts_dir(),
             'config': settings.CONFIG_DIR,
             'root': settings.project_root(),
         }
-        path = table.get(str(which or 'skland').lower()) or settings.skland_dir()
+        path = table.get(str(which or 'accounts').lower()) or settings.accounts_dir()
         os.makedirs(path, exist_ok=True)
         return self.open_path(path)
 
@@ -314,12 +313,13 @@ def main():
     url = 'http://127.0.0.1:%d/' % port
     time.sleep(0.25)
 
+    settings.ensure_dirs()          # config/ 与 debug/ 在启动时才建（import 不建）
     st = settings.load()
     accounts.ensure_tokens()
     log('=' * 56)
-    log('MAA-PRTS %s  界面 %s' % (version.APP_VERSION, url))
+    log('MAA-PRTS %s  界面 %s' % (version.app_version(), url))
     log('运行目录  %s' % settings.project_root())
-    log('账号数据  %s' % settings.skland_dir())
+    log('账号数据  %s' % settings.accounts_dir())
     log('配置文件  %s' % settings.SETTINGS_PATH)
     log('日志文件  %s' % settings.LOG_PATH)
     # MAA 目录：全局默认可能为空（账号各自绑定时不影响使用），顺带展示上次账号的绑定

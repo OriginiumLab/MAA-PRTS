@@ -516,6 +516,9 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 }
 .ghost-btn:hover { border-color: rgba(94, 234, 212, 0.5); color: var(--mint); background: rgba(94, 234, 212, 0.06); }
 .ghost-btn.mint { border-color: rgba(94, 234, 212, 0.4); color: var(--mint); }
+/* 「加入推荐作业」加进作业集后要置灰成「已加入」，跟 .mini-btn 的禁用态对齐 */
+.ghost-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ghost-btn:hover:disabled { border-color: rgba(94, 234, 212, 0.4); background: none; }
 
 /* 作业卡片 */
 .ops-grid {
@@ -777,6 +780,14 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   letter-spacing: -1px;
 }
 .basket-item:hover .drag-dots { color: var(--mint); }
+
+/* 账号列表：拖动改序（原生 DnD，同作业集） */
+.acct[draggable] { -webkit-user-drag: element; }
+.acct.dragging {
+  opacity: .5;
+  outline: 1px dashed rgba(94, 234, 212, 0.6);
+  outline-offset: -1px;
+}
 .basket-idx {
   flex: 0 0 auto;
   min-width: 13px;

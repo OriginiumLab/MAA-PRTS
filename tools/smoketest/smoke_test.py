@@ -9,17 +9,19 @@
 
     A. 静态检查
        - 三个 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位）
-       - backend / tools / build.py 全部 .py 可编译
+       - backend / tools 全部 .py 可编译
     B. 加密与 token 存储（隔离临时目录，monkeypatch 路径）
        - DPAPI 往返、密文篡改必报错
-       - tokens.json 多账号读写、去重、备注保留
+       - token 密文随账号文件 skd 段：跨文件去重、备注保留、不进 API 视图
        - 旧明文 tokens.txt（三种写法）自动迁移
-       - 坏密文自愈：改名 .broken 重建空列表，警告可读
+       - 坏密文逐条跳过 + TOKENS_WARNING 点名文件（不再改名/重建）
+       - 旧布局 config/skland 压平迁移（同名跳过、搬空才删、幂等）
+       - MAA 干员识别 JSON（新 JObject / 旧裸数组）解析成练度结构
        - 作业 json 交给 MAA 前的修正（非法样本必须被修成 MaaCore 能解析的样子）
     C. 启动冒烟（临时项目副本）
        - backend/main.py --no-window 拉起，解析实际端口
        - 只读接口 /api/ping、/api/bootstrap、/api/gamedata 返回 200
-       - bootstrap 报告的账号数据路径在 config/skland 下
+       - bootstrap 报告的账号数据路径在 config/ 本层，config/skland 不再被创建
        - 结束后副本根目录除 config/ 与 debug/ 外零新增（防乱丢文件）
 """
 from __future__ import annotations
@@ -66,7 +68,7 @@ def check_bat_encoding():
 
 def check_py_compile():
     roots = [os.path.join(REPO, 'backend'), os.path.join(REPO, 'tools')]
-    files = [os.path.join(REPO, 'build.py')]
+    files = []
     for root in roots:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d != '__pycache__']
@@ -77,12 +79,30 @@ def check_py_compile():
 
 # ---------------------------------------------------------------- B. 加密与 token 存储
 def _patch_settings(tmp):
-    """把 core.settings 的数据路径指到临时目录（accounts 每次调用都现取路径）"""
+    """把 core.settings 的数据路径指到临时目录。
+
+    R4/R5 之后 tokens_file() / _migrate_txt_if_any / _migrate_legacy_layout
+    读的都是模块级 CONFIG_DIR / LEGACY_SKLAND_DIR，三个全局必须一起指过去，
+    否则 fixture 写进 tmp、代码却去读写真实仓库的 config/。
+    SETTINGS_PATH 也一并指过去（B16 要写 settings 验证手动排序，
+    不能在真实仓库留文件），顺手清掉 load() 的内存缓存。
+    """
     sys.path.insert(0, os.path.join(REPO, 'backend'))
     from core import settings
-    settings.SKLAND_DIR = os.path.join(tmp, 'skland')
-    settings.ACCOUNTS_DIR = os.path.join(settings.SKLAND_DIR, 'accounts')
+    settings.CONFIG_DIR = os.path.join(tmp, 'config')
+    settings.ACCOUNTS_DIR = settings.CONFIG_DIR
+    settings.LEGACY_SKLAND_DIR = os.path.join(tmp, 'config', 'skland')
+    settings.SETTINGS_PATH = os.path.join(tmp, 'config', 'settings.json')
+    settings._cache = None
     return settings
+
+
+def _reset_config(tmp):
+    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库"""
+    cfg = os.path.join(tmp, 'config')
+    if os.path.isdir(cfg):
+        shutil.rmtree(cfg)
+    os.makedirs(cfg, exist_ok=True)
 
 
 def check_vault_roundtrip():
@@ -107,48 +127,54 @@ def check_vault_tamper():
 def check_tokens_bad_txt(tmp):
     """畸形（非 UTF-8）旧 txt：迁移失败要留证并给出警告，不能无声丢数据"""
     from core import accounts
-    sk = os.path.join(tmp, 'skland')
-    for f in ('tokens.json', 'tokens.txt', 'tokens.txt.bak', 'tokens.txt.broken'):
-        p = os.path.join(sk, f)
-        if os.path.isfile(p):
-            os.remove(p)
-    with open(os.path.join(sk, 'tokens.txt'), 'wb') as f:
+    _reset_config(tmp)
+    cfg = os.path.join(tmp, 'config')
+    with open(os.path.join(cfg, 'tokens.txt'), 'wb') as f:
         f.write(b'\xb1\xea\xd7\xa2:SMOKE_BAD\n')  # GBK 的「备注:」，非法 UTF-8
     items = accounts.ensure_tokens()
     assert items == [], '畸形 txt 不应产出条目'
-    assert os.path.isfile(os.path.join(sk, 'tokens.txt.broken')), '坏 txt 未留证 .broken'
+    assert os.path.isfile(os.path.join(cfg, 'tokens.txt.broken')), '坏 txt 未留证 .broken'
     assert '读取失败' in accounts.TOKENS_WARNING, '警告缺失：%s' % accounts.TOKENS_WARNING
 
 
-def check_tokens_multi_account(tmp):
-    from core import accounts
-    accounts._save_tokens([])
-    assert accounts.remember_token('SMOKE_A', '大号') is True
-    assert accounts.remember_token('SMOKE_B', '小号') is True
-    assert accounts.remember_token('SMOKE_C', '') is True
-    assert accounts.remember_token('SMOKE_A', 'again') is False, '重复 token 未去重'
+def check_tokens_in_accounts(tmp):
+    """R4：token 密文随账号文件 skd 段；跨文件按明文去重、备注保留、不进 API 视图"""
+    from core import accounts, vault
+
+    def skd(token, alias):
+        return {'skd': {'alias': alias, 'addedAt': '2026-11-05T07:40:00',
+                        'data': base64.b64encode(
+                            vault.protect(token.encode('utf-8'))).decode('ascii')}}
+
+    cfg = os.path.join(tmp, 'config')
+    _reset_config(tmp)
+    for name, snap in (('A.json', {'account': {'uid': '1'}, **skd('SMOKE_A', '大号')}),
+                       ('B.json', {'account': {'uid': '2'}, **skd('SMOKE_B', '小号')}),
+                       ('C.json', {'account': {'uid': '3'}, **skd('SMOKE_A', '重复')})):
+        with open(os.path.join(cfg, name), 'w', encoding='utf-8') as f:
+            json.dump(snap, f, ensure_ascii=False)
+    # 同层的全局文件不是账号，skd 检索必须跳过（写个坏的进去验证不被读）
+    with open(os.path.join(cfg, 'tokens.json'), 'w', encoding='utf-8') as f:
+        json.dump({'cipher': 'not-dpapi'}, f)
+
     items = accounts.load_tokens()
-    assert len(items) == 3, '条目数 %d != 3' % len(items)
-    assert [e['token'] for e in items] == ['SMOKE_A', 'SMOKE_B', 'SMOKE_C']
-    assert items[0]['alias'] == '大号' and items[1]['alias'] == '小号'
-    # 落盘文件：条目与备注可见，token 必须是密文
-    env = json.load(open(os.path.join(tmp, 'skland', 'tokens.json'), encoding='utf-8'))
-    assert env['version'] == 2 and env['cipher'] == 'dpapi'
-    assert len(env['tokens']) == 3
-    assert env['tokens'][0]['alias'] == '大号'
-    assert all('SMOKE_' not in (t.get('data') or '') for t in env['tokens']), 'token 明文泄漏'
+    got = [(e['alias'], e['token']) for e in items]
+    assert got == [('大号', 'SMOKE_A'), ('小号', 'SMOKE_B')], got
+    assert items[0]['addedAt'] == '2026-11-05T07:40:00'
+    assert items[0]['data'], '密文要随条目透传（sync_many 复用，避免重复加密）'
+    # 落盘文件里 token 必须是密文，且 skd 不得进 API 视图
+    raw = open(os.path.join(cfg, 'A.json'), encoding='utf-8').read()
+    assert 'SMOKE_A' not in raw, 'token 明文泄漏'
+    assert 'skd' not in json.dumps(accounts.account_detail('A.json'), ensure_ascii=False), \
+        'skd 段不得随 API 响应外泄'
 
 
 def check_tokens_migration(tmp):
     import io as _io
     from core import accounts
-    sk = os.path.join(tmp, 'skland')
-    os.makedirs(sk, exist_ok=True)
-    for f in ('tokens.json', 'tokens.txt.bak'):
-        p = os.path.join(sk, f)
-        if os.path.isfile(p):
-            os.remove(p)
-    with _io.open(os.path.join(sk, 'tokens.txt'), 'w', encoding='utf-8') as f:
+    cfg = os.path.join(tmp, 'config')
+    _reset_config(tmp)
+    with _io.open(os.path.join(cfg, 'tokens.txt'), 'w', encoding='utf-8') as f:
         f.write('# 注释\n'
                 '大号:SMOKE_M1\n'
                 '小号:SMOKE_M2:小号#1 官服.json\n'
@@ -156,21 +182,402 @@ def check_tokens_migration(tmp):
     items = accounts.load_tokens()
     got = [(e['alias'], e['token']) for e in items]
     assert got == [('大号', 'SMOKE_M1'), ('小号', 'SMOKE_M2'), ('', 'SMOKE_M3')], got
-    assert os.path.isfile(os.path.join(sk, 'tokens.txt.bak')), '原 txt 未留 .bak'
+    assert os.path.isfile(os.path.join(cfg, 'tokens.json')), '未生成加密 tokens.json'
+    assert os.path.isfile(os.path.join(cfg, 'tokens.txt.bak')), '原 txt 未留 .bak'
+    env = json.load(open(os.path.join(cfg, 'tokens.json'), encoding='utf-8'))
+    assert env['version'] == 2 and env['cipher'] == 'dpapi'
+    assert all('SMOKE_' not in (t.get('data') or '') for t in env['tokens']), 'token 明文泄漏'
+    # tokens.txt 与 tokens.json 并存：txt 静默跳过必须变成点名警告（文件保留）
+    with _io.open(os.path.join(cfg, 'tokens.txt'), 'w', encoding='utf-8') as f:
+        f.write('并存:SMOKE_BOTH\n')
+    items = accounts.load_tokens()
+    assert all(e['token'] != 'SMOKE_BOTH' for e in items), '并存 txt 不该被偷偷并入'
+    assert os.path.isfile(os.path.join(cfg, 'tokens.txt')), '并存时 txt 必须原样保留'
+    assert any('tokens.txt' in w and '并存' in w for w in accounts.TOKENS_WARNINGS), \
+        '并存场景缺警告：%s' % accounts.TOKENS_WARNINGS
 
 
-def check_tokens_selfheal(tmp):
-    from core import accounts
-    sk = os.path.join(tmp, 'skland')
-    accounts._save_tokens([{'alias': 'a', 'token': 'SMOKE_H'}])
-    env = json.load(open(os.path.join(sk, 'tokens.json'), encoding='utf-8'))
-    env['tokens'][0]['data'] = base64.b64encode(b'garbage').decode('ascii')
-    with open(os.path.join(sk, 'tokens.json'), 'w', encoding='utf-8') as f:
-        json.dump(env, f)
+def check_tokens_bad_skd(tmp):
+    """R4：账号文件里坏密文 → 该条跳过、警告点名文件，其余可用，无 .broken 改名"""
+    from core import accounts, vault
+    cfg = os.path.join(tmp, 'config')
+    _reset_config(tmp)
+    good = {'skd': {'alias': '好', 'addedAt': '',
+                    'data': base64.b64encode(
+                        vault.protect(b'SMOKE_OK')).decode('ascii')}}
+    bad = {'skd': {'alias': '坏', 'addedAt': '',
+                   'data': base64.b64encode(b'garbage').decode('ascii')}}
+    for name, snap in (('Good.json', {'account': {'uid': '1'}, **good}),
+                       ('Bad.json', {'account': {'uid': '2'}, **bad})):
+        with open(os.path.join(cfg, name), 'w', encoding='utf-8') as f:
+            json.dump(snap, f, ensure_ascii=False)
     items = accounts.ensure_tokens()
-    assert items == [], '自愈后应为空列表'
-    assert os.path.isfile(os.path.join(sk, 'tokens.json.broken')), '坏文件未改名 .broken'
-    assert '重新粘贴' in accounts.TOKENS_WARNING, '警告信息缺失'
+    assert [e['token'] for e in items] == ['SMOKE_OK'], '坏条目不该拖死好条目'
+    assert 'Bad.json' in accounts.TOKENS_WARNING, '警告应点名受影响文件：%s' % accounts.TOKENS_WARNING
+    assert not any(n.endswith('.broken') for n in os.listdir(cfg)), \
+        '新布局下不该再有任何 .broken 改名：%s' % os.listdir(cfg)
+
+
+# ---------------------------------------------------------------- B13 旧布局迁移
+def check_layout_migration(settings, tmp):
+    """R5：旧布局 config/skland/ 压平进 config/ 本层（同名跳过、搬空才删、幂等）"""
+    cfg = os.path.join(tmp, 'config')
+    old = os.path.join(cfg, 'skland')
+    _reset_config(tmp)
+    for rel in ('accounts/A.json', 'accounts/作业站/x.json', 'accounts/_removed/b.json',
+                'tokens.json', 'subprof_cache.json'):
+        p = os.path.join(old, *rel.split('/'))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump({'marker': rel}, f, ensure_ascii=False)
+
+    settings._migrate_legacy_layout()
+    for rel in ('A.json', '作业站/x.json', '_removed/b.json',
+                'tokens.json', 'subprof_cache.json'):
+        assert os.path.isfile(os.path.join(cfg, *rel.split('/'))), '没搬到位：%s' % rel
+    assert json.load(open(os.path.join(cfg, 'tokens.json'), encoding='utf-8'))['marker'] \
+        == 'tokens.json', '搬过去的文件内容不该变'
+    assert not os.path.isdir(old), '搬空的 config/skland 应被删除'
+
+    # 幂等：目录已不存在，再跑一遍什么也不发生
+    settings._migrate_legacy_layout()
+    assert os.path.isfile(os.path.join(cfg, 'A.json'))
+
+    # 同名冲突：config 已有 A.json → 旧文件原地保留、绝不覆盖，目录非空不删
+    os.makedirs(os.path.join(old, 'accounts'), exist_ok=True)
+    with open(os.path.join(old, 'accounts', 'A.json'), 'w', encoding='utf-8') as f:
+        json.dump({'marker': 'old'}, f)
+    with open(os.path.join(cfg, 'A.json'), 'w', encoding='utf-8') as f:
+        json.dump({'marker': 'new'}, f)
+    settings._migrate_legacy_layout()
+    assert json.load(open(os.path.join(cfg, 'A.json'), encoding='utf-8'))['marker'] == 'new', \
+        '同名文件被覆盖了——这会直接丢用户账号数据'
+    assert os.path.isfile(os.path.join(old, 'accounts', 'A.json')), '冲突文件应留在原地'
+    assert os.path.isdir(old), '还有数据没搬完的 config/skland 不该被删'
+
+
+# ---------------------------------------------------------------- B14 MAA 干员 JSON
+def check_operbox_parse(tmp):
+    """R3：MAA 干员识别 JSON（新 JObject / 旧裸数组）→ 账号练度结构映射
+
+    fixture 按实测真实格式构造：顶层恰 done/own_opers/source/syncTime 四键，
+    local 条目字段集恰 {id,name,elite,level,own,potential,rarity}（name 来自
+    OCR 可能非中文）；一图流条目才有 mainSkillLevel/skills/equips。
+    """
+    import tempfile as _tf
+    from core import copilot, operbox, resources, updater
+
+    table = resources.char_table() or {}
+    by_rarity = {}
+    for cid, c in table.items():
+        if isinstance(c, dict) and c.get('name'):
+            by_rarity.setdefault(int(c.get('rarity') or 0) + 1, (cid, c['name']))
+    six, five = by_rarity[6], by_rarity[5]
+    skill_id = next(iter(resources.skill_table() or {}), 'skchr_xxx_1')
+    equip_id = next((eid for eid in (resources.equip_table() or {})
+                     if copilot._module_type(eid) in copilot._SLOT), None)
+    assert equip_id, '资源包里找不到槽位型（X/Y/A/D）模组，无法构造样本'
+
+    def entry(cid, name, elite, level, rarity, **kw):
+        e = {'id': cid, 'name': name, 'elite': elite, 'level': level,
+             'own': True, 'potential': 1, 'rarity': rarity}
+        e.update(kw)
+        return e
+
+    local = {                      # 本机 MAA 实测形态（source=local）
+        'done': True, 'source': 'local', 'syncTime': '2026-11-01T11:20:13.3592439+08:00',
+        'own_opers': [
+            entry(six[0], 'TITI-OCR', 2, 90, 6, potential=6),   # OCR 名非中文
+            dict(entry(five[0], 'x', 1, 60, 5), own=False),     # 未拥有 → 跳过
+            entry('char_9999_zzz', '新干员', 2, 90, 6),         # 资源表查不到 → 跳过
+        ],
+    }
+    yituliu = {                    # 一图流形态：才有技能/专精/模组
+        'done': True, 'source': 'yituliu', 'syncTime': '2026-11-01T12:00:00+08:00',
+        'own_opers': [entry(five[0], 'x', 2, 80, 5, potential=2, mainSkillLevel=7,
+                            skills=[{'id': skill_id, 'level': 3}],
+                            equips=[{'id': equip_id, 'type': 'X', 'level': 3}])],
+    }
+
+    built = operbox.build_chars(local, updater.Tables(cache_path=None))
+    assert built['skipped'] == 2 and len(built['chars']) == 1, (built['skipped'], len(built['chars']))
+    c = built['chars'][0]
+    assert c['charId'] == six[0]
+    assert c['name'] == six[1], '应以 id 查表取名，OCR 名只能作回退：%r' % c['name']
+    assert c['rarity'] == 6 and c['elite'] == 2 and c['level'] == 90 and c['potential'] == 6
+    assert c['profession'], '职业该从资源表补上'
+    assert c['skillLevel'] == 0 and c['skills'] == [] and c['modules'] == [], \
+        'local 数据没有技能/模组，必须如实置空，不许编造'
+    assert any('本地识别不含技能' in w for w in built['warnings']), built['warnings']
+    assert any('char_9999_zzz' in w for w in built['warnings']), '查不到的 id 要计入 warnings'
+
+    built2 = operbox.build_chars(yituliu, updater.Tables(cache_path=None))
+    c2 = built2['chars'][0]
+    assert c2['skillLevel'] == 7
+    assert c2['skills'] and c2['skills'][0]['mastery'] == 3 and c2['skills'][0]['name']
+    assert c2['modules'] and c2['modules'][0]['level'] == 3
+
+    # 旧版（2025-05-29 前）裸数组形态 load() 也要认；非 JSON 要报可读错误
+    with _tf.TemporaryDirectory() as td:
+        p = os.path.join(td, 'OperBoxData.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(local['own_opers'], f, ensure_ascii=False)
+        data = operbox.load(p)
+        assert data['source'] == 'local' and len(data['own_opers']) == 3
+        assert data['syncTime'] is None
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write('not-json{')
+        try:
+            operbox.load(p)
+        except ValueError as e:
+            assert 'own_opers 为空' in str(e)
+        else:
+            raise AssertionError('非 JSON 未报错')
+
+    # 映射结果要能直接喂给练度匹配：结构同构、放行/拦截语义正确
+    owned = copilot.build_owned({'chars': built['chars'] + built2['chars']})
+    o6 = owned[copilot.norm(six[1])]
+    assert set(o6) == {'name', 'rarity', 'elite', 'level', 'mainSkillLevel',
+                       'masteryLevels', 'moduleLevels', 'skillKnown'}, set(o6)
+    assert copilot.req_met({'name': six[1], 'skill': 2,
+                            'requirements': {'elite': 2, 'level': 60}}, o6), \
+        '精二满级的干员该放行 elite/level 要求'
+    assert copilot.req_met({'name': six[1], 'skill': 2,
+                            'requirements': {'skill_level': 9}}, o6), \
+        'local 数据没有技能维度，按约定只比等级、专精要求不再拦下（详见 B17）'
+    o5 = owned[copilot.norm(five[1])]
+    assert o5['masteryLevels'] == [3] and o5['moduleLevels'], '一图流的专精/模组没映射过去'
+    assert copilot.req_met({'name': five[1], 'skill': 1,
+                            'requirements': {'skill_level': 9}}, o5), '专三该放行专精要求'
+
+    # import_into：done=false（识别中断的残缺名单）整单拒绝，绝不能覆盖现有练度
+    _reset_config(tmp)
+    cfg = os.path.join(tmp, 'config')
+    old_char = {'charId': six[0], 'name': six[1], 'rarity': 6, 'elite': 0, 'level': 1,
+                'favor': 122, 'skin': {'id': 's1', 'name': '皮'}, 'skinCount': 1}
+    with open(os.path.join(cfg, '甲.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '1'}, 'chars': [old_char], 'skins': [{'id': 's1'}],
+                   'stats': {}, 'missing': [], 'sync': {}}, f, ensure_ascii=False)
+    maa = os.path.join(tmp, 'maa-sample')
+    os.makedirs(os.path.join(maa, 'data'), exist_ok=True)
+
+    def write_operbox(done):
+        with open(os.path.join(maa, 'data', 'OperBoxData.json'), 'w', encoding='utf-8') as f:
+            json.dump({'done': done, 'source': 'local', 'syncTime': None,
+                       'own_opers': local['own_opers']}, f, ensure_ascii=False)
+
+    write_operbox(False)
+    try:
+        operbox.import_into('甲.json', maa)
+    except ValueError as e:
+        assert '未完成' in str(e), e
+    else:
+        raise AssertionError('done=false 的残缺名单不该被导入')
+    snap = json.load(open(os.path.join(cfg, '甲.json'), encoding='utf-8'))
+    assert snap['chars'] == [old_char], '拒绝导入时不能动现有练度'
+
+    # done=true 正常导入：皮肤/信赖按 charId 沿用旧值，与保留的 skins 列表不打架
+    write_operbox(True)
+    res = operbox.import_into('甲.json', maa)
+    assert res['done'] is True, '摘要要带 done 供界面展示'
+    snap = json.load(open(os.path.join(cfg, '甲.json'), encoding='utf-8'))
+    c = {x['charId']: x for x in snap['chars']}[six[0]]
+    assert c['favor'] == 122 and c['skin'] == {'id': 's1', 'name': '皮'} \
+        and c['skinCount'] == 1, 'MAA 没有的皮肤/信赖该沿用旧值，而不是清零'
+    assert snap['skins'] == [{'id': 's1'}] and snap['stats']['skinCount'] == 1
+
+
+# ---------------------------------------------------------------- B15 从 MAA 直接建号
+def check_create_from_maa(tmp):
+    """向导方式二：不用森空岛 token，用 MAA 识别结果直接建本地账号
+
+    建出的账号要能被 list_accounts 认出（合成 uid + 昵称取目录名/备注），
+    不写 skd 段（load_tokens 不把它当森空岛账号），重名顺延 (2)(3)，
+    done=false 残缺名单整单拒绝。
+    """
+    from core import accounts, operbox, resources
+
+    table = resources.char_table() or {}
+    cid, name = next(((k, v['name']) for k, v in table.items()
+                      if isinstance(v, dict) and v.get('name')), ('char_x', 'x'))
+    maa = os.path.join(tmp, 'MAA-fake')
+    os.makedirs(os.path.join(maa, 'data'), exist_ok=True)
+
+    def write_operbox(done):
+        with open(os.path.join(maa, 'data', 'OperBoxData.json'), 'w', encoding='utf-8') as f:
+            json.dump({'done': done, 'source': 'local', 'syncTime': '2026-11-06T12:00:00+08:00',
+                       'own_opers': [{'id': cid, 'name': name, 'elite': 2, 'level': 90,
+                                      'own': True, 'potential': 0, 'rarity': 6}]},
+                      f, ensure_ascii=False)
+
+    _reset_config(tmp)
+    write_operbox(True)
+    r = operbox.create_from_dir(maa, '')
+    assert r['imported'] == 1 and r['file'] == 'MAA-fake.json', r['file']
+    snap = accounts.get_account(r['file'])
+    assert snap['account']['uid'].startswith('local-'), snap['account']
+    assert snap['account']['nickName'] == 'MAA-fake', '没给备注时昵称应取 MAA 目录名'
+    assert snap['account']['channelName'] == '本地导入'
+    assert 'skd' not in snap, '本地账号不该有 skd 段'
+    assert snap['maa']['dir'].endswith('MAA-fake'), snap['maa']
+    assert snap['chars'] and snap['chars'][0]['charId'] == cid
+    assert snap['stats']['charCount'] == 1
+    assert any(x['file'] == r['file'] for x in accounts.list_accounts()), '新建账号没进账号列表'
+    # 无 skd 段 → 不产生任何 token（不参与森空岛同步）
+    assert accounts.load_tokens() == [], '本地账号不该被当成森空岛账号'
+
+    # 重名顺延：同目录再建一个 → MAA-fake(2).json；带备注则用备注命名
+    r2 = operbox.create_from_dir(maa, '')
+    assert r2['file'] == 'MAA-fake(2).json', r2['file']
+    r3 = operbox.create_from_dir(maa, '小号')
+    assert r3['file'] == '小号.json', r3['file']
+    snap3 = accounts.get_account(r3['file'])
+    assert snap3['account']['nickName'] == '小号' and snap3['account']['alias'] == '小号'
+
+    # done=false（识别中断）整单拒绝，不落任何文件
+    write_operbox(False)
+    try:
+        operbox.create_from_dir(maa, '')
+    except ValueError as e:
+        assert '未完成' in str(e), e
+    else:
+        raise AssertionError('done=false 的残缺名单不该建号')
+    assert not os.path.isfile(os.path.join(tmp, 'config', 'MAA-fake(3).json'))
+
+
+# ---------------------------------------------------------------- B16 账号手动排序
+def check_account_order(tmp):
+    """账号列表排序：settings.accountOrder（长按拖动保存的顺序）优先，
+    没排过的账号按默认序（干员数降序、昵称）跟在后面；幽灵文件名忽略
+    """
+    from core import accounts, settings
+
+    _reset_config(tmp)
+    cfg = os.path.join(tmp, 'config')
+
+    def mk(name, uid, count):
+        with open(os.path.join(cfg, name), 'w', encoding='utf-8') as f:
+            json.dump({'account': {'uid': uid, 'nickName': name[:-5]},
+                       'stats': {'charCount': count}}, f, ensure_ascii=False)
+
+    mk('甲.json', '1', 10)
+    mk('乙.json', '2', 20)
+    mk('丙.json', '3', 5)
+    names = [r['file'] for r in accounts.list_accounts()]
+    assert names == ['乙.json', '甲.json', '丙.json'], names      # 默认：干员数降序
+
+    settings.save({'accountOrder': ['丙.json', '乙.json']})
+    names = [r['file'] for r in accounts.list_accounts()]
+    assert names == ['丙.json', '乙.json', '甲.json'], names      # 手动序在前
+
+    # 排序列表里的幽灵文件名排序时忽略；非 .json 的脏值被清洗掉
+    settings.save({'accountOrder': ['乙.json', 'ghost.json', 42]})
+    names = [r['file'] for r in accounts.list_accounts()]
+    assert names == ['乙.json', '甲.json', '丙.json'], names
+    assert settings.load()['accountOrder'] == ['乙.json', 'ghost.json'], \
+        settings.load()['accountOrder']
+
+
+# ------------------------------------------------- B17 MAA 导入账号只比等级
+def check_maa_import_level_only():
+    """MAA 干员识别导入的账号没有技能/专精/模组数据。
+
+    用户定的妥协：这类账号只比精英化与等级——
+      v1 老作业：按星级补默认等级，不再要求技能；
+      v2 作业：只认 requirements 里的 elite/level，skill_level 与 module 不判。
+    有技能数据的账号（森空岛同步、一图流来源）行为必须保持不变。
+    """
+    from core import copilot, resources
+
+    table = resources.char_table() or {}
+    by_stars = {}
+    for c in table.values():
+        if isinstance(c, dict) and c.get('name'):
+            by_stars.setdefault(int(c.get('rarity') or 0) + 1, c['name'])
+
+    def snap(name, stars, elite, level, with_skills):
+        c = {'charId': 'x', 'name': name, 'rarity': stars, 'elite': elite,
+             'level': level, 'skillLevel': 7, 'favor': 0, 'skin': None}
+        if with_skills:
+            c['skills'] = [{'id': 's1', 'name': '', 'mastery': 3},
+                           {'id': 's2', 'name': '', 'mastery': 0},
+                           {'id': 's3', 'name': '', 'mastery': 0}]
+            c['modules'] = [{'id': 'uniequip_002_x1', 'name': '', 'level': 3}]
+        else:                                   # MAA 本地识别的形态
+            c['skills'] = []
+            c['modules'] = []
+        return {'chars': [c]}
+
+    six, five = by_stars[6], by_stars[5]
+    maa = copilot.build_owned(snap(six, 6, 2, 60, with_skills=False))
+    o = maa[copilot.norm(six)]
+    assert o['skillKnown'] is False, 'MAA 导入的干员应标 skillKnown=False'
+
+    skl = copilot.build_owned(snap(six, 6, 2, 60, with_skills=True))
+    assert skl[copilot.norm(six)]['skillKnown'] is True, '有技能数据的账号不能放宽'
+
+    # v2 作业：技能/模组要求一律不判（改动前这里全是 False）
+    for req in ({'elite': 2, 'level': 60, 'skill_level': 9},
+                {'elite': 2, 'level': 60, 'skill_level': 7},
+                {'elite': 2, 'level': 60, 'module': 3}):
+        assert copilot.req_met({'name': six, 'skill': 2, 'requirements': req}, o), \
+            'MAA 导入号不该被技能/模组要求拦下：%r' % req
+    # 但等级照旧要卡
+    assert not copilot.req_met({'name': six, 'skill': 2,
+                                'requirements': {'elite': 2, 'level': 61}}, o), \
+        '等级不够必须拦下'
+    low = copilot.build_owned(snap(six, 6, 1, 60, with_skills=False))
+    assert not copilot.req_met({'name': six, 'skill': 2,
+                                'requirements': {'elite': 2, 'level': 60}},
+                               low[copilot.norm(six)]), \
+        '精英阶段不够必须拦下（精一 60 不满足精二 60）'
+
+    # v1 作业：按星级补等级默认，且不带技能要求
+    for stars, want in ((6, (2, 60)), (5, (1, 60)), (4, (1, 60)),
+                        (3, (1, 55)), (2, (0, 30)), (1, (0, 30))):
+        name = by_stars[stars]
+        req = copilot.effective_req({'name': name, 'skill': 1}, stars, strict_skill=False)
+        assert (req['elite'], req['level']) == want, \
+            '%d 星默认等级应为 %r，实际 %r' % (stars, want, (req['elite'], req['level']))
+        assert 'skill_level' not in req and 'module' not in req, \
+            '没有技能数据时不该再要求技能/模组：%r' % req
+        assert req.get('implied') is True, '默认要求仍要带 implied 标记'
+
+    maa_five = copilot.build_owned(snap(five, 5, 1, 60, with_skills=False))
+    assert copilot.req_met({'name': five, 'skill': 1}, maa_five[copilot.norm(five)]), \
+        '五星精一 60 该满足 v1 默认'
+    maa_low = copilot.build_owned(snap(five, 5, 0, 55, with_skills=False))
+    assert not copilot.req_met({'name': five, 'skill': 1}, maa_low[copilot.norm(five)]), \
+        '五星精零 55 不该满足 v1 默认（精一 60）'
+
+    # 有技能数据的账号：行为保持原样（专精 0 该被专三要求拦下）
+    assert not copilot.req_met({'name': six, 'skill': 2,
+                                'requirements': {'skill_level': 9}},
+                               skl[copilot.norm(six)]), \
+        '有技能数据的账号不能被顺手放宽'
+    assert copilot.effective_req({'name': six, 'skill': 1}, 6)['skill_level'] == 9, \
+        'v1 默认对正常账号仍要含专三'
+
+    # 详情副本：带账号时展示与判定一致，不带账号时保持原样
+    content = {'opers': [{'name': six, 'skill': 2,
+                          'requirements': {'elite': 2, 'level': 60,
+                                           'skill_level': 9, 'module': 3}}]}
+    dop = copilot.detail_opers(content, maa)
+    assert 'skill_level' not in dop[0]['requirements'], dop[0]['requirements']
+    assert 'module' not in dop[0]['requirements'], dop[0]['requirements']
+    assert dop[0]['skillKnown'] is False
+    assert copilot.detail_opers(content, skl)[0]['requirements']['skill_level'] == 9
+    assert copilot.detail_opers(content)[0]['requirements']['skill_level'] == 9, \
+        '不带账号上下文时不该改变展示'
+    v1 = {'opers': [{'name': six, 'skill': 1}]}      # v1 条目：本来没有 requirements
+    copilot.detail_opers(v1, maa)
+    assert 'requirements' not in v1['opers'][0], '展示副本不能污染原始 content'
+
+    # 搜索用的 detail 也要如实反映（前端据此显示「只比等级」提示）
+    mode, missing, training, _total, detail, _six = copilot.match_operation(content, maa)
+    assert mode == 'ready' and not training, (mode, training)
+    assert detail[0]['skillKnown'] is False
+    assert 'skill_level' not in detail[0]['req'], detail[0]['req']
 
 
 def _assert_maa_parsable(content):
@@ -529,16 +936,16 @@ def check_boot_smoke():
             envelope = json.loads(body.decode('utf-8'))
             assert envelope.get('ok'), 'bootstrap 返回失败：%s' % envelope.get('error')
             paths = (envelope.get('data') or {}).get('paths') or {}
-            sk = (paths.get('skland') or '').rstrip('\\/')
-            assert sk.endswith('config\\skland') or sk.endswith('config/skland'), \
-                '账号数据路径不对：%s' % paths.get('skland')
+            acc = (paths.get('accounts') or '').rstrip('\\/')
+            assert acc.endswith('config'), '账号数据路径不对：%s' % paths.get('accounts')
+            assert 'skland' not in paths, 'paths 不应再报告 skland 键'
             assert (paths.get('tokens') or '').endswith('tokens.json'), \
                 'token 文件路径不对：%s' % paths.get('tokens')
 
             applog = os.path.join(tmp, 'debug', 'app.log')
             assert os.path.isfile(applog), '没有生成 debug/app.log'
-            assert os.path.isfile(os.path.join(tmp, 'config', 'skland', 'tokens.json')), \
-                '没有生成加密 tokens.json'
+            assert not os.path.isdir(os.path.join(tmp, 'config', 'skland')), \
+                'config/skland 不应被预创建（新布局无此目录）'
         finally:
             proc.terminate()
             try:
@@ -551,6 +958,56 @@ def check_boot_smoke():
         assert new <= {'config', 'debug'}, '运行后根目录出现预期外的新增：%s' % sorted(new)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ------------------------------------------------- B18 剧情关不进搜索
+def check_story_stage_filter():
+    """剧情关（stage_table 里 isStoryOnly）只有剧情没有战斗，作业站永远不会有作业。
+
+    以前它们会混进活动展开，每个活动都顶着几行「共 0 份 / 打不了」。
+    现在：新资源包靠 stage['story'] 标记；旧包没有这个字段时靠代号/id 兜底，
+    两条路径都不能让剧情关出现在搜索结果里，也不能误伤真实战斗关。
+    """
+    from core import resources
+
+    # 1. 兜底规则本身：三种形态都要认出来，且不影响普通关卡
+    cases = [
+        ({'id': 'act13side_st01', 'code': 'NL-ST-1'}, True),   # 活动剧情关
+        ({'id': 'a003_st01', 'code': 'OF-ST1'}, True),         # 代号无第二个连字符
+        ({'id': 'st_08-01', 'code': '10-1'}, True),            # 主线纯剧情节点
+        ({'id': 'spst_08-01', 'code': 'EG-3'}, True),          # 主线剧情片段
+        ({'id': 'act13side_10', 'code': 'NL-10'}, False),      # 活动战斗关
+        ({'id': 'main_08-01', 'code': '8-1'}, False),          # 主线战斗关
+        ({'id': 'act13side_tr01', 'code': 'NL-TR-1'}, False),  # 教学关不是剧情关
+    ]
+    for st, want in cases:
+        got = resources._is_story(dict(st))
+        assert got is want, '%r 的剧情判定应为 %s，实际 %s' % (st, want, got)
+
+    # 2. 新包以官方字段为准，不再看代号（标了 story=false 就不该被兜底误杀）
+    assert resources._is_story({'id': 'act13side_st01', 'code': 'NL-ST-1',
+                                'story': False}) is False
+
+    # 3. 实际关卡表里剧情关已经没了
+    codes = [s['code'] for s in resources._stages()]
+    assert codes, '资源包没加载到关卡'
+    left = [c for c in codes if resources._is_story({'id': '', 'code': c})]
+    assert not left, '_stages() 里还有剧情关：%s' % left[:5]
+
+    # 4. 搜剧情关代号拿不到结果；战斗关照常能搜到
+    for kw in ('NL-ST-1', 'EG-3'):
+        r = resources.resolve(kw)
+        assert not r['stages'], '搜 %s 不该有结果，实际 %d 关' % (kw, len(r['stages']))
+    r = resources.resolve('NL-10')
+    assert r['mode'] == 'stage' and len(r['stages']) == 1, \
+        'NL-10 是战斗关，必须还能搜到：%r' % r['mode']
+
+    # 5. 活动展开不带剧情关，但战斗关一个不能少
+    r = resources.resolve('act13side')
+    assert r['mode'] == 'activity' and r['stages'], 'act13side 应展开成活动'
+    assert not [s for s in r['stages'] if s['code'].startswith('NL-ST')], \
+        '活动展开里还有 NL-ST：%s' % [s['code'] for s in r['stages']][:6]
+    assert any(s['code'] == 'NL-EX-7' for s in r['stages']), '战斗关被误删了'
 
 
 # ---------------------------------------------------------------- 入口
@@ -568,12 +1025,12 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix='maaprts-smoke-unit-')
     try:
-        _patch_settings(tmp)
+        settings_mod = _patch_settings(tmp)
         r.check('B1 DPAPI 加解密往返', check_vault_roundtrip)
         r.check('B2 DPAPI 篡改必报错', check_vault_tamper)
-        r.check('B3 tokens 多账号读写/去重/密文', lambda: check_tokens_multi_account(tmp))
+        r.check('B3 tokens 随账号 skd 段（去重/备注/不外泄）', lambda: check_tokens_in_accounts(tmp))
         r.check('B4 旧 tokens.txt 自动迁移', lambda: check_tokens_migration(tmp))
-        r.check('B5 坏密文自愈（.broken + 警告）', lambda: check_tokens_selfheal(tmp))
+        r.check('B5 坏 skd 逐条跳过并点名', lambda: check_tokens_bad_skd(tmp))
         r.check('B6 畸形旧 txt 留证并警告', lambda: check_tokens_bad_txt(tmp))
         r.check('B7 作业 json 修正后 MaaCore 可解析', check_copilot_normalize)
         r.check('B8 难度位标志（普通/突袭/通用）', check_copilot_difficulty)
@@ -581,6 +1038,12 @@ def main():
         r.check('B10 悖论清单与解锁推算', check_paradox_plan)
         r.check('B11 悖论写 MAA 的命名', check_maa_paradox_name)
         r.check('B12 v1 作业默认练度（压级号不再误推）', check_copilot_v1_default_req)
+        r.check('B13 旧布局 config/skland 压平迁移', lambda: check_layout_migration(settings_mod, tmp))
+        r.check('B14 MAA 干员 JSON 解析与练度映射', lambda: check_operbox_parse(tmp))
+        r.check('B15 从 MAA 直接建号（无 token）', lambda: check_create_from_maa(tmp))
+        r.check('B16 账号手动排序（accountOrder）', lambda: check_account_order(tmp))
+        r.check('B17 MAA 导入账号只比等级', check_maa_import_level_only)
+        r.check('B18 剧情关不进搜索', check_story_stage_filter)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

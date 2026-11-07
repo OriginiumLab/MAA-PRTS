@@ -398,6 +398,12 @@ def diff_snapshots(old, new):
 
 
 # ---------------------------------------------------------------- 文件命名
+# R5 起账号文件与这些全局文件同层放在 config/，目录遍历必须显式跳过
+# （account.uid 检查只是兜底，不能依赖它挡住解析失败的 json）
+NON_ACCOUNT_JSON = {'settings.json', 'gamedata.json', 'tokens.json',
+                    'subprof_cache.json'}
+
+
 def safe_filename(name, fallback=''):
     """去掉 Windows 文件名非法字符，保留中文/#/空格"""
     s = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name or ''))
@@ -423,12 +429,14 @@ def char_path(accounts_dir, nick, channel, uid):
 
 
 def scan_accounts(accounts_dir):
-    """扫描 accounts 目录，返回 {uid: 文件路径}"""
+    """扫描账号目录（config/），返回 {uid: 文件路径}"""
     found = {}
     if not os.path.isdir(accounts_dir):
         return found
     for name in os.listdir(accounts_dir):
         if not name.endswith('.json') or name.startswith('_'):
+            continue
+        if name in NON_ACCOUNT_JSON:
             continue
         p = os.path.join(accounts_dir, name)
         d = load_json(p) or {}
@@ -443,6 +451,8 @@ def write_index(accounts_dir):
     if os.path.isdir(accounts_dir):
         for name in sorted(os.listdir(accounts_dir)):
             if not name.endswith('.json') or name.startswith('_'):
+                continue
+            if name in NON_ACCOUNT_JSON:
                 continue
             d = load_json(os.path.join(accounts_dir, name)) or {}
             a, s, sy = d.get('account') or {}, d.get('stats') or {}, d.get('sync') or {}
@@ -469,7 +479,7 @@ def write_index(accounts_dir):
 
 
 def merge_preserved(snap, old):
-    """保留用户手写字段（maa/note/tags），刷新不冲掉"""
+    """保留用户手写字段（maa/note/tags/skd），刷新不冲掉"""
     if not old:
         return snap
     for k in ('maa', 'note'):
@@ -477,14 +487,23 @@ def merge_preserved(snap, old):
             snap[k] = old[k]
     if old.get('tags'):
         snap['tags'] = old['tags']
+    # 新快照不带 skd（重加密失败/兜底路径）而旧文件有 → 原样保留，token 不丢
+    if not snap.get('skd') and old.get('skd'):
+        snap['skd'] = old['skd']
     if not ((snap.get('account') or {}).get('alias')) and (old.get('account') or {}).get('alias'):
         snap['account']['alias'] = old['account']['alias']
     return snap
 
 
 # ---------------------------------------------------------------- 主流程
-def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None):
-    """同步单个 token 绑定的所有角色，返回 {ok, fail, files}"""
+def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
+             skd_meta=None):
+    """同步单个 token 绑定的所有角色，返回 {ok, fail, files}
+
+    skd_meta = {alias, addedAt, data}：调用方组装好的 token 密文段，
+    同步成功的账号文件会带上它（R4，token 与账号数据同文件存放）；
+    不传则留给 merge_preserved 保留旧文件里已有的 skd。
+    """
     tables = Tables(cache_path)
     for w in tables.warnings:
         log('[资源包] ' + w)
@@ -511,6 +530,8 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None)
         old_path = existing.get(uid)
         old = load_json(old_path) if old_path else None
         snap = merge_preserved(snap, old)
+        if skd_meta:
+            snap['skd'] = dict(skd_meta)
         changes = diff_snapshots(old, snap)
 
         a, s = snap['account'], snap['stats']
@@ -542,7 +563,7 @@ def parse_tokens_file(path):
     """旧版明文 tokens.txt → [(alias, token, outname, lineno)]
 
     现在只在迁移时用（accounts._migrate_txt_if_any），运行期的 token
-    存在加密的 config/skland/tokens.json 里。
+    密文随各账号 json 的 skd 段存放（旧版 config/tokens.json 兜底）。
     """
     items = []
     with io.open(path, encoding='utf-8-sig') as f:
@@ -575,25 +596,34 @@ def parse_tokens_file(path):
 
 
 def sync_many(items, accounts_dir, log, with_skins=False, cache_path=None):
-    """批量同步 token 列表 [{"alias", "token"}]，单个失败不影响其他"""
+    """批量同步 token 列表 [{"alias","token","data"?}]，单个失败不影响其他
+
+    条目自带的密文（data/addedAt，来自账号文件 skd 段或旧 tokens.json）
+    直接透传给 sync_one，避免每个角色再加密一次。
+    """
     seen, uniq = set(), []
     for e in items or []:
         token = (e.get('token') or '').strip()
-        alias = (e.get('alias') or '').strip()
         if token and token not in seen:
             seen.add(token)
-            uniq.append((alias, token))
+            uniq.append(e)
     if not uniq:
         raise RuntimeError('token 列表为空，先在界面里添加账号')
     log('token 共 %d 个' % len(uniq))
     log('-' * 60)
 
     ok, fail = 0, 0
-    for alias, token in uniq:
+    for e in uniq:
+        alias, token = (e.get('alias') or '').strip(), e['token']
+        skd_meta = None
+        if e.get('data'):
+            skd_meta = {'alias': alias, 'addedAt': e.get('addedAt') or '',
+                        'data': e.get('data')}
         log('')
         try:
             r = sync_one(token, alias, accounts_dir, log,
-                         with_skins=with_skins, cache_path=cache_path)
+                         with_skins=with_skins, cache_path=cache_path,
+                         skd_meta=skd_meta)
             ok += r['ok']
         except Exception as e:
             log('  ✗ 失败：%s' % e)

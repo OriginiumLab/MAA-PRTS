@@ -8,7 +8,7 @@
 用法：
     python resources/make_pack.py --excel "D:\\ArknightsGameResource\\gamedata\\excel"
     python resources/make_pack.py --excel ... --out resources/arknights.json
-    python resources/make_pack.py --excel ... --subprof skland/subprof_cache.json
+    python resources/make_pack.py --excel ... --subprof config/subprof_cache.json
 
 只在游戏大版本更新后需要重跑一次；平时程序只读 arknights.json，不碰原始表。
 """
@@ -81,6 +81,10 @@ def build(excel_dir, subprof_path=None, base_path=None):
             'code': code,
             'name': st.get('name') or '',
             'zone': st.get('zoneId') or '',
+            # 剧情关（NL-ST-1 这类）：进不了战斗，作业站永远不会有作业。
+            # 带上官方标记，程序侧据此把它们从搜索/活动展开里剔掉，
+            # 免得每个活动都顶着几行「共 0 份 / 打不了」。
+            'story': bool(st.get('isStoryOnly')),
         })
     stages.sort(key=lambda r: r['id'])
 
@@ -128,9 +132,12 @@ def build(excel_dir, subprof_path=None, base_path=None):
     }
     now = dt.datetime.now().astimezone()
     version = now.strftime('%Y.%m.%d')
-    # 内容指纹：同一天重复生成也能区分（程序侧靠它判断资源有没有变）
+    # 内容指纹：同一天重复生成也能区分（程序侧靠它判断资源有没有变）。
+    # 除了关卡 id，还要带上「剧情关条数」——story 字段是后加的，
+    # 只算 id 的话改了这个字段指纹不动，用户侧就收不到资源变更提示。
+    story_count = sum(1 for s in stages if s.get('story'))
     fingerprint = hashlib.sha1(
-        json.dumps([version, counts, [s['id'] for s in stages]],
+        json.dumps([version, counts, story_count, [s['id'] for s in stages]],
                    sort_keys=True).encode('utf-8')
     ).hexdigest()[:8]
 
@@ -153,11 +160,13 @@ def build(excel_dir, subprof_path=None, base_path=None):
 
 def _default_subprof(root):
     """找运行时学到的分支名缓存：新路径在前，旧版目录兜底"""
-    for rel in (('config', 'skland', 'subprof_cache.json'), ('skland', 'subprof_cache.json')):
+    for rel in (('config', 'subprof_cache.json'),
+                ('config', 'skland', 'subprof_cache.json'),
+                ('skland', 'subprof_cache.json')):
         p = os.path.join(root, *rel)
         if os.path.isfile(p):
             return p
-    return os.path.join(root, 'config', 'skland', 'subprof_cache.json')
+    return os.path.join(root, 'config', 'subprof_cache.json')
 
 
 def main(argv=None):
@@ -166,7 +175,7 @@ def main(argv=None):
     ap.add_argument('--excel', required=True, help='ArknightsGameResource/gamedata/excel 目录')
     ap.add_argument('--out', default=os.path.join(HERE, 'arknights.json'))
     ap.add_argument('--subprof', default=None,
-                    help='分支名缓存（默认自动找 config/skland/subprof_cache.json）')
+                    help='分支名缓存（默认自动找 config/subprof_cache.json）')
     args = ap.parse_args(argv)
 
     subprof_path = args.subprof or _default_subprof(root)

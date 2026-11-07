@@ -141,23 +141,37 @@ def infer_elite(rarity, level, elite):
     return e
 
 
-def effective_req(op, rarity):
+def effective_req(op, rarity, strict_skill=True):
     """作业条目的实际练度要求。
 
     v1 老作业没写 requirements（或只写了技能/模组没写练度）时，按星级补默认
     （练度 + 技能等级，见 DEFAULT_REQ）：返回的 dict 带 `implied: True` 标记，
     前端据此显示「默认」而不是当成作者标注。
+
+    strict_skill=False 用于「账号根本没有技能/专精/模组数据」的情况（MAA 本地
+    识别导入的账号）：这些维度不判定，也就不该出现在要求里，否则用户会看到
+    一条永远满足不了的「专三」，却完全不知道是数据缺失导致的。
     """
     r = op.get('requirements') or {}
     if r.get('elite') is None and r.get('level') is None:
         r = dict(r, **DEFAULT_REQ.get(int(rarity or 6), DEFAULT_REQ[6]), implied=True)
+    if not strict_skill:
+        r = {k: v for k, v in r.items()
+             if k not in ('skill_level', 'skillLevel', 'module')}
     return r
 
 
 def req_met(req, owned):
     """req 是作业里的干员条目，requirements 是它的练度要求。
-    注意：技能序号 `skill` 在条目顶层，不在 requirements 里。"""
-    r = effective_req(req, owned.get('rarity'))
+    注意：技能序号 `skill` 在条目顶层，不在 requirements 里。
+
+    账号没有技能数据时（owned['skillKnown'] 为 False）只比精英化 / 等级：
+    MAA 干员识别拿不到技能等级、专精、模组，按「未知」处理会把这些账号的
+    作业全判成需补练度；这里选择妥协，技能与模组一律当已拥有（见
+    operbox.build_chars 的数据源上限说明）。
+    """
+    skill_known = bool(owned.get('skillKnown', True))
+    r = effective_req(req, owned.get('rarity'), strict_skill=skill_known)
     elite, level = r.get('elite'), r.get('level')
     if elite is not None or level is not None:
         rl = int(level or 1)
@@ -212,7 +226,8 @@ def match_operation(content, owned_map):
             six += 1
         # v1 作业没写练度：detail 里也补上默认要求（带 implied 标记），让前端
         # 能解释「为什么判需补练度」，而不是一脸懵地显示「无特殊要求」
-        req = effective_req(op, owned['rarity'] if owned else rmap.get(name))
+        req = effective_req(op, owned['rarity'] if owned else rmap.get(name),
+                            strict_skill=bool(owned.get('skillKnown', True)) if owned else True)
         detail.append({
             'name': op.get('name'),
             'owned': bool(owned),
@@ -222,6 +237,7 @@ def match_operation(content, owned_map):
             'mastery': owned['masteryLevels'] if owned else [],
             'req': req,
             'skill': op.get('skill'),
+            'skillKnown': bool(owned.get('skillKnown', True)) if owned else None,
         })
 
     for g in groups:
@@ -295,6 +311,9 @@ def build_owned(snap):
             'mainSkillLevel': int(c.get('skillLevel') or 0),
             'masteryLevels': [int(s.get('mastery') or 0) for s in (c.get('skills') or [])],
             'moduleLevels': mods,
+            # 技能数据是否存在：MAA 本地识别导入的账号整块缺失（skills 是空数组），
+            # 这种干员只比精英化/等级，技能与模组按已拥有处理（req_met 里判）
+            'skillKnown': bool(c.get('skills')),
         }
     return owned
 
@@ -519,16 +538,22 @@ def download_content(copilot_id):
     return c
 
 
-def detail_opers(content):
+def detail_opers(content, owned_map=None):
     """详情弹窗用的干员列表：没写练度的按星级补默认要求（带 implied 标记）。
 
-    注意这是展示用的副本，不往写 MAA 的那份 content 里塞字段。"""
+    注意这是展示用的副本，不往写 MAA 的那份 content 里塞字段。
+    owned_map 传了当前账号的练度时，按干员是否真有技能数据决定要不要展示
+    技能/模组要求——MAA 导入的账号不看这些维度，展示出来只会误导。
+    """
     idx = _char_index()
     out = []
     for op in content.get('opers') or []:
         o = dict(op)
         stars = (idx.get(o.get('name') or '') or (6,))[0]
-        o['requirements'] = effective_req(op, stars)
+        owned = (owned_map or {}).get(norm(o.get('name')))
+        known = bool(owned.get('skillKnown', True)) if owned else True
+        o['requirements'] = effective_req(op, stars, strict_skill=known)
+        o['skillKnown'] = known if owned else None
         out.append(o)
     return out
 
