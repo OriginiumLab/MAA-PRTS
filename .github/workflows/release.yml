@@ -6,7 +6,7 @@
 #   - PR 标题「Release vX.Y.Z」即版本号；用 merge commit 合入 release，
 #     合并关闭 PR 时触发：
 #       meta    从标题提取版本号；严格 X.Y.Z 为正式版，带 -后缀 视为预发布
-#       release 在合并提交上：冒烟 → 注入 APP_VERSION → 打包 →
+#       release 在合并提交上：冒烟 → 打包 → 把版号写进包内 version.json →
 #               zip 命名 MAA-PRTS-vX.Y.Z-win-<架构>.zip →
 #               changelog 取上一个 tag 以来的全部 commits → 发布 Release，
 #               tag 打在这次合并提交上
@@ -88,23 +88,20 @@ jobs:
       - name: Run smoke test
         run: python -u tools/smoketest/smoke_test.py
 
-      # 构建时把版本号注进 APP_VERSION（只改 CI 副本，不提交），
-      # PR 里忘了 bump 也不会发错版
-      - name: Patch APP_VERSION to release version
-        shell: python
-        run: |
-          import io, os, re
-          version = os.environ['VERSION'].lstrip('v').split('-')[0]
-          path = 'backend/core/version.py'
-          src = io.open(path, encoding='utf-8').read()
-          new, n = re.subn(r"APP_VERSION = '[^']*'", "APP_VERSION = '%s'" % version, src, count=1)
-          if n != 1:
-              raise SystemExit('未能在 %s 中找到 APP_VERSION' % path)
-          io.open(path, 'w', encoding='utf-8', newline='').write(new)
-          print('APP_VERSION -> %s' % version)
-
       - name: Build
         run: python -u tools/build.py
+
+      # 版本号唯一来源是 PR 标题：打包后写进包内 version.json，
+      # 程序运行时读它显示版本；没有这个文件的本地构建都是 dev 版
+      - name: Write version.json
+        shell: python
+        run: |
+          import json, os
+          ver = os.environ['VERSION'].lstrip('v')
+          with open('build/MAA-PRTS/version.json', 'w', encoding='utf-8') as f:
+              json.dump({'version': ver}, f, indent=2)
+              f.write('\n')
+          print('version.json -> %s' % ver)
 
       - name: Package zip
         shell: pwsh
