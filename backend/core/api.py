@@ -65,7 +65,7 @@ def bootstrap(_q, _body):
             'needsToken': not accs,
             'needsMaa': not status.get('exeExists'),
         },
-        'version': version.APP_VERSION,
+        'version': version.app_version(),
     }
 
 

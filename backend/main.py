@@ -79,7 +79,7 @@ def trusted_request(headers, server_address):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'MAA-PRTS/%s' % version.APP_VERSION
+    server_version = 'MAA-PRTS/%s' % version.app_version()
     protocol_version = 'HTTP/1.1'
 
     def log_message(self, fmt, *args):
@@ -207,7 +207,7 @@ class Bridge:
 
     def app_info(self):
         return {
-            'version': version.APP_VERSION,
+            'version': version.app_version(),
             'gamedata': version.pack_meta()['version'],
             'frozen': settings.FROZEN,
             'root': settings.project_root(),
@@ -317,7 +317,7 @@ def main():
     st = settings.load()
     accounts.ensure_tokens()
     log('=' * 56)
-    log('MAA-PRTS %s  界面 %s' % (version.APP_VERSION, url))
+    log('MAA-PRTS %s  界面 %s' % (version.app_version(), url))
     log('运行目录  %s' % settings.project_root())
     log('账号数据  %s' % settings.accounts_dir())
     log('配置文件  %s' % settings.SETTINGS_PATH)

@@ -104,7 +104,7 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 
 | | 来源 | 用途 |
 |---|---|---|
-| 程序版本 `APP_VERSION` | 代码里写死 | 日志、设置页、请求头 `Server` |
+| 程序版本 `app_version()` | 发布包根 `version.json`（发版 CI 按 PR 标题版号写入）；缺失即 dev 版 | 日志、设置页、请求头 `Server` |
 | 资源版本 | `resources/arknights.json` 的 `version` + `fingerprint` | 判断游戏数据有没有变 |
 
 资源包由 `make_pack.py` 生成时会写入 `version`（生成日期，如 `2026.11.05`）和

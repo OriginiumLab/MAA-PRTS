@@ -29,8 +29,6 @@ import time
 
 from . import settings
 
-APP_VERSION = '2.3.0'
-
 STATE_PATH = os.path.join(settings.CONFIG_DIR, 'gamedata.json')
 
 _lock = threading.RLock()
@@ -56,6 +54,20 @@ def _write_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write('\n')
     os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------- 程序版本
+# 版本号不在代码里维护：发版 CI 按 PR 标题的版号把 version.json 写进
+# 发布包根目录（与 exe 同级），本地源码运行和本地打包都没有这个文件，
+# 统一是 dev 版。
+_app_version_cache = [None]
+
+
+def app_version() -> str:
+    if _app_version_cache[0] is None:
+        data = _read_json(os.path.join(settings.ROOT, 'version.json'), None)
+        _app_version_cache[0] = str((data or {}).get('version') or '').strip() or 'dev'
+    return _app_version_cache[0]
 
 
 # ---------------------------------------------------------------- 资源包版本
@@ -129,7 +141,7 @@ def check(activities=None) -> dict:
             'pending': None,
         })
         return {
-            'app': APP_VERSION,
+            'app': app_version(),
             'version': meta['version'],
             'fingerprint': meta['fingerprint'],
             'generatedAt': meta['generatedAt'],
@@ -178,7 +190,7 @@ def check(activities=None) -> dict:
             'pending': pending,
         })
         return {
-            'app': APP_VERSION,
+            'app': app_version(),
             'version': meta['version'],
             'fingerprint': meta['fingerprint'],
             'generatedAt': meta['generatedAt'],
@@ -190,7 +202,7 @@ def check(activities=None) -> dict:
 
     pending = st.get('pending')
     return {
-        'app': APP_VERSION,
+        'app': app_version(),
         'version': meta['version'],
         'fingerprint': meta['fingerprint'],
         'generatedAt': meta['generatedAt'],
