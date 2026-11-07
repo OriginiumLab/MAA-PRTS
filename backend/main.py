@@ -48,6 +48,31 @@ def log(msg):
         pass
 
 
+# ---------------------------------------------------------------- 解除网络锁定
+def unblock_bundle():
+    """删掉包内文件的「网络锁定」标记（MOTW，即 Zone.Identifier 数据流）。
+
+    发布 zip 从网上下载后用资源管理器「全部解压」，每个文件都会带上
+    ZoneId=3 标记。原生 DLL 加载不受影响，但 .NET Framework 拒绝加载带
+    标记的托管程序集——pythonnet 的 Python.Runtime.dll 正是这种，于是
+    webview.start 时报 Failed to resolve Python.Runtime.Loader.Initialize。
+    启动时把整个 _internal 清一遍即可（等价于右键文件「解除锁定」）。
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+    internal = os.path.join(os.path.dirname(sys.executable), '_internal')
+    removed = 0
+    for base, _dirs, files in os.walk(internal):
+        for name in files:
+            try:
+                os.remove(os.path.join(base, name) + ':Zone.Identifier')
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        log('已解除 %d 个文件的下载锁定标记（MOTW）' % removed)
+
+
 # ---------------------------------------------------------------- HTTP
 def trusted_request(headers, server_address):
     """防跨站请求：Host 必须指回本服务；带 Origin 时必须同源；
@@ -346,6 +371,7 @@ def main():
             _quit(0, 'Ctrl+C')
         return 0
 
+    unblock_bundle()  # 必须先于 webview：MOTW 会让 pythonnet 的程序集加载失败
     import webview
     webview.create_window(
         'MAA-PRTS · 作业控制台',
