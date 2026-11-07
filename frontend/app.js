@@ -1555,10 +1555,7 @@ function openAccountWizard(mode) {
   const cancelBtn = $('#aa-cancel', m);
   if (cancelBtn) cancelBtn.addEventListener('click', close);
   const skipBtn = $('#onb-skip', m);
-  if (skipBtn) skipBtn.addEventListener('click', () => {
-    close();
-    if (!S.accounts.length) setTimeout(() => openAccountWizard('add'), 200);
-  });
+  if (skipBtn) skipBtn.addEventListener('click', close);
   $('#aa-back', m).addEventListener('click', () => showPage(1));
   $('#aa-next', m).addEventListener('click', async () => {
     const dir = input.value.trim();
