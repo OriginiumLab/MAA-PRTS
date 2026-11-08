@@ -254,7 +254,7 @@ def main(argv=None):
                  generated_at=args.commit_time or '')
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
     tmp = args.out + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
+    with io.open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(pack, f, ensure_ascii=False, separators=(',', ':'))
         f.write('\n')
     os.replace(tmp, args.out)

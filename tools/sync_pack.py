@@ -166,7 +166,7 @@ def read_json(path):
 
 def write_json(path, obj, separators=(',', ':')):
     tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
+    with io.open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(obj, f, ensure_ascii=False, separators=separators)
         f.write('\n')
     os.replace(tmp, path)
@@ -355,11 +355,11 @@ def main(argv=None):
         log('落盘')
         shutil.copyfile(tmp_pack, pack_path)
         # 与 build_paradox_data.py 的写法保持一致：indent=0 + sort_keys（保证逐字节可比）
-        with io.open(paradox_path, 'w', encoding='utf-8') as f:
+        with io.open(paradox_path, 'w', encoding='utf-8', newline='\n') as f:
             json.dump(pdata, f, ensure_ascii=False, indent=0, sort_keys=True)
 
         manifest = build_manifest(root, sha, commit_time, game_version)
-        with io.open(manifest_path, 'w', encoding='utf-8') as f:
+        with io.open(manifest_path, 'w', encoding='utf-8', newline='\n') as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write('\n')
 

@@ -130,7 +130,7 @@ def main():
     data, diag = build(args.src, generated_at=args.commit_time,
                        source_commit=args.source_commit)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    with io.open(args.out, 'w', encoding='utf-8') as f:
+    with io.open(args.out, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(data, f, ensure_ascii=False, indent=0, sort_keys=True)
 
     size = os.path.getsize(args.out)
