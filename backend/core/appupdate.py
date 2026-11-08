@@ -179,22 +179,35 @@ _opener = urllib.request.build_opener(_NoRedirect)
 
 
 def _head_tag(timeout=TIMEOUT_HEAD) -> str:
-    """不跟随跳转，从 302 的 Location 里取 tag：releases/latest → releases/tag/v2.4.0"""
-    req = urllib.request.Request(RELEASES_HEAD, method='HEAD',
-                                 headers={'User-Agent': _ua()})
-    loc = ''
+    """不跟随跳转，从 302 的 Location 里取 tag：releases/latest → releases/tag/v2.4.0
+
+    这条路不消耗 API 配额，但国内 github.com 经常直接超时，所以失败后退回
+    api.github.com 拿 tag_name——多一条路总比「检查更新永远失败」好。
+    """
     try:
-        with _opener.open(req, timeout=timeout) as r:
-            loc = r.headers.get('Location') or r.geturl()
-    except urllib.error.HTTPError as e:
-        if e.code in (301, 302, 303, 307, 308):
-            loc = e.headers.get('Location') or ''
-        else:
-            raise
-    tag = str(loc).rstrip('/').rsplit('/', 1)[-1]
-    if not parse_version(tag):
-        raise RuntimeError('GitHub 返回的 tag 无法解析：%r' % tag)
-    return tag
+        req = urllib.request.Request(RELEASES_HEAD, method='HEAD',
+                                     headers={'User-Agent': _ua()})
+        loc = ''
+        try:
+            with _opener.open(req, timeout=timeout) as r:
+                loc = r.headers.get('Location') or r.geturl()
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308):
+                loc = e.headers.get('Location') or ''
+            else:
+                raise
+        tag = str(loc).rstrip('/').rsplit('/', 1)[-1]
+        if not parse_version(tag):
+            raise RuntimeError('GitHub 返回的 tag 无法解析：%r' % tag)
+        return tag
+    except Exception as head_err:  # noqa: BLE001 - 换条路再试
+        try:
+            tag = str(_api_latest(timeout).get('tag_name') or '')
+        except Exception as api_err:  # noqa: BLE001
+            raise RuntimeError('%s；api.github.com 也不行：%s' % (head_err, api_err))
+        if not parse_version(tag):
+            raise RuntimeError('api.github.com 返回的 tag 无法解析：%r' % tag)
+        return tag
 
 
 def _api_latest(timeout=TIMEOUT_API) -> dict:
