@@ -20,8 +20,12 @@
     下载 zip → 校验 sha256/字节数 → 解压到 update/stage → 写 install.cmd
     用户点「重启并安装」→ 拉起 cmd → 主进程退出 → cmd 等进程消失后 robocopy
 
-只替换 MAA-PRTS.exe 与 _internal/，config/ debug/ resources/ 一律不碰
+只替换程序本体（MAA-PRTS.exe、_internal/、version.json 等根级文件），
+config/ debug/ resources/ update/ 一律不碰
 （resources/ 里可能是用户自己换的资源包，config/ 里是账号和配置）。
+
+version.json 必须跟 exe 一起换：版本号读的是它，漏了就会出现
+「装完还是旧版本 → 每次启动都提示更新 → 再装还是旧版本」的死循环。
 """
 from __future__ import annotations
 
@@ -516,16 +520,17 @@ def prepare() -> dict:
 def _write_installer(stage_exe: str, version: str = '') -> str:
     """生成等待进程退出后执行的安装脚本（纯 ASCII，避免编码问题）
 
-    只替换 MAA-PRTS.exe 与 _internal/：config/ debug/ resources/ 是用户数据。
-    等待用 :wait 标签显式循环，不用 `for` 里 goto——后者在部分 cmd 版本上
-    会报「命令语法不正确」，而且 for 变量在括号块里要延迟展开，坑太多。
+    替换范围：程序本体（exe、_internal/ 精确镜像、version.json 等根级文件），
+    用户数据目录一律不碰。等待用 :wait 标签显式循环，不用 `for` 里 goto——后者
+    在部分 cmd 版本上会报「命令语法不正确」，而且 for 变量在括号块里要延迟展开。
     """
     stage_dir = os.path.join(update_dir(), 'stage')
     rel = os.path.relpath(os.path.dirname(stage_exe), stage_dir)
     if rel in ('.', ''):
-        pkg = 'update\\stage\\'
+        pkg = 'update\\stage'
     else:
-        pkg = 'update\\stage\\%s\\' % rel.replace('/', '\\')
+        pkg = 'update\\stage\\%s' % rel.replace('/', '\\')
+    root = pkg + '\\'
 
     lines = [
         '@echo off',
@@ -544,13 +549,20 @@ def _write_installer(stage_exe: str, version: str = '') -> str:
         'if not exist "update\\backup" mkdir "update\\backup"',
         'if exist "MAA-PRTS.exe" copy /y "MAA-PRTS.exe"'
         ' "update\\backup\\MAA-PRTS.exe" >nul 2>nul',
-        'if exist "%s_internal" (' % pkg,
-        '  robocopy "%s_internal" "_internal" /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS >nul'
-        % pkg,
-        ')',
-        'if not exist "%sMAA-PRTS.exe" goto :fail' % pkg,
-        'copy /y "%sMAA-PRTS.exe" "MAA-PRTS.exe" >nul' % pkg,
-        'if errorlevel 1 goto :fail',
+        # 包结构先校验，别等替换到一半才发现解压不完整
+        'if not exist "%sMAA-PRTS.exe" goto :fail' % root,
+        # _internal 用 /MIR：新版本删掉的 DLL 也要跟着清掉，否则新旧混装
+        'robocopy "%s_internal" "_internal" /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS >nul'
+        % root,
+        # 8 以上才是失败（1=有文件复制、3=有额外文件，都是成功）
+        'if errorlevel 8 goto :fail',
+        # 根级文件（exe / version.json / README）覆盖复制：不带 /MIR，
+        # 所以目标侧多出来的用户数据不会被删；/XD 把用户数据目录整个排除
+        'robocopy "%s" "." /E /XD _internal config debug resources update'
+        ' /R:2 /W:1 /NFL /NDL /NJH /NJS >nul' % pkg,
+        'if errorlevel 8 goto :fail',
+        'if not exist "MAA-PRTS.exe" goto :fail',
+        'if exist "%sversion.json" if not exist "version.json" goto :fail' % root,
         # 注意 "2.4.0>" 里的 0> 会被 cmd 当成 stdin 重定向，必须留空格
         'echo %s > "update\\install-ok.txt"' % (version or 'ok'),
         'start "" "MAA-PRTS.exe"',

@@ -1124,7 +1124,7 @@ def check_app_update():
 
     这里最容易出事的三处：脏 tag 触发更新、压缩包路径穿越、
     替换时误删 config/。安装脚本本身没法在冒烟里跑（要真等进程退出），
-    所以退一步断言它生成的文本：只动 MAA-PRTS.exe 与 _internal。
+    所以退一步断言它生成的文本：程序本体全换（含 version.json），用户数据不动。
     """
     import hashlib
     import io
@@ -1212,9 +1212,16 @@ def check_app_update():
         assert 'tasklist' in text and 'robocopy' in text, '脚本缺少等待/替换步骤'
         assert 'update\\stage\\MAA-PRTS\\MAA-PRTS.exe' in text, '包内路径拼错了'
         assert 'echo 2.4.0 > ' in text, '版本号后的 0> 会被 cmd 当成 stdin 重定向，必须留空格'
+        # 用户数据目录只允许出现在 robocopy 的 /XD 排除列表里
         for keep in ('config', 'debug', 'resources'):
-            assert keep not in text, '安装脚本不该出现 %s（那是用户数据）' % keep
+            hits = [ln.strip() for ln in text.splitlines() if re.search(r'\b%s\b' % keep, ln)]
+            assert len(hits) == 1 and '/XD' in hits[0], \
+                '%s 只应出现在 /XD 排除列表里，实际：%s' % (keep, hits)
         assert '_internal' in text, '没有替换 _internal，会留下新旧混装'
+        assert '/MIR' in text, '_internal 必须用 /MIR，新版本删掉的旧 DLL 要清掉'
+        # 版本号读的是包内 version.json：漏了会「装完还是旧版本 → 反复提示更新」
+        assert 'version.json' in text, '安装脚本必须一起替换 version.json'
+        assert 'if errorlevel 8 goto :fail' in text, 'robocopy 失败必须中断，不能半新半旧地启动'
     finally:
         A.update_dir = backup
         shutil.rmtree(tmp, ignore_errors=True)
