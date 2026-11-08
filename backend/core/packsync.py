@@ -23,7 +23,7 @@ import os
 import time
 import urllib.request
 
-from . import resources, settings
+from . import net, resources, settings
 
 # 与 tools/sync_pack.py 里的 PACK_REPO / PACK_BRANCH 保持一致
 # 数据走独立分支 pack-data：main 有规则集（强制 PR + 审批），bot 推不进去
@@ -53,7 +53,7 @@ def _iso():
 def _get(url, timeout):
     from .version import app_version
     req = urllib.request.Request(url, headers={'User-Agent': UA % app_version()})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with net.open(req, timeout=timeout) as r:
         return r.read()
 
 

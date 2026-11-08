@@ -13,9 +13,11 @@
                                  tokens.json（旧版密文库，只读兜底）
       debug/        运行日志 app.log（随时可删）
 
-「运行根」＝程序在哪个目录运行，数据就落在哪个目录，任何模式都不向上找：
-  - 打包运行：exe 所在目录
-  - 源码运行：启动时的工作目录（run.bat / build.bat 都会先 cd 到仓库根）
+「运行根」＝可写数据（config/、debug/）落的地方，只认它、任何模式都不向上找：
+  - 打包运行：exe 所在目录（绿色软件，数据跟 exe 走）
+  - 源码运行：%LOCALAPPDATA%\\MAA-PRTS\\dev——不落仓库，否则从仓库根一跑
+    就在仓库根拉出 config/debug（2026-11-08 改；此前用启动时的工作目录）。
+    设 MAA_PRTS_DATA_ROOT 可把数据根指到别处（冒烟测试用它隔离）
 """
 from __future__ import annotations
 
@@ -27,11 +29,19 @@ import threading
 
 FROZEN = bool(getattr(sys, 'frozen', False))
 
-# 运行根：可写数据（config/、debug/）落在这里
-ROOT = (os.path.dirname(os.path.abspath(sys.executable)) if FROZEN
-        else os.path.abspath(os.getcwd()))
-# 只读资源根：打包后在 PyInstaller 的解包目录里，源码运行与运行根同处
-RES = (getattr(sys, '_MEIPASS', ROOT) if FROZEN else ROOT)
+if FROZEN:
+    # 打包模式：数据跟 exe 走（绿色软件，拷目录即迁移），与旧版一致
+    ROOT = os.path.dirname(os.path.abspath(sys.executable))
+    RES = getattr(sys, '_MEIPASS', ROOT)
+else:
+    # 源码模式：资源从代码位置找（本文件在 backend/core/ 下，上溯两级＝仓库根），
+    # 数据不落仓库——以前用启动时的工作目录，从仓库根一跑就在仓库根拉出
+    # config/debug，2026-11-08 改落到 LOCALAPPDATA。设 MAA_PRTS_DATA_ROOT
+    # 可指到别处（冒烟测试用它隔离，别污染真实数据目录）。
+    RES = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ROOT = (os.environ.get('MAA_PRTS_DATA_ROOT')
+            or os.path.join(os.environ.get('LOCALAPPDATA')
+                            or os.path.expanduser('~'), 'MAA-PRTS', 'dev'))
 
 
 def project_root() -> str:
@@ -173,6 +183,9 @@ DEFAULTS = {
     'autoUpdatePack': True,  # 启动后自动拉取新的游戏资源包（关卡/干员/活动）
     'autoCheckAppUpdate': True,   # 启动后检查程序本体有没有新版本（6 小时一次）
     'acceptPrerelease': False,    # 要不要接收 vX.Y.Z-beta.N 这类预发布版
+    'proxy': '',                  # 更新链路（程序/资源包检查下载）走的代理，空=直连
+    'charBlacklist': [],          # 干员黑名单：干员名，纯显示层不再出现
+    'authorBlacklist': [],        # 作者黑名单：[{id, name}]，按作业站数字 id 屏蔽作业
     'lastAccount': '',
     'accountOrder': [],     # 账号列表手动排序（长按拖动保存的文件名顺序）
 }
@@ -211,6 +224,70 @@ def _norm_dir(v: str) -> str:
     return v
 
 
+def _norm_proxy(v: str) -> str:
+    """网络代理：'127.0.0.1:7890' 补成 'http://127.0.0.1:7890'；空串 = 不用代理
+
+    只认 http 代理（Clash / v2rayN 的本地混合端口都是）：socks 标准库做不了，
+    带账号密码的也先不支持。值不对直接抛 ValueError——静默存个废值进去，
+    用户会以为代理生效了而其实每次都直连。
+    """
+    v = (v or '').strip()
+    if not v:
+        return ''
+    if '://' not in v:
+        v = 'http://' + v
+    scheme, _, rest = v.partition('://')
+    if scheme.lower().startswith('socks'):
+        raise ValueError('socks 代理暂不支持，请填本地代理的 http 端口（Clash / v2rayN 都有）')
+    if scheme.lower() not in ('http', 'https'):
+        raise ValueError('代理地址要以 http:// 开头')
+    if '@' in rest:
+        raise ValueError('带用户名密码的代理暂不支持，请填免认证的本地代理')
+    host, sep, port = rest.rpartition(':')
+    if not sep or not host or not port.isdigit() or not 0 < int(port) < 65536:
+        raise ValueError('代理地址要带端口，形如 http://127.0.0.1:7890')
+    # 一律存成 http://host:port：本地代理端口都是明文 http。真填 https:// 的
+    # 多半想表达「用它访问 https 网站」，那本来就是隧道里的事，按 http 代理连
+    return 'http://%s:%d' % (host.strip('[]'), int(port))
+
+
+def _norm_char_blacklist(v) -> list:
+    """干员黑名单：[{name, skills}]，skills 是勾选的技能号（1-3），
+    空 = 屏蔽整个干员（不限技能）。旧格式（纯名字数组）自动按全屏蔽迁移；
+    同名干员只留一条。"""
+    out, seen = [], set()
+    for row in (v or []):
+        if isinstance(row, dict):
+            name = str(row.get('name') or '').strip()
+            skills = sorted({int(s) for s in (row.get('skills') or [])
+                             if str(s).isdigit() and 1 <= int(s) <= 3})
+        else:
+            name, skills = str(row or '').strip(), []
+        if name and name not in seen:
+            seen.add(name)
+            out.append({'name': name, 'skills': skills})
+    return out
+
+
+def _norm_author_blacklist(v) -> list:
+    """作者黑名单：[{id, name}]，id 是作业站数字 id（匹配键），name 只为显示
+
+    手改 settings.json 写成裸字符串/数字也能容（当 id 用、名字留空）；
+    id 非数字或重复的直接丢弃——滤错人比少滤一个烦人。
+    """
+    out, seen = [], set()
+    for row in (v or []):
+        if isinstance(row, dict):
+            aid, name = str(row.get('id') or '').strip(), str(row.get('name') or '').strip()
+        else:
+            aid, name = str(row or '').strip(), ''
+        if not aid.isdigit() or aid in seen:
+            continue
+        seen.add(aid)
+        out.append({'id': aid, 'name': name})
+    return out
+
+
 def _merged_dirs(dirs, extra):
     """历史目录列表并入一个新目录（过滤脏值，大小写不敏感去重）"""
     out = [d for d in (dirs or []) if isinstance(d, str) and d]
@@ -237,6 +314,12 @@ def save(patch: dict) -> dict:
                 continue
             if k == 'maaDir':
                 v = _norm_dir(v)
+            elif k == 'proxy':
+                v = _norm_proxy(v)
+            elif k == 'charBlacklist':
+                v = _norm_char_blacklist(v)
+            elif k == 'authorBlacklist':
+                v = _norm_author_blacklist(v)
             elif k == 'accountOrder':
                 v = [str(x) for x in (v or []) if str(x).endswith('.json')][:200]
             cur[k] = v

@@ -922,8 +922,14 @@ def check_boot_smoke():
     tmp = tempfile.mkdtemp(prefix='maaprts-smoke-')
     try:
         _copy_project(tmp)
+        # 源码模式数据根默认落 LOCALAPPDATA，冒烟必须指回临时目录：
+        # 既隔离真实数据，也顺带验证副本根零新增（数据目录不许再落 cwd）。
+        # data/ 先建好再拍快照，别让数据根本身算作「新增」
+        data_root = os.path.join(tmp, 'data')
+        os.makedirs(data_root, exist_ok=True)
         before = set(os.listdir(tmp))
-        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        env = dict(os.environ, PYTHONIOENCODING='utf-8',
+                   MAA_PRTS_DATA_ROOT=data_root)
         proc = subprocess.Popen(
             [sys.executable, '-u', 'backend/main.py', '--no-window'],
             cwd=tmp, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -947,9 +953,9 @@ def check_boot_smoke():
             assert (paths.get('tokens') or '').endswith('tokens.json'), \
                 'token 文件路径不对：%s' % paths.get('tokens')
 
-            applog = os.path.join(tmp, 'debug', 'app.log')
-            assert os.path.isfile(applog), '没有生成 debug/app.log'
-            assert not os.path.isdir(os.path.join(tmp, 'config', 'skland')), \
+            applog = os.path.join(data_root, 'debug', 'app.log')
+            assert os.path.isfile(applog), '没有生成 <数据根>/debug/app.log'
+            assert not os.path.isdir(os.path.join(data_root, 'config', 'skland')), \
                 'config/skland 不应被预创建（新布局无此目录）'
         finally:
             proc.terminate()
@@ -958,9 +964,9 @@ def check_boot_smoke():
             except subprocess.TimeoutExpired:
                 proc.kill()
 
-        # 运行前后对比：副本根目录只允许新增 config/ 与 debug/
+        # 运行前后对比：副本根一个新目录都不许有——数据走 MAA_PRTS_DATA_ROOT
         new = set(os.listdir(tmp)) - before
-        assert new <= {'config', 'debug'}, '运行后根目录出现预期外的新增：%s' % sorted(new)
+        assert not new, '运行后仓库根出现新增（数据没走数据根？）：%s' % sorted(new)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
