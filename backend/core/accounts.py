@@ -104,6 +104,7 @@ def account_detail(file: str) -> dict:
         'file': file,
         'account': a,
         'stats': s,
+        'preferAlgo': snap.get('preferAlgo') or 'fewer',
         'missing': snap.get('missing') or [],
         'chars': chars,
         'maa': snap.get('maa') or {},
@@ -137,6 +138,22 @@ def save_maa_meta(file: str, patch: dict) -> dict:
         json.dump(snap, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
     return maa
+
+
+def save_pref(file: str, patch: dict) -> dict:
+    """把用户偏好字段（如推荐算法 preferAlgo）合并写回账号 json 顶层"""
+    settings.ensure_dirs()
+    path = os.path.join(_accounts_dir(), os.path.basename(file))
+    snap = _load(path)
+    if not snap:
+        raise FileNotFoundError(file)
+    for k, v in (patch or {}).items():
+        snap[k] = v
+    tmp = path + '.tmp'
+    with io.open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(snap, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return {k: snap.get(k) for k in (patch or {})}
 
 
 # ---------------------------------------------------------------- token 存储

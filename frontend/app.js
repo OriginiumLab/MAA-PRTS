@@ -279,6 +279,11 @@ function renderHero() {
   const d = S.detail;
   const importBtn = $('#btn-import-maa');
   if (importBtn) importBtn.hidden = !d;   // 有选中账号才给「从 MAA 更新干员信息」入口
+  const algoSel = $('#algo-select');
+  if (algoSel) {
+    algoSel.disabled = !d;                        // 算法下拉跟账号走，没账号不可用
+    if (d) algoSel.value = d.preferAlgo || 'fewer';
+  }
   if (!d) return;
   const a = d.account || {}, st = d.stats || {};
   const name = a.nickName || '未知账号';
@@ -2609,6 +2614,16 @@ function bindGlobal() {
   });
   $('#search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('#search-input').addEventListener('input', queueAutoSearch);
+  // 「优先作业算法」：跟账号存，切换后立刻按新算法重排当前结果
+  $('#algo-select').addEventListener('change', async e => {
+    if (!S.current) return;
+    try {
+      await api('/api/account/pref', { file: S.current, preferAlgo: e.target.value });
+      if (S.result && $('#search-input').value.trim()) doSearch();
+    } catch (err) {
+      toast('保存算法偏好失败：' + err.message, 'err');
+    }
+  });
   bindAccountOrder($('#account-list'));
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);

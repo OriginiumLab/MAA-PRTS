@@ -52,6 +52,7 @@ def project_root() -> str:
 STATIC_DIR = os.path.join(RES, 'frontend')
 PACK_PATH = os.path.join(RES, 'resources', 'arknights.json')
 PARADOX_PATH = os.path.join(RES, 'resources', 'paradox.json')
+WEIGHTS_PATH = os.path.join(RES, 'resources', 'oper-weights.json')
 
 CONFIG_DIR = os.path.join(ROOT, 'config')
 # 账号数据直接放 config/ 本层；config/skland 是旧布局，启动时压平迁移
@@ -378,3 +379,11 @@ def paradox_path() -> str:
     if os.path.isfile(local):
         return local
     return PARADOX_PATH
+
+
+def weights_path() -> str:
+    """六星干员权重表路径（少人优先排序用，同 paradox_path 的覆盖规则）"""
+    local = os.path.join(ROOT, 'resources', 'oper-weights.json')
+    if os.path.isfile(local):
+        return local
+    return WEIGHTS_PATH

@@ -579,7 +579,7 @@ def check_maa_import_level_only():
     assert 'requirements' not in v1['opers'][0], '展示副本不能污染原始 content'
 
     # 搜索用的 detail 也要如实反映（前端据此显示「只比等级」提示）
-    mode, missing, training, _total, detail, _six = copilot.match_operation(content, maa)
+    mode, missing, training, _total, detail, _six, _w = copilot.match_operation(content, maa)
     assert mode == 'ready' and not training, (mode, training)
     assert detail[0]['skillKnown'] is False
     assert 'skill_level' not in detail[0]['req'], detail[0]['req']
@@ -819,7 +819,7 @@ def check_copilot_v1_default_req():
         copilot.norm(by_stars[6]): own(by_stars[6], 6, 1, 60),
         copilot.norm(by_stars[5]): own(by_stars[5], 5, 0, 40),
     }
-    mode, missing, training, total, detail, _six = copilot.match_operation(content, owned_map)
+    mode, missing, training, total, detail, _six, _w = copilot.match_operation(content, owned_map)
     assert not missing, '两个干员都拥有，不该判缺人'
     assert mode == 'train', '压级号打 v1 作业应判需补练度，实际 %r' % mode
     assert training == [by_stars[6], by_stars[5]], training
@@ -828,7 +828,7 @@ def check_copilot_v1_default_req():
     # 满练号（精二60 + 专三 / 精一60 + 技能7）打同一份 v1 作业：应为 ready
     owned_map[copilot.norm(by_stars[6])] = own(by_stars[6], 6, 2, 60, mastery=(3, 3, 3))
     owned_map[copilot.norm(by_stars[5])] = own(by_stars[5], 5, 1, 60, main=7)
-    mode, missing, training, total, detail, _six = copilot.match_operation(content, owned_map)
+    mode, missing, training, total, detail, _six, _w = copilot.match_operation(content, owned_map)
     assert mode == 'ready' and not training, '满练号打 v1 作业不该被误伤'
 
     # 详情弹窗用的 detail_opers：requirements 也要补上默认
