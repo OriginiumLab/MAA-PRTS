@@ -58,6 +58,7 @@ RELEASES_PAGE = 'https://github.com/%s/releases/tag/%%s' % APP_REPO
 DOWNLOAD_TEMPLATES = ('%s', 'https://gh-proxy.com/%s', 'https://ghfast.top/%s')
 
 CHECK_INTERVAL = 6 * 3600    # 成功检查后 6 小时内不再自动查
+RETRY_API_FAIL = 10 * 60     # API 拿不到 changelog 时，10 分钟后允许再试
 TIMEOUT_HEAD = 6
 TIMEOUT_API = 8
 TIMEOUT_DOWNLOAD = 180
@@ -253,6 +254,24 @@ def _asset_urls(asset):
     return [tpl % base for tpl in DOWNLOAD_TEMPLATES]
 
 
+def _fallback_asset(tag: str) -> dict:
+    """API 拿不到时，按发版命名规则直接拼下载地址
+
+    release.yml 产出的资产名固定是 MAA-PRTS-<tag>-win-<arch>.zip，所以哪怕
+    api.github.com 完全不通（国内很常见），也能照常下载。代价是这次没有
+    size/sha256，校验降级成「确实是 zip，里面确实有 exe」（见 _verify_zip）。
+    """
+    name = 'MAA-PRTS-%s-win-%s.zip' % (tag, _arch())
+    base = 'https://github.com/%s/releases/download/%s/%s' % (APP_REPO, tag, name)
+    return {
+        'name': name,
+        'size': 0,
+        'sha256': '',
+        'urls': [tpl % base for tpl in DOWNLOAD_TEMPLATES],
+        'degraded': True,
+    }
+
+
 # ---------------------------------------------------------------- 检查
 def _status_from_state(st: dict, **extra) -> dict:
     """从落盘状态拼返回值。hasUpdate 每次重算而不是缓存：
@@ -273,6 +292,7 @@ def _status_from_state(st: dict, **extra) -> dict:
         'publishedAt': st.get('publishedAt') or '',
         'pageUrl': st.get('pageUrl') or '',
         'asset': st.get('asset') or {},
+        'degraded': bool(st.get('degraded')),   # 没有官方 sha256，只按结构校验
         'checkedAt': st.get('checkedAt') or '',
         'cached': True,
         'throttled': True,
@@ -347,7 +367,14 @@ def status(force=False) -> dict:
     # 有新版：再花一次 API 配额拿 changelog 和校验值
     try:
         rel = _api_latest()
-    except Exception as e:  # noqa: BLE001 - 降级成「只能去下载页」
+    except Exception as e:  # noqa: BLE001 - 拿不到 JSON 也不能让用户装不了
+        # 降级：按命名规则拼地址，照样能下载安装，只是没有官方 sha256。
+        # 这类失败多半是 api.github.com 被拦/超时（国内常见），不能拿它
+        # 当 6 小时节流的依据，10 分钟后就允许重试一次。
+        fresh['asset'] = _fallback_asset(tag)
+        fresh['degraded'] = True
+        fresh['detailError'] = str(e)
+        fresh['checkedTs'] = now - CHECK_INTERVAL + RETRY_API_FAIL
         _save_state(fresh)
         out.update(fresh, hasUpdate=True, cached=False, throttled=False,
                    detailError=str(e),
@@ -386,7 +413,15 @@ def download(force=False) -> dict:
     meta = st.get('asset') or {}
     urls = meta.get('urls') or []
     if not urls:
-        return {'ok': False, 'error': '拿不到下载地址（GitHub API 不可用），请用「前往下载页」'}
+        # 旧状态里可能只记了版本号（上次检查时 API 不通），用户既然点了
+        # 下载就强制重查一次，别直接把人推到「前往下载页」
+        st = status(force=True)
+        if not st.get('hasUpdate'):
+            return {'ok': False, 'error': st.get('error') or '已经是最新版本'}
+        meta = st.get('asset') or {}
+        urls = meta.get('urls') or []
+    if not urls:
+        return {'ok': False, 'error': '拿不到下载地址，请用「前往下载页」'}
 
     name = meta.get('name') or ('MAA-PRTS-%s.zip' % st.get('tag'))
     dest_dir = update_dir()
@@ -394,7 +429,8 @@ def download(force=False) -> dict:
     dest = os.path.join(dest_dir, os.path.basename(name))
 
     if os.path.isfile(dest) and _match(dest, meta):
-        return {'ok': True, 'path': dest, 'cached': True, 'version': st.get('latest')}
+        return {'ok': True, 'path': dest, 'cached': True, 'version': st.get('latest'),
+                'degraded': bool(meta.get('degraded'))}
 
     errors = []
     for url in urls:
@@ -411,7 +447,8 @@ def download(force=False) -> dict:
             os.fsync(f.fileno())
         os.replace(tmp, dest)
         return {'ok': True, 'path': dest, 'cached': False,
-                'size': len(raw), 'version': st.get('latest')}
+                'size': len(raw), 'version': st.get('latest'),
+                'degraded': bool(meta.get('degraded'))}
 
     return {'ok': False, 'error': '下载失败：' + '；'.join(errors)}
 
@@ -433,7 +470,10 @@ def _match(path, meta) -> bool:
                 for chunk in iter(lambda: f.read(1 << 20), b''):
                     h.update(chunk)
             return h.hexdigest() == want
-        return True
+        # 降级路径没有 size/sha256：至少确认这文件是完整的 zip，别把下载
+        # 中断留下的残包当成「已下载」而反复解压失败
+        with zipfile.ZipFile(path) as zf:
+            return any(n.lower().endswith('maa-prts.exe') for n in zf.namelist())
     except Exception:
         return False
 
