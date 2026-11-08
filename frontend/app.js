@@ -565,7 +565,6 @@ function openUpdateDialog() {
   const tag = u.tag || (u.latest ? 'v' + u.latest : '');
   const notes = (u.notes || '').trim().replace(/^##\s*更新内容\s*$/m, '').trim();
   const asset = u.asset || {};
-  const canDownload = !!(asset.urls || []).length;
   const frozen = !!u.frozen;
   const when = u.publishedAt ? String(u.publishedAt).slice(0, 10) : '';
   const size = asset.size ? (asset.size / 1048576).toFixed(1) + ' MB' : '';
@@ -574,13 +573,14 @@ function openUpdateDialog() {
     <h3>发现新版本 ${esc(tag)}</h3>
     <div class="sub">当前 ${esc(cur)}${when ? ` · 发布于 ${esc(when)}` : ''}${
       u.prerelease ? ' · 预发布版' : ''}${size ? ` · 安装包 ${esc(size)}` : ''}</div>
-    <div class="upd-notes">${notes ? esc(notes) : '（这个版本没有写更新说明）'}</div>
+    <div class="upd-notes">${notes ? esc(notes) : (u.degraded ? '（网络受限，没取到更新说明）' : '（这个版本没有写更新说明）')}</div>
+    ${u.degraded ? '<div class="onb-hint" style="margin:10px 0 0">拿不到 GitHub API（可能被网络拦了），已按发版命名直接拼出安装包地址；下载后只校验压缩包结构，没有官方 sha256。</div>' : ''}
     ${frozen ? '' : '<div class="onb-hint bad" style="margin:10px 0 0">源码模式不支持自动替换，请用「前往下载页」手动覆盖</div>'}
     <div class="modal-foot">
       <button class="btn-plain" data-close>以后再说</button>
       <button class="btn-plain" id="upd-page">前往下载页</button>
       <button class="btn-solid" id="upd-go"${
-        (frozen && canDownload) || u.ready ? '' : ' disabled'}>${
+        frozen || u.ready ? '' : ' disabled'}>${
         u.ready ? '重启并安装' : '下载并安装'}</button>
     </div>
   `, {
@@ -603,6 +603,16 @@ function openUpdateDialog() {
           if (!S.appUpdate || !S.appUpdate.ready) {
             go.textContent = '下载中…';
             go.disabled = true;
+            // 缓存里可能只有版本号、没有下载地址（上次检查时 API 不通）：
+            // 点这一下先强制重查，拿到 asset 再下载，别让按钮白点
+            if (!((S.appUpdate && S.appUpdate.asset && S.appUpdate.asset.urls) || []).length) {
+              go.textContent = '获取下载地址…';
+              const st = await appAutoCheck(true);
+              if (st && st.ok && st.hasUpdate) {
+                S.appUpdate = Object.assign({}, S.appUpdate, st);
+              }
+              go.textContent = '下载中…';
+            }
             const r = await api('/api/app/download', {});
             if (!r || !r.ok) {
               toast((r && r.error) || '下载失败', 'err', 6000);
@@ -613,7 +623,10 @@ function openUpdateDialog() {
             S.appUpdate.ready = true;
             go.textContent = '重启并安装';
             go.disabled = false;
-            toast('安装包已下载并校验通过，点「重启并安装」完成替换', 'ok', 6000);
+            toast(r.degraded
+              ? '安装包已下载，但没拿到官方 sha256，只校验了包结构；点「重启并安装」继续'
+              : '安装包已下载并校验通过，点「重启并安装」完成替换',
+            r.degraded ? 'warn' : 'ok', 6000);
             return;
           }
           // 第二次点：解压 + 拉起脚本，后端会让窗口自己关掉

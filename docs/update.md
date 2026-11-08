@@ -32,7 +32,7 @@ HEAD https://github.com/OriginiumLab/MAA-PRTS/releases/latest
       ↓ 版本更新了
 GET  https://api.github.com/repos/OriginiumLab/MAA-PRTS/releases/latest
       ↓ changelog + assets[].digest(sha256)
-  API 不可用 → 只提示版本号，只给「前往下载页」
+  API 不可用 → 按命名规则拼下载地址，照样能装（没有 sha256，只校验结构）
 ```
 
 - **6 小时节流**：成功检查后 6 小时内不再自动查（`config/appupdate.json` 的 `checkedTs`）。
@@ -41,6 +41,22 @@ GET  https://api.github.com/repos/OriginiumLab/MAA-PRTS/releases/latest
 - **版本比较按数字**：`v2.10.0 > v2.9.0`；`v2.4.0-beta.1 < v2.4.0`；
   解析不了的 tag（`latest`、`2.4`）一律当作没有更新，绝不触发。
 - **预发布**：默认不提示。设置里开「接收预发布版」才会看到 `vX.Y.Z-beta.N`。
+
+### GitHub API 不通时（国内常见）
+
+`api.github.com` 被拦/超时是常态，但 `github.com` 的 HEAD 往往还能通。这时**不能**
+把用户卡在「知道有新版本、按钮却是灰的」——那是最难受的状态。所以做了三层兜底：
+
+1. **地址按命名规则拼**：`release.yml` 产出的资产名固定是
+   `MAA-PRTS-<tag>-win-<arch>.zip`，不需要 API 就能构造
+   `https://github.com/<repo>/releases/download/<tag>/<name>`，再套上两个反代；
+2. **校验降级但不裸奔**：没有 `digest` 时仍校验「是合法 zip + 里面有 `MAA-PRTS.exe`」，
+   弹窗里明确写「没拿到官方 sha256」，成功提示也降级成黄色；
+3. **失败不占 6 小时**：API 失败时 `checkedTs` 只往后推 10 分钟，而不是 6 小时，
+   网络恢复后很快就能拿到完整信息和校验值。
+
+前端也配合改了：打包版的「下载并安装」**不再因为 `asset` 为空而禁用**，点下去先强制
+重查一次（`?force=1`），拿到地址就直接下载。源码模式仍然禁用（不能自替换）。
 
 ## 安装：退出后才替换
 
