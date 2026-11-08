@@ -51,7 +51,7 @@ main()
 | 可写数据 | 运行根 | 运行根（exe 所在目录） |
 
 「运行根」＝程序在哪个目录运行，数据就落在哪个目录，**任何模式都不向上探测**：
-源码运行取启动时的工作目录（`启动.bat` 已先 `cd` 到仓库根），打包运行取 exe 所在目录。
+源码运行取启动时的工作目录（`run.bat` 已先 `cd` 到仓库根），打包运行取 exe 所在目录。
 所以在仓库里跑 exe，数据写在 `build/MAA-PRTS/` 自己的 `config/` 里，和源码运行互不
 干扰；拷给别人也一样，数据始终跟 exe 走。程序**不会**写运行根以外的地方。
 
@@ -112,7 +112,7 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 
 | | 来源 | 用途 |
 |---|---|---|
-| 程序版本 `APP_VERSION` | 代码里写死 | 日志、设置页、请求头 `Server` |
+| 程序版本 `app_version()` | 发布包根 `version.json`（发版 CI 按 PR 标题版号写入）；缺失即 dev 版 | 日志、设置页、请求头 `Server` |
 | 资源版本 | `resources/arknights.json` 的 `version` + `fingerprint` | 判断游戏数据有没有变 |
 
 资源包由 `make_pack.py` 生成时会写入 `version`（**游戏版本日期**，如 `2026.10.29`，
@@ -135,22 +135,26 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 
 ### 资源包自动更新（`packsync.py`）
 
-启动约 2.5 秒后前端调 `/api/pack/status`：读仓库里的 `resources/pack-manifest.json`，
+启动约 2.5 秒后前端调 `/api/pack/status`：读 `pack-data` 分支上的 `pack-manifest.json`，
 拿 `fingerprint` 和本地那份比；不一样就 `/api/pack/update` 下载、校验、替换。
 **检查失败一律静默**——没网也要能正常用旧包。
 
 | 环节 | 规则 |
 |---|---|
-| 清单源 | `raw.githubusercontent` → `gh-proxy` → `jsDelivr`，逐个回退 |
+| 清单源 | `raw.githubusercontent` → `gh-proxy` → `jsDelivr`，逐个回退（都指向 `pack-data` 分支） |
 | 校验 | 字节数 + `sha256` 必须和 manifest 一致；不是合法 json、缺 `chars/stages` 直接拒 |
 | 防退化 | 各表条数不得比本地少（半截包会把数据清零）；悖论条数同理 |
 | 落盘 | 写 `<运行根>/resources/*.json`，旧文件留 `.bak`，`os.replace` 原子替换 |
 | 生效 | `arknights.json` → `resources.clear_cache()`；`paradox.json` 本就按 mtime 重读 |
 | 源码模式 | 默认不覆盖（免得弄脏工作区），`MAA_PRTS_PACK_FORCE=1` 可强制 |
 
+分支名可用环境变量覆盖：`MAA_PRTS_PACK_REPO` / `MAA_PRTS_PACK_BRANCH`（默认
+`OriginiumLab/MAA-PRTS` + `pack-data`），本地模拟远端时用得上。
+
 上游那半边在 GitHub Actions（`.github/workflows/pack.yml`，每天北京时间 12:00 / 16:00）：
 取上游 commit sha → 和包里的 `sourceCommit` 比 → 变了才按 sha 下载 9 个 json →
-重新生成 → 条数校验 → 直接提交 main（数据不是代码，不走 PR）。
+重新生成 → 条数校验 → 推到 `pack-data` 分支（单提交强推）。
+**不推 `main`**：`main` 的规则集强制 PR + 审批，bot 不在绕过名单里。
 
 ### 程序本体自动更新（`appupdate.py`）
 

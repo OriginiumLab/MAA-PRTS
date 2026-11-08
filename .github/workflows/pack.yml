@@ -4,12 +4,16 @@
 # 对应 UTC 的 04:00 / 08:00。另外支持手动触发。
 #
 # 做的事（tools/sync_pack.py）：
-#   1. 取上游 main 的 commit sha，和 resources/arknights.json 里的 sourceCommit 比
+#   1. 取上游 main 的 commit sha，和上次生成的 sourceCommit 比
 #      一样就结束（不下载、不提交，所以平时这条流水线几乎没有输出）
 #   2. 按 sha 定点下载 gamedata/excel 下 9 个 json（上游仓库 7 GB，绝不 clone）
-#   3. 重新生成 resources/arknights.json 和 resources/paradox.json
-#   4. 条数只增不减才放行；生成 pack-manifest.json 给客户端比对
-#   5. 直接把产物提交回 main（数据不是代码，不走 PR），带 [skip ci] 不触发其他流程
+#   3. 重新生成 arknights.json 和 paradox.json，再写 pack-manifest.json
+#   4. 条数只增不减才放行
+#   5. 产物推到独立的 pack-data 分支（不碰 main）
+#
+# 为什么不推 main：main 挂着规则集（强制走 PR、需审批、只允许 squash），
+# GitHub Actions 的 bot 不在绕过名单里，直推必被拒。数据也不该和代码抢同一条分支。
+# pack-data 是纯数据分支，没有保护，客户端按固定分支名拼 raw / jsDelivr 地址。
 #
 # 注意：scheduled workflow 在仓库连续 60 天没有提交时会被 GitHub 自动停掉，
 #       停掉后到 Actions 页面点一次 "Enable workflow" 即可。
@@ -32,6 +36,10 @@ concurrency:
   group: pack-sync
   cancel-in-progress: false
 
+env:
+  PACK_BRANCH: pack-data
+  PACK_FILES: resources/arknights.json resources/paradox.json resources/pack-manifest.json
+
 jobs:
   sync:
     name: 同步上游资源
@@ -52,6 +60,35 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+
+      # main 里的包只在发版时更新，可能比 pack-data 落后很多。
+      # 先把 pack-data 上的最新包取回来，两个作用：
+      #   1) sourceCommit 短路判断才准（不然每次都会重新生成）
+      #   2) 继承旧包里的 subProfessions（分支中文名种子，37 条以外的部分）
+      - name: Load previous pack from pack-data
+        id: prev
+        shell: bash
+        run: |
+          set +e
+          git fetch --depth=1 origin "$PACK_BRANCH" 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "pack-data 还不存在，本次按首次生成处理"
+            echo "fingerprint=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for f in $PACK_FILES; do
+            # 先写临时文件再 mv：git show 失败时不能把仓库里那份覆盖成空文件
+            if git show "FETCH_HEAD:$f" > "$f.tmp" 2>/dev/null && [ -s "$f.tmp" ]; then
+              mv -f "$f.tmp" "$f"
+              echo "  取到 $f"
+            else
+              rm -f "$f.tmp"
+              echo "  $f 在 pack-data 里没有，沿用 main 里的那份"
+            fi
+          done
+          FP=$(python -c "import json;print(json.load(open('resources/arknights.json',encoding='utf-8')).get('fingerprint') or '')" 2>/dev/null)
+          echo "上次指纹：${FP:-（无）}"
+          echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
 
       # 只用标准库，不需要装依赖
       - name: Sync pack from upstream
@@ -76,32 +113,66 @@ jobs:
           assert counts.get('stages', 0) > 0, '关卡表为空'
           assert para.get('count', 0) > 0, '悖论清单为空'
           assert pack.get('fingerprint'), '资源包没有指纹'
+          assert pack.get('sourceCommit'), '资源包没有上游提交号（短路判据）'
           assert set(man.get('packs') or {}) == {'arknights', 'paradox'}, 'manifest 不完整'
           for k in ('arknights', 'paradox'):
               assert man['packs'][k].get('sha256'), '%s 缺 sha256' % k
+              assert man['packs'][k].get('urls'), '%s 缺下载地址' % k
+              for u in man['packs'][k]['urls']:
+                  assert '/pack-data/' in u or '@pack-data/' in u, '下载地址没指向 pack-data：%s' % u
           print('版本 %s ｜ 指纹 %s ｜ 干员 %d ｜ 关卡 %d ｜ 悖论 %d' % (
               pack.get('version'), pack.get('fingerprint'),
               counts['chars'], counts['stages'], para['count']))
           PY
 
-      - name: Commit and push if changed
+      # 推数据分支。每次都是独立的单提交（orphan）+ 强推：
+      # 数据不保留历史，仓库体积不会越滚越大；manifest 里的 ?v=指纹 保证客户端不吃旧缓存。
+      - name: Publish to pack-data
         shell: bash
+        env:
+          PREV_FP: ${{ steps.prev.outputs.fingerprint }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          FILES="resources/arknights.json resources/paradox.json resources/pack-manifest.json"
-          git add $FILES
-          if git diff --cached --quiet; then
-            echo "上游没有新内容，本次不提交"
-            echo "### 上游无更新" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           VERSION=$(python -c "import json;print(json.load(open('resources/arknights.json',encoding='utf-8'))['version'])")
           FP=$(python -c "import json;print(json.load(open('resources/arknights.json',encoding='utf-8'))['fingerprint'])")
+          SHA=$(python -c "import json;print(json.load(open('resources/pack-manifest.json',encoding='utf-8'))['source']['commit'])")
+
+          if [ -n "$PREV_FP" ] && [ "$PREV_FP" = "$FP" ]; then
+            echo "内容与 pack-data 上的一致（指纹 $FP），本次不推送"
+            echo "### 资源无变化（指纹 \`$FP\`）" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          D="$RUNNER_TEMP/pack-data"
+          rm -rf "$D"; mkdir -p "$D/resources"
+          cp resources/arknights.json resources/paradox.json resources/pack-manifest.json "$D/resources/"
+
+          cat > "$D/README.md" <<'EOF'
+          # pack-data
+
+          MAA-PRTS 的游戏资源数据分支，由 `.github/workflows/pack.yml` 自动生成，
+          **请勿手工编辑**。
+
+          | 文件 | 说明 |
+          | --- | --- |
+          | `resources/arknights.json` | 干员 / 技能 / 模组 / 关卡 / 区域 / 活动 |
+          | `resources/paradox.json` | 悖论模拟清单与解锁条件 |
+          | `resources/pack-manifest.json` | 版本、指纹、sha256、下载地址（客户端读它） |
+
+          只保留最新一份快照，每次同步都是单提交强制覆盖，不累积历史。
+          原始出处：`yuanyan3060/ArknightsGameResource`，源提交记在 manifest 的 `source.commit`。
+          EOF
+
+          cd "$D"
+          git init -q -b "$PACK_BRANCH"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m "chore(pack): 同步游戏资源 ${VERSION} [skip ci]" \
-                     -m "上游提交 $(python -c "import json;print(json.load(open('resources/pack-manifest.json',encoding='utf-8'))['source']['commit'][:12])")" \
-                     -m "指纹 ${FP}"
-          git push origin HEAD:main
+          git add -A
+          git commit -q -m "chore(pack): 同步游戏资源 ${VERSION}" \
+                         -m "上游提交 ${SHA:0:12}" -m "指纹 ${FP}"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -q -f origin "HEAD:refs/heads/${PACK_BRANCH}"
+
           echo "### 资源已更新到 ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
-          echo "指纹 \`${FP}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "指纹 \`${FP}\` ｜ 上游 \`${SHA:0:12}\`" >> "$GITHUB_STEP_SUMMARY"

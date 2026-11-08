@@ -313,10 +313,13 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 
 /* 搜索 */
 .search-wrap { padding: 16px 0 6px; flex: 0 0 auto; }
+/* 搜索框 + 「下一关」按钮并排；按钮从框里独立出来 */
+.search-bar { display: flex; align-items: stretch; gap: 10px; }
 .search-box {
   display: flex; align-items: center; gap: 10px;
+  flex: 1; min-width: 0;
   height: 48px;
-  padding: 0 7px 0 15px;
+  padding: 0 15px;
   border-radius: 14px;
   border: 1px solid var(--line-strong);
   background: rgba(13, 16, 24, 0.85);
@@ -335,8 +338,9 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 }
 #search-input::placeholder { color: var(--text-3); }
 .search-btn {
-  height: 36px; padding: 0 20px;
-  border-radius: 10px;
+  flex: 0 0 auto; align-self: center;
+  height: 40px; padding: 0 20px;
+  border-radius: 11px;
   font-size: 13px; font-weight: 600;
   color: #04120f;
   background: linear-gradient(135deg, var(--mint), #43d9c4);
@@ -344,8 +348,14 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   transition: .15s ease;
   white-space: nowrap;
 }
-.search-btn:hover { filter: brightness(1.07); transform: translateY(-1px); }
-.search-btn:active { transform: translateY(0); }
+.search-btn:hover:not(:disabled) { filter: brightness(1.07); transform: translateY(-1px); }
+.search-btn:active:not(:disabled) { transform: translateY(0); }
+.search-btn:disabled {
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+  cursor: default;
+}
 
 .quick-row {
   display: flex; align-items: center; gap: 7px;
@@ -623,9 +633,13 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .badge.plain { color: var(--text-3); border-color: var(--line); }
 .badge.stage { color: var(--mint); background: rgba(94, 234, 212, 0.08); border-color: rgba(94, 234, 212, 0.22); font-family: var(--mono); }
 
-/* 难度：突袭一律走红色，跟 MAA 作业集里那条红色记录对得上 */
+/* 难度：突袭一律走红色，跟 MAA 作业集里那条红色记录对得上；
+   磨难是默认要抄的档，红再亮一档；标准走亮蓝（天蓝，避开 indigo 的紫调）
+   跟灰阶的简单区分开 */
 .badge.diff { font-family: var(--mono); font-size: 10.5px; padding: 2px 6px; }
 .badge.diff.raid { color: #ff9aa6; background: rgba(255, 122, 138, 0.13); border-color: rgba(255, 122, 138, 0.40); }
+.badge.diff.tough { color: #ff7086; background: rgba(255, 102, 128, 0.16); border-color: rgba(255, 102, 128, 0.48); }
+.badge.diff.std { color: #6db5ff; background: rgba(80, 170, 255, 0.13); border-color: rgba(80, 170, 255, 0.42); }
 .badge.diff.both { color: #ffb3a0; background: rgba(255, 140, 110, 0.11); border-color: rgba(255, 140, 110, 0.34); }
 .badge.diff.normal { color: var(--text-3); border-color: var(--line); }
 .diff-pill {
@@ -633,6 +647,8 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   border-radius: 5px; vertical-align: 1px; white-space: nowrap;
   color: #ff9aa6; background: rgba(255, 122, 138, 0.13); border: 1px solid rgba(255, 122, 138, 0.36);
 }
+.diff-pill.tough { color: #ff7086; background: rgba(255, 102, 128, 0.16); border-color: rgba(255, 102, 128, 0.46); }
+.diff-pill.std { color: #6db5ff; background: rgba(80, 170, 255, 0.14); border-color: rgba(80, 170, 255, 0.38); }
 .diff-pill.both { color: #ffb3a0; background: rgba(255, 140, 110, 0.11); border-color: rgba(255, 140, 110, 0.32); }
 .diff-pill.normal { color: var(--text-3); background: rgba(255, 255, 255, 0.05); border-color: var(--line); }
 

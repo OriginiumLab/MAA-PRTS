@@ -8,7 +8,9 @@
 
 打包只带只读资源（frontend / resources）。用户数据永远写在 exe 同目录的
 config/（含加密 token 与账号练度），不会被打进包里；程序任何模式下都不向上
-找目录。压缩发版请用全新构建产物（运行过会多出 config/、debug/）。
+找目录。PyInstaller 先在 work/dist/ 出全新包，再同名文件覆盖合并进
+build/MAA-PRTS/，原地运行产生的 config/、debug/ 等一律不动（不属于本次
+构建的旧文件也不清理）。压缩发版前请剔除 config/、debug/。
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICON = os.path.join(HERE, 'resources', 'assets', 'app.ico')
@@ -26,7 +29,7 @@ def make_icon():
     try:
         from PIL import Image, ImageDraw
     except ImportError:
-        print('未安装 Pillow，跳过图标生成（用系统默认图标）')
+        print('Pillow not installed, skipping icon generation (system default icon will be used)')
         return None
 
     os.makedirs(os.path.dirname(ICON), exist_ok=True)
@@ -77,25 +80,90 @@ def make_icon():
 
     sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     img.save(ICON, format='ICO', sizes=sizes)
-    print('图标已生成：%s' % ICON)
+    print('icon generated: %s' % ICON)
     return ICON
+
+
+def _same_content(a, b):
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    import hashlib
+    ha = hashlib.sha256()
+    with open(a, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            ha.update(chunk)
+    hb = hashlib.sha256()
+    with open(b, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            hb.update(chunk)
+    return ha.hexdigest() == hb.hexdigest()
+
+
+def merge_overwrite(src, dst):
+    """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动
+
+    单文件级重试：刚被 taskkill 的 exe 句柄释放是异步的，杀软也可能瞬时
+    锁住新 DLL，重试几秒基本都能过去。重试仍锁时比对内容：一样就不覆盖
+    （典型如被 MAA.exe 加载的 VCRUNTIME140.dll，每次构建内容相同，覆盖
+    本无意义）——旧版 MAA-PRTS 启动的 MAA 会锁着这些文件，跳过它们才能
+    把带修复的新 exe 递进去，锁循环自然解开。
+    """
+    for base, _dirs, files in os.walk(src):
+        rel = os.path.relpath(base, src)
+        target = dst if rel == '.' else os.path.join(dst, rel)
+        os.makedirs(target, exist_ok=True)
+        for f in files:
+            s = os.path.join(base, f)
+            t = os.path.join(target, f)
+            for attempt in range(6):
+                try:
+                    shutil.copy2(s, t)
+                    break
+                except PermissionError:
+                    if os.path.isfile(t) and _same_content(s, t):
+                        print('locked but identical, skipped: %s' % t)
+                        break
+                    if attempt == 5:
+                        print('still locked after retries: %s' % t)
+                        raise
+                    time.sleep(0.5)
+
+
+def count_stale(fresh, pkg):
+    """发布包里不属于全新产物、也不是 config/debug 运行时数据的旧文件个数"""
+    keep = ('config', 'debug')
+    fresh_set = set()
+    for base, _d, files in os.walk(fresh):
+        for f in files:
+            fresh_set.add(os.path.relpath(os.path.join(base, f), fresh).lower())
+    n = 0
+    for base, dirs, files in os.walk(pkg):
+        if os.path.relpath(base, pkg) == '.':
+            dirs[:] = [d for d in dirs if d not in keep]
+        for f in files:
+            if os.path.relpath(os.path.join(base, f), pkg).lower() not in fresh_set:
+                n += 1
+    return n
 
 
 def build():
     icon = make_icon()
-    # 构建只写 build/ 一个目录：work/ 是中间产物，MAA-PRTS/ 是发布包本体。
-    # 每次全清这两个子目录（build/ 本身无入库文件，全部是产物）。
+    # 构建只写 build/ 一个目录：work/ 是中间产物（每次全清），PyInstaller 在
+    # work/dist/ 出全新包，再合并覆盖到 MAA-PRTS/（发布包本体）。不能让
+    # PyInstaller 直接输出到 MAA-PRTS/：--noconfirm 下它会先删掉整个输出
+    # 目录，等于全清，原地运行产生的 config/、debug/ 就没了。
     build_dir = os.path.join(HERE, 'build')
     work_dir = os.path.join(build_dir, 'work')
-    for d in (work_dir, os.path.join(build_dir, 'MAA-PRTS')):
-        if os.path.isdir(d):
-            shutil.rmtree(d, ignore_errors=True)
+    dist_dir = os.path.join(work_dir, 'dist')
+    pkg_dir = os.path.join(build_dir, 'MAA-PRTS')
+    if os.path.isdir(work_dir):
+        shutil.rmtree(work_dir, ignore_errors=True)
 
     cmd = [
         sys.executable, '-m', 'PyInstaller',
         '--noconfirm', '--clean',
         '--name', 'MAA-PRTS',
-        '--distpath', build_dir,
+        '--distpath', dist_dir,
         '--workpath', work_dir,
         '--specpath', work_dir,
         '--windowed',
@@ -112,20 +180,35 @@ def build():
     if icon and os.path.isfile(icon):
         cmd[cmd.index('--windowed') + 1:cmd.index('--windowed') + 1] = ['--icon', icon]
 
-    print('执行：\n  ' + ' '.join(cmd))
+    print('executing:\n  ' + ' '.join(cmd))
     rc = subprocess.call(cmd, cwd=HERE)
     if rc != 0:
-        print('\n打包失败，退出码 %d（中间产物保留在 build\\work 以便排查）' % rc)
+        print('\nbuild failed, exit code %d (intermediates kept in build\\work for inspection)' % rc)
         return rc
+
+    # 全新产物合并覆盖进发布包：同名文件覆盖，config/、debug/ 等一律不动。
+    # exe 正在运行时 Windows 文件锁会让覆盖失败，保留现场让用户处理。
+    fresh = os.path.join(dist_dir, 'MAA-PRTS')
+    try:
+        merge_overwrite(fresh, pkg_dir)
+    except PermissionError:
+        print('\nfailed to merge into build\\MAA-PRTS: files are locked (is MAA-PRTS.exe still running?).')
+        print('Close it and rerun this script; fresh output kept in %s.' % fresh)
+        return 1
+    stale = count_stale(fresh, pkg_dir)
 
     # 每次构建都是 --clean 全量重建，中间产物没有复用价值，成功即删
     shutil.rmtree(work_dir, ignore_errors=True)
 
-    exe = os.path.join(build_dir, 'MAA-PRTS', 'MAA-PRTS.exe')
-    print('\n完成：%s' % exe)
+    exe = os.path.join(pkg_dir, 'MAA-PRTS.exe')
+    print('\ndone: %s' % exe)
     if os.path.isfile(exe):
         size = os.path.getsize(exe) / 1024 / 1024
-        print('  主程序 %.1f MB' % size)
+        print('  main exe %.1f MB' % size)
+    if stale:
+        print('  hint: %d stale files from previous builds remain in the package '
+              '(config/ and debug/ excluded); delete build\\MAA-PRTS entirely and rebuild '
+              'before zipping a release' % stale)
     return 0
 
 

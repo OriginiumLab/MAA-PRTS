@@ -59,9 +59,14 @@ class Report:
 
 # ---------------------------------------------------------------- A. 静态检查
 def check_bat_encoding():
-    for name in ('启动.bat', '打包.bat', '调试启动.bat'):
-        path = os.path.join(REPO, name)
+    # 仓库内全部 .bat 一并检查（含 tools/setup，新加脚本自动覆盖）
+    bats = []
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        dirnames[:] = [d for d in dirnames if d not in ('.venv', 'build', '.git', '__pycache__')]
+        bats += [os.path.join(dirpath, f) for f in filenames if f.lower().endswith('.bat')]
+    for path in sorted(bats):
         raw = open(path, 'rb').read()
+        name = os.path.relpath(path, REPO)
         assert not raw.startswith(b'\xef\xbb\xbf'), '%s 带 UTF-8 BOM' % name
         assert b'\n' not in raw.replace(b'\r\n', b''), '%s 存在裸 LF 行尾' % name
 
@@ -1010,7 +1015,7 @@ def check_story_stage_filter():
     assert any(s['code'] == 'NL-EX-7' for s in r['stages']), '战斗关被误删了'
 
 
-# ------------------------------------------------- B19 资源包幂等
+# ------------------------------------------------- B20 资源包幂等
 def check_pack_idempotent():
     """自动同步的前提：同一份上游数据，任何时候生成都得到同一个包。
 
@@ -1064,7 +1069,7 @@ def check_pack_idempotent():
     assert not vmod._is_older('v2.3.0', '2026.10.29'), '非点分三段的版本号不该误判'
 
 
-# ------------------------------------------------- B20 资源更新校验
+# ------------------------------------------------- B21 资源更新校验
 def check_pack_verify():
     """客户端换包前的三道闸：sha256、大小、条数不许变少。
 
@@ -1113,7 +1118,7 @@ def check_pack_verify():
         pass
 
 
-# ------------------------------------------------- B21 程序自更新
+# ------------------------------------------------- B22 程序自更新
 def check_app_update():
     """版本比较、安装包校验、安装脚本的替换边界。
 
@@ -1214,6 +1219,129 @@ def check_app_update():
         A.update_dir = backup
         shutil.rmtree(tmp, ignore_errors=True)
 
+# ---------------------------------------------------------------- B19 主线难度变体
+def check_mainline_difficulty_variants():
+    """主线难度体系（按章梳理，作业站按完整 stageId 索引作业）：
+
+      0-8 章  main_N-M（普通）+ #f#（突袭，不单独成行，raid 标记挂主关）
+      9 章    easy_N-M（简单）+ main_N-M（标准，带突袭）
+      10-14 章 easy_/main_/tough_ 三套独立 id（简单/标准/磨难），搜代号默认磨难在前
+      15-17 章 main_N-M（普通）+ main_N-M#s（险地，独立 stage_name 成行）
+    """
+    from core import copilot, resources
+
+    # 搜代号返回全部难度变体；默认档（normal）用来出标题
+    r = resources.resolve('12-7')
+    assert r['mode'] == 'stage' and len(r['stages']) == 3, \
+        '12-7 应有简单/标准/磨难三行，实际 %d' % len(r['stages'])
+    byid = {s['stageId']: s for s in r['stages']}
+    assert set(byid) == {'easy_12-06', 'main_12-06', 'tough_12-06'}, set(byid)
+    assert byid['easy_12-06']['difficulty'] == 'easy' and byid['easy_12-06']['difficultyCN'] == '简单'
+    assert byid['tough_12-06']['difficulty'] == 'tough' and byid['tough_12-06']['difficultyCN'] == '磨难'
+    assert byid['main_12-06']['difficulty'] == 'normal'
+    assert byid['main_12-06']['difficultyCN'] == '标准', '有简单档的章节，标准行应标「标准」'
+    assert '简单' not in r['title'] and '平议生死' in r['title']
+
+    # 15-17 章：普通 + #s 险地两行；粘 #s id 直接命中险地行（不再回落主关）
+    r = resources.resolve('15-3')
+    assert len(r['stages']) == 2, '15-3 应有普通/险地两行，实际 %d' % len(r['stages'])
+    risky = [s for s in r['stages'] if s['stageId'] == 'main_15-02#s']
+    assert risky and risky[0]['difficulty'] == 'risky' and risky[0]['difficultyCN'] == '险地'
+    r = resources.resolve('main_15-02#s')
+    assert [s['stageId'] for s in r['stages']] == ['main_15-02#s']
+    # 险地行不带 raid 标记（15+ 章没有 #f#），普通行也不带
+    assert not any(s['raid'] for s in resources.resolve('15-3')['stages'])
+
+    # 9 章：简单 + 标准（标准带突袭 raid 标记，徽标叫「标准」不叫「普通」）
+    r = resources.resolve('9-7')
+    assert {s['stageId'] for s in r['stages']} == {'easy_09-06', 'main_09-06'}
+    m9 = [s for s in r['stages'] if s['stageId'] == 'main_09-06'][0]
+    assert m9['raid'] is True and m9['difficultyCN'] == '标准'
+
+    # 0-8 章行为不变：只有主关一行，raid 标记挂主关，徽标仍叫「普通」（difficultyCN 空）
+    r = resources.resolve('1-7')
+    assert [s['stageId'] for s in r['stages']] == ['main_01-07'] and r['stages'][0]['raid'] is True
+    assert r['stages'][0]['difficultyCN'] == ''
+
+    # 系列/活动视图不摆「简单」行，但磨难/险地保留
+    r = resources.resolve('12-1')
+    assert r['mode'] == 'activity'
+    assert not [s for s in r['stages'] if s['difficulty'] == 'easy'], '系列视图不该有简单行'
+    assert any(s['difficulty'] == 'tough' for s in r['stages'])
+
+    # 拆行：磨难/简单各一行（variant=normal、不按位标志筛）；险地一行（variant=raid）
+    rows = [{'id': 1, 'difficulty': 0, 'mode': 'ready'},   # 位标志没标也照收
+            {'id': 2, 'difficulty': 3, 'mode': 'ready'}]   # 标了通用也不筛掉
+    tough = copilot.stage_variants(dict(byid['tough_12-06']), rows, limit=10)
+    assert len(tough) == 1 and tough[0]['stage']['variant'] == 'normal'
+    assert [o['id'] for o in tough[0]['ops']] == [1, 2], '磨难行不该按位标志筛作业'
+    risky_row = copilot.stage_variants(dict(risky[0]), rows, limit=10)
+    assert len(risky_row) == 1 and risky_row[0]['stage']['variant'] == 'raid'
+
+    # 写 MAA：险地一条 IsRaid=true（MaaCore 15+ 章用它切险地）；磨难/简单一条 IsRaid=false
+    assert copilot.entry_variants(0, None, 'main_15-02#s') == [True]
+    assert copilot.entry_variants(3, 'normal', 'main_15-02#s') == [True]
+    assert copilot.entry_variants(3, None, 'tough_12-06') == [False], '磨难没有突袭，不许按通用位展开两条'
+    assert copilot.entry_variants(0, None, 'easy_12-06') == [False]
+    assert copilot.entry_variants(3, 'normal') == [False], '不带 stage_name 的旧语义不变'
+    assert copilot.difficulty_text_for('main_15-02#s', 0) == '险地'
+    assert copilot.difficulty_text_for('tough_12-06', 0) == '磨难'
+    assert copilot.difficulty_text_for('easy_12-06', 0) == '简单'
+    assert copilot.difficulty_text_for('main_01-07', 3) == '通用'
+
+    # 行排序：同代号内 磨难 → 标准（→ 突袭/险地）→ 简单；代号间按主关 id
+    def pack(sid, diff, variant=None):
+        return {'stage': {'stageId': sid, 'difficulty': diff, 'variant': variant}}
+    keys = [copilot.row_sort_key(pack(*k)) for k in [
+        ('easy_12-06', 'easy', 'normal'), ('tough_12-06', 'tough', 'normal'),
+        ('main_12-06', 'normal', 'normal'), ('main_12-06', 'normal', 'raid'),
+        ('main_15-02#s', 'risky', 'raid'), ('main_15-02', 'normal', 'normal'),
+        ('act13side_ex01', 'normal', 'normal')]]
+    assert keys[1] < keys[2] < keys[3] < keys[0], '磨难→标准→突袭→简单 的顺序不对：%r' % keys
+    assert keys[4] < keys[5], '险地是 15+ 章的主难度，应排在普通行前面'
+    assert keys[6][0] == 'act13side_ex01', '活动关的归并 id 不该被改写'
+
+    # 下一关：同系列同难度推进；剧情关空缺跳过；章末返回 None
+    def nxt(sid, diff):
+        return resources.next_stage({'stageId': sid, 'difficulty': diff})
+    assert nxt('tough_12-06', 'tough') == {
+        'code': '12-8', 'stageId': 'tough_12-07', 'difficulty': 'tough',
+        'difficultyCN': '磨难'}, '磨难行下一关应是 12-8 磨难'
+    assert nxt('tough_12-09', 'tough')['code'] == '12-12', '12-11 是剧情关，下一关应跳到 12-12'
+    assert nxt('main_15-02#s', 'risky')['code'] == '15-4', '险地行下一关应是 15-4 险地'
+    assert nxt('main_01-07', 'normal')['code'] == '1-8'
+    assert nxt('tough_12-18', 'tough') is None, '12 章磨难末关（12-20）没有下一关'
+    # 活动关按活动内顺序推进（活动 id 数字没零填充，自然排序不能乱）
+    act = resources.resolve('act13side')['stages']
+    pair = next((act[i], act[i + 1]) for i in range(len(act) - 1)
+                if act[i]['code'] == 'NL-9')
+    got = resources.next_stage(pair[0])
+    assert got and got['code'] == pair[1]['code'], \
+        'NL-9 的下一关应是 %s，实际 %r' % (pair[1]['code'], got)
+
+    # TR 教学关默认不参与推进：TL-10（活动主线末关）后面是 TL-TR-1 也不能给，
+    # 序列末尾就是 None；未登记的 TR 自身也推不出下一关
+    assert nxt('act55side_10', 'normal') is None, \
+        'TL-10 的下一关不该是 TL-TR-1（TR 位置未知，默认全跳过）'
+    assert nxt('act13side_tr01', 'normal') is None, '未登记位置的 TR 自身不该有下一关'
+    assert nxt('tr_01', 'normal') is None
+    assert nxt('lt_tr_01', 'normal') is None, '塔的 TR（lt_tr_01）也不该有下一关'
+    # TR 判定覆盖全部 id 形态（tr_01 / _tr01 / -tr01 / lt_tr_01）
+    for sid in ('tr_01', 'lt_tr_01', 'act55side_tr01', 'act2vmulti-tr01', 'act18side_tr_02'):
+        assert resources._is_tr(sid), '%s 应判为 TR' % sid
+    for sid in ('act55side_10', 'main_12-06', 'tough_12-06', 'main_15-02#s', 'hard_15-01'):
+        assert not resources._is_tr(sid), '%s 不该判为 TR' % sid
+    # TR_AFTER 登记过的 TR 插回锚点后面参与推进（人工维护位置的扩展点）
+    resources.TR_AFTER['act55side_tr01'] = 'act55side_05'
+    try:
+        got = nxt('act55side_05', 'normal')
+        assert got and got['stageId'] == 'act55side_tr01', \
+            '登记后 TL-TR-1 应插在 TL-5 后面，实际 %r' % got
+        got = nxt('act55side_tr01', 'normal')
+        assert got and got['code'] == 'TL-6', '登记后的 TR 应能推进到锚点下一关'
+    finally:
+        resources.TR_AFTER.pop('act55side_tr01', None)
+
 
 # ---------------------------------------------------------------- 入口
 def main():
@@ -1249,9 +1377,10 @@ def main():
         r.check('B16 账号手动排序（accountOrder）', lambda: check_account_order(tmp))
         r.check('B17 MAA 导入账号只比等级', check_maa_import_level_only)
         r.check('B18 剧情关不进搜索', check_story_stage_filter)
-        r.check('B19 资源包生成幂等（版本/指纹）', check_pack_idempotent)
-        r.check('B20 资源更新校验（sha256/条数）', check_pack_verify)
-        r.check('B21 程序自更新（版本比较/安装包/替换边界）', check_app_update)
+        r.check('B19 主线难度变体（简单/标准/磨难/险地）', check_mainline_difficulty_variants)
+        r.check('B20 资源包生成幂等（版本/指纹）', check_pack_idempotent)
+        r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
+        r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

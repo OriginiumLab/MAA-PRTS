@@ -48,6 +48,31 @@ def log(msg):
         pass
 
 
+# ---------------------------------------------------------------- 解除网络锁定
+def unblock_bundle():
+    """删掉包内文件的「网络锁定」标记（MOTW，即 Zone.Identifier 数据流）。
+
+    发布 zip 从网上下载后用资源管理器「全部解压」，每个文件都会带上
+    ZoneId=3 标记。原生 DLL 加载不受影响，但 .NET Framework 拒绝加载带
+    标记的托管程序集——pythonnet 的 Python.Runtime.dll 正是这种，于是
+    webview.start 时报 Failed to resolve Python.Runtime.Loader.Initialize。
+    启动时把整个 _internal 清一遍即可（等价于右键文件「解除锁定」）。
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+    internal = os.path.join(os.path.dirname(sys.executable), '_internal')
+    removed = 0
+    for base, _dirs, files in os.walk(internal):
+        for name in files:
+            try:
+                os.remove(os.path.join(base, name) + ':Zone.Identifier')
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        log('已解除 %d 个文件的下载锁定标记（MOTW）' % removed)
+
+
 # ---------------------------------------------------------------- HTTP
 def trusted_request(headers, server_address):
     """防跨站请求：Host 必须指回本服务；带 Origin 时必须同源；
@@ -79,7 +104,7 @@ def trusted_request(headers, server_address):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'MAA-PRTS/%s' % version.APP_VERSION
+    server_version = 'MAA-PRTS/%s' % version.app_version()
     protocol_version = 'HTTP/1.1'
 
     def log_message(self, fmt, *args):
@@ -207,7 +232,7 @@ class Bridge:
 
     def app_info(self):
         return {
-            'version': version.APP_VERSION,
+            'version': version.app_version(),
             'gamedata': version.pack_meta()['version'],
             'frozen': settings.FROZEN,
             'root': settings.project_root(),
@@ -301,9 +326,10 @@ def _quit(code=0, reason='退出'):
 
 def main():
     if not os.path.isdir(WEB):
-        print('[错误] 未找到页面目录：%s' % WEB)
-        print('       程序在哪个目录运行就用哪个目录的资源——源码运行请在项目根')
-        print('       目录启动（双击 启动.bat）；打包运行请保持 exe 与 _internal 同级。')
+        print('[error] frontend dir not found: %s' % WEB)
+        print('        Resources are loaded relative to the working directory --')
+        print('        run from the project root (double-click run.bat) in source mode,')
+        print('        or keep exe next to _internal in packaged mode.')
         return 1
 
     no_window = '--no-window' in sys.argv
@@ -320,7 +346,7 @@ def main():
     st = settings.load()
     accounts.ensure_tokens()
     log('=' * 56)
-    log('MAA-PRTS %s  界面 %s' % (version.APP_VERSION, url))
+    log('MAA-PRTS %s  界面 %s' % (version.app_version(), url))
     log('运行目录  %s' % settings.project_root())
     log('账号数据  %s' % settings.accounts_dir())
     log('配置文件  %s' % settings.SETTINGS_PATH)
@@ -344,7 +370,7 @@ def main():
             log('程序已更新：%s → %s' % (up.get('from'), up.get('to')))
         elif up.get('state') == 'stale':
             log('[警告] 上次更新到 %s 没生效（当前仍是 %s），安装包已保留'
-                % (up.get('to'), version.APP_VERSION))
+                % (up.get('to'), version.app_version()))
     except Exception:
         log(traceback.format_exc())
     if accounts.TOKENS_WARNING:
@@ -359,6 +385,7 @@ def main():
             _quit(0, 'Ctrl+C')
         return 0
 
+    unblock_bundle()  # 必须先于 webview：MOTW 会让 pythonnet 的程序集加载失败
     import webview
     webview.create_window(
         'MAA-PRTS · 作业控制台',

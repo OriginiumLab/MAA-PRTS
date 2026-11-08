@@ -146,8 +146,10 @@ def is_newer(remote, local) -> bool:
 
 
 def _current() -> str:
-    from .version import APP_VERSION
-    return APP_VERSION
+    # 版本号不在代码里维护：发版 CI 把 version.json 写进发布包根目录，
+    # 本地源码运行 / 本地打包没有这个文件，读到的是 'dev'（此时不提示更新）。
+    from .version import app_version
+    return app_version()
 
 
 def _arch() -> str:

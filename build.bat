@@ -15,14 +15,14 @@ set "INSTALL_RC=%ERRORLEVEL%"
 if not "%INSTALL_RC%"=="0" goto :InstallFailed
 
 echo.
-echo [打包] 正在生成 MAA-PRTS.exe...
+echo [build] generating MAA-PRTS.exe...
 "%PYTHON%" -u "tools\build.py"
 set "BUILD_RC=%ERRORLEVEL%"
 if not "%BUILD_RC%"=="0" goto :BuildFailed
 
 echo.
-echo [完成] 打包产物位于 build\MAA-PRTS\MAA-PRTS.exe
-echo [完成] 整个 build\MAA-PRTS 文件夹即发布包，压缩成 zip 就是 Release 附件。
+echo [done] output: build\MAA-PRTS\MAA-PRTS.exe
+echo [done] the whole build\MAA-PRTS folder is the release package, zip it for Release assets.
 exit /b 0
 
 
@@ -30,45 +30,45 @@ exit /b 0
 "%PYTHON%" -c "import webview, clr, PyInstaller, PIL" >nul 2>&1
 if not errorlevel 1 exit /b 0
 
-echo [初始化] 正在安装打包依赖（仅首次需要）...
+echo [init] installing build dependencies (first run only)...
 "%PYTHON%" -m pip install --disable-pip-version-check --prefer-binary --upgrade %PIP_USER_ARG% pywebview pythonnet pyinstaller pillow
 if errorlevel 1 exit /b 1
 
 "%PYTHON%" -c "import webview, clr, PyInstaller, PIL" >nul 2>&1
 if errorlevel 1 (
-    echo [错误] 打包依赖安装后仍无法导入。
+    echo [error] build dependencies still not importable after install.
     exit /b 1
 )
 exit /b 0
 
 
 :CannotEnter
-echo [错误] 无法进入脚本所在目录：%~dp0
+echo [error] cannot enter script dir: %~dp0
 pause
 exit /b 1
 
 
 :MissingBuildScript
-echo [错误] 未找到 tools\build.py 或 tools\setup\prepare-python.bat。
-echo 请在完整的 MAA-PRTS 项目目录中运行本脚本。
+echo [error] tools\build.py or tools\setup\prepare-python.bat not found.
+echo Run this script inside a complete MAA-PRTS checkout.
 pause
 exit /b 1
 
 
 :PrepareFailed
-rem 具体原因已由 tools\setup\prepare-python.bat 打印。
+rem reason already printed by tools\setup\prepare-python.bat.
 pause
 exit /b 1
 
 
 :InstallFailed
-echo [错误] 打包依赖安装失败。请确认网络可访问 pypi.org，或检查代理/证书设置后重试。
+echo [error] failed to install build dependencies. Check network access to pypi.org (proxy/cert) and retry.
 pause
 exit /b %INSTALL_RC%
 
 
 :BuildFailed
 echo.
-echo [错误] 打包失败，退出码 %BUILD_RC%。
+echo [error] build failed, exit code %BUILD_RC%.
 pause
 exit /b %BUILD_RC%

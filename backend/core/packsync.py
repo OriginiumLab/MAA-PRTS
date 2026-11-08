@@ -2,7 +2,8 @@
 """资源包自动更新（客户端侧）
 
 服务器（GitHub Actions）把 arknights.json / paradox.json 和 pack-manifest.json
-一起提交到仓库，程序启动后读 manifest，和自己这份比 fingerprint，不一样就下载。
+一起推到数据分支 pack-data，程序启动后读这份 manifest，和自己这份比 fingerprint，
+不一样就下载。
 
 三条底线：
   - 只认 manifest 给的 sha256 和字节数，下歪了绝不落盘
@@ -25,8 +26,9 @@ import urllib.request
 from . import resources, settings
 
 # 与 tools/sync_pack.py 里的 PACK_REPO / PACK_BRANCH 保持一致
+# 数据走独立分支 pack-data：main 有规则集（强制 PR + 审批），bot 推不进去
 PACK_REPO = os.environ.get('MAA_PRTS_PACK_REPO') or 'OriginiumLab/MAA-PRTS'
-PACK_BRANCH = os.environ.get('MAA_PRTS_PACK_BRANCH') or 'main'
+PACK_BRANCH = os.environ.get('MAA_PRTS_PACK_BRANCH') or 'pack-data'
 
 _RAW = 'https://raw.githubusercontent.com/%s/%s/' % (PACK_REPO, PACK_BRANCH)
 _GH_PROXY = 'https://gh-proxy.com/https://raw.githubusercontent.com/%s/%s/' % (
@@ -49,8 +51,8 @@ def _iso():
 
 
 def _get(url, timeout):
-    from .version import APP_VERSION
-    req = urllib.request.Request(url, headers={'User-Agent': UA % APP_VERSION})
+    from .version import app_version
+    req = urllib.request.Request(url, headers={'User-Agent': UA % app_version()})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 

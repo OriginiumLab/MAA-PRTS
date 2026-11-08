@@ -40,7 +40,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPSTREAM = 'yuanyan3060/ArknightsGameResource'
 # 客户端按这个仓库地址拼下载 URL；改名后要一起改（和 releases 页面一致）
 PACK_REPO = 'OriginiumLab/MAA-PRTS'
-PACK_BRANCH = 'main'
+# 资源数据单独走一条分支，不进 main：main 的规则集强制走 PR + 审批，
+# bot 直推会被拒。数据分支没有保护，客户端按这个分支名拼 raw/jsDelivr 地址。
+PACK_BRANCH = os.environ.get('MAA_PRTS_PACK_BRANCH') or 'pack-data'
 
 FILES = [
     'version',

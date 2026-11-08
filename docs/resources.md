@@ -37,16 +37,26 @@
         ▼
 GitHub Actions  .github/workflows/pack.yml
         │  1. 取上游 main 的 commit sha
-        │  2. 和 arknights.json 里的 sourceCommit 比，一样就结束
+        │  2. 和上次生成的 sourceCommit 比，一样就结束
         │  3. 按 sha 定点下载 9 个 json（不 clone）
         │  4. 重新生成 arknights.json / paradox.json / pack-manifest.json
-        │  5. 条数只增不减才放行，直接提交 main（[skip ci]）
+        │  5. 条数只增不减才放行
+        │  6. 推到数据分支 pack-data（单提交 + 强推，不累积历史）
         ▼
 用户端  启动约 2.5 秒后 /api/pack/status
-        │  读 pack-manifest.json，和本地包比 fingerprint
+        │  按 pack-data 分支读 pack-manifest.json，和本地包比 fingerprint
         ▼
         /api/pack/update → 校验 sha256 与条数 → 原子替换 resources/*.json
 ```
+
+**为什么数据走 `pack-data` 而不是 `main`**：`main` 挂着规则集（强制走 PR、
+需 1 个审批、只允许 squash），`github-actions[bot]` 不在绕过名单里，直推必被拒。
+资源数据也不需要和代码抢同一条分支 —— 独立分支没有保护，客户端按固定分支名
+拼 raw / jsDelivr 地址就行。`pack-data` 里只有三个 json + 一份 README，
+每次同步都是一个孤立提交强推覆盖，所以仓库体积不会随同步次数增长。
+
+`main` 里的 `resources/*.json` 只在发版时更新（打进 exe 作为离线基线），
+两者会不同步 —— 没关系，客户端启动后会自动追到 `pack-data` 上的最新版。
 
 **幂等约定**（改 `make_pack.py` 前必读，否则 CI 会天天提交、用户天天弹提示）：
 

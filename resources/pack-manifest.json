@@ -16,9 +16,9 @@
       "sha256": "3f5450d7beba0e7f374a5273baf14ef4e64dbc7b88540275f2e42b7246c0d345",
       "size": 599724,
       "urls": [
-        "https://cdn.jsdelivr.net/gh/OriginiumLab/MAA-PRTS@main/resources/arknights.json?v=28b2db93",
-        "https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/main/resources/arknights.json?v=28b2db93",
-        "https://gh-proxy.com/https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/main/resources/arknights.json?v=28b2db93"
+        "https://cdn.jsdelivr.net/gh/OriginiumLab/MAA-PRTS@pack-data/resources/arknights.json?v=28b2db93",
+        "https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/arknights.json?v=28b2db93",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/arknights.json?v=28b2db93"
       ],
       "version": "2026.10.29"
     },
@@ -31,9 +31,9 @@
       "sha256": "734fe67670d6aff187949b0adf8a0d9e67385a8343940ddbaef2416293e04d4f",
       "size": 39257,
       "urls": [
-        "https://cdn.jsdelivr.net/gh/OriginiumLab/MAA-PRTS@main/resources/paradox.json?v=aabace29",
-        "https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/main/resources/paradox.json?v=aabace29",
-        "https://gh-proxy.com/https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/main/resources/paradox.json?v=aabace29"
+        "https://cdn.jsdelivr.net/gh/OriginiumLab/MAA-PRTS@pack-data/resources/paradox.json?v=aabace29",
+        "https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/paradox.json?v=aabace29",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/paradox.json?v=aabace29"
       ],
       "version": "26-10-29-15-36-11-33649006"
     }
