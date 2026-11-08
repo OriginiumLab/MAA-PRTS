@@ -282,7 +282,7 @@ function renderHero() {
   const algoSel = $('#algo-select');
   if (algoSel) {
     algoSel.disabled = !d;                        // 算法下拉跟账号走，没账号不可用
-    if (d) algoSel.value = d.preferAlgo || 'fewer';
+    if (d) algoSel.value = d.preferAlgo || 'rating';
   }
   if (!d) return;
   const a = d.account || {}, st = d.stats || {};

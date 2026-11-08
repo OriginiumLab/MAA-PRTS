@@ -31,11 +31,12 @@ MAX_LEVELS = {0: (30, 0, 0), 1: (30, 0, 0), 2: (30, 0, 0), 3: (40, 55, 0),
 
 MODES = ('ready', 'borrow', 'train', 'blocked')
 MODE_CN = {'ready': '可直接抄', 'borrow': '差一人可借', 'train': '需补练度', 'blocked': '打不了'}
-# 推荐排序算法（跟账号存的 preferAlgo 对应；顺序同下拉展示，默认取第一个）：
-#   fewer  少人优先：ready/borrow 同级，人数（0~4 同档）→ 干员权重 → 评分 → 浏览量（默认）
+# 推荐排序算法（跟账号存的 preferAlgo 对应；顺序同下拉展示）：
+#   fewer  少人优先：ready/borrow 同级，人数（0~4 同档）→ 干员权重 → 评分 → 浏览量
 #   single 单核优先：阵容只有一个六星的排前面（萌新最容易抄），再评分/浏览/人数
-#   rating 好评量优先：评分 → 浏览量 → 阵容人数（用的人多说明稳定）
+#   rating 好评量优先：评分 → 浏览量 → 阵容人数（用的人多说明稳定）——默认
 ALGOS = ('fewer', 'single', 'rating')
+DEFAULT_ALGO = 'rating'
 
 # 少人优先的干员权重：六星逐个记在 resources/oper-weights.json（用户手工调），
 # 六星以外的星级固定——数值大=阵容质量高（排序时取负进键）：
@@ -534,7 +535,7 @@ def _item(stage, item, mode, missing, training, total, detail, six=0, weight=0):
     }
 
 
-def rank_key(row, algo=ALGOS[0]):
+def rank_key(row, algo=DEFAULT_ALGO):
     """推荐排序。练度可行（mode）永远第一；之后按账号选的算法（见 ALGOS 注释）"""
     mode = MODES.index(row['mode'])
     if algo == 'fewer':
@@ -550,7 +551,7 @@ def rank_key(row, algo=ALGOS[0]):
     return (mode, -row['rating'], -row['views'], row['total'])
 
 
-def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=ALGOS[0]):
+def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=DEFAULT_ALGO):
     """拉一个关卡的作业并打分（不截断，供普通/突袭两行共用）
 
     拉取后先按好评率门槛滤一轮（rating_ok，评价量太少的不筛），
@@ -653,7 +654,7 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
     # 排序算法跟账号存（用户在搜索框旁的下拉里选）：不再按干员数自动判萌新号
     algo = snap.get('preferAlgo')
     if algo not in ALGOS:
-        algo = ALGOS[0]
+        algo = DEFAULT_ALGO
     stages = res['stages']
     workers = min(8, max(1, len(stages)))
     with ThreadPoolExecutor(max_workers=workers) as ex:

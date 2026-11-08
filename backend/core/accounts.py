@@ -104,7 +104,7 @@ def account_detail(file: str) -> dict:
         'file': file,
         'account': a,
         'stats': s,
-        'preferAlgo': snap.get('preferAlgo') or 'fewer',
+        'preferAlgo': snap.get('preferAlgo') or 'rating',
         'missing': snap.get('missing') or [],
         'chars': chars,
         'maa': snap.get('maa') or {},
