@@ -75,12 +75,24 @@ def difficulty_text(flags: int) -> str:
     return DIFF_CN.get(flags, '普通')
 
 
-def entry_variants(flags: int, variant=None) -> list:
+def entry_variants(flags: int, variant=None, stage_name=None) -> list:
     """作业集条目在 MAA 里要写成哪几条（返回 IsRaid 列表）
 
     variant='normal'/'raid' 是从「普通 / 突袭」那一行加的，只写对应那一条；
     不带 variant（卡片、详情弹窗）沿用 MAA 的做法，按作业自身的难度标志展开。
+
+    stage_name（作业自己的关卡 id）是最终裁判，覆盖上面的位标志：
+      #s 结尾（15+ 章险地）→ 一条 IsRaid=true。MaaCore 在 15+ 章点
+        ChangeToRaidDifficulty/RaidConfirm 切的就是险地（StageNavigationTask
+        的 PostStageNormalHard 模式），位标志反而经常没标（作者只写了 #s id）；
+      easy_/tough_ 开头（简单/磨难）→ 一条 IsRaid=false。这两档没有 raid 概念，
+        位标志是几都只写一条，免得标了通用位的磨难作业被展开成两条。
     """
+    if stage_name:
+        if str(stage_name).endswith('#s'):
+            return [True]
+        if str(stage_name).startswith(('easy_', 'tough_')):
+            return [False]
     if variant == 'normal' and flags & DIFF_NORMAL:
         return [False]
     if variant == 'raid' and flags & DIFF_RAID:
@@ -377,11 +389,27 @@ def fetch_ops(stage, pages=2, min_rating=0, force=False):
     return items
 
 
+def difficulty_text_for(stage_name, flags):
+    """写入日志/列表用的难度名：险地/磨难/简单按作业的 stageId 说，其余按位标志"""
+    s = str(stage_name or '')
+    if s.endswith('#s'):
+        return '险地'
+    if s.startswith('tough_'):
+        return '磨难'
+    if s.startswith('easy_'):
+        return '简单'
+    return difficulty_text(flags)
+
+
 def _item(stage, item, mode, missing, training, total, detail, six=0):
     meta = item['meta']
     content = item['content']
     doc = content.get('doc') or {}
     flags = difficulty_flags(content)
+    # 险地行（stageId 以 #s 结尾）的作业位标志大多没标（作者只写了 #s id），
+    # 展示与写入一律按险地处理
+    if str(stage.get('stageId') or '').endswith('#s'):
+        flags = DIFF_RAID
     return {
         'id': meta.get('id'),
         'copilotId': meta.get('id'),
@@ -393,7 +421,8 @@ def _item(stage, item, mode, missing, training, total, detail, six=0):
         'total': total,
         'mode': mode,
         'difficulty': flags,
-        'difficultyText': difficulty_text(flags),
+        'difficultyText': difficulty_text_for(stage.get('stageId'), flags),
+        'difficultyCN': stage.get('difficultyCN') or '',
         'missing': missing,
         'training': training,
         'sixCount': six,
@@ -467,9 +496,18 @@ def match_stage(stage, owned_map, pages=2, min_rating=0, limit=12, variant=None)
 def stage_variants(stage, rows, limit=12):
     """把一个关卡的作业拆成展示行
 
-    有突袭版的关卡拆两行：普通一行、突袭一行，通用作业（difficulty=3）两边都出现；
-    没有突袭版的关卡只有一行（variant 固定 normal，作业集据此只写普通那一条）。
+    普通/突袭（0-9 章与活动）：有突袭版的关卡拆两行，通用作业（difficulty=3）
+    两边都出现；没有突袭版的关卡只有一行（variant 固定 normal）。
+    磨难/简单（10-14 章 easy_/tough_ 独立 id）：各自的关卡 id 已经决定了难度，
+    不再按位标志筛，一行 variant=normal（写入 MAA 只落 IsRaid=false 一条）。
+    险地（15+ 章 #s）：一行 variant=raid——写入 MAA 落 IsRaid=true，
+    MaaCore 在 15+ 章正是用它切险地。
     """
+    diff = stage.get('difficulty')
+    if diff in ('easy', 'tough'):
+        return [_pack_stage(dict(stage, variant='normal'), rows, limit=limit)]
+    if diff == 'risky':
+        return [_pack_stage(dict(stage, variant='raid'), rows, limit=limit)]
     if not stage.get('raid'):
         return [_pack_stage(dict(stage, variant='normal'), rows, limit=limit)]
     return [
@@ -478,6 +516,27 @@ def stage_variants(stage, rows, limit=12):
         _pack_stage(dict(stage, variant='raid'),
                     [r for r in rows if r['difficulty'] & DIFF_RAID], limit=limit),
     ]
+
+
+def _base_stage_id(sid):
+    """难度变体归并到同一主关 id 下排序：tough_12-06 / main_15-02#s → main_12-06 / main_15-02"""
+    s = re.sub(r'^(?:easy|tough)_', 'main_', str(sid or ''))
+    return s.split('#')[0]
+
+
+def row_sort_key(packed):
+    """结果行排序：代号间按主关 id；同代号内 磨难/险地 → 普通/标准（→ 突袭）→ 简单
+
+    10-14 章磨难、15+ 章险地是用户真正要打的主难度，行置顶；0-9 章的突袭
+    变体跟在普通/标准行后面（普通→突袭的习惯顺序）；简单永远垫底。
+    """
+    st = packed['stage']
+    if st.get('difficulty') == 'risky':        # 险地是 15+ 章的主难度，置顶
+        return (_base_stage_id(st.get('stageId')), 0)
+    rank = {'tough': 0, 'easy': 2}.get(st.get('difficulty'), 1)
+    if st.get('variant') == 'raid':
+        rank += 0.5
+    return (_base_stage_id(st.get('stageId')), rank)
 
 
 def search(keyword, snap, pages=2, min_rating=0, limit=12):
@@ -506,18 +565,20 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
             stages))
 
     # 有突袭版的关卡拆成两行：普通一行、突袭一行，通用作业（difficulty=3）
-    # 在两边都出现；没有突袭版的关卡只有一行。
+    # 在两边都出现；没有突袭版的关卡只有一行。主线难度变体（简单/磨难/险地）
+    # 是独立关卡 id，天然各成一行，排序见 row_sort_key。
     results = []
     for s, rows in collected:
         results.extend(stage_variants(s, rows, limit=limit))
 
-    results.sort(key=lambda r: (r['stage'].get('stageId') or '',
-                                r['stage'].get('variant') == 'raid'))
+    results.sort(key=row_sort_key)
     return {
         'mode': res['mode'],
         'title': res['title'],
         'keyword': res['keyword'],
         'stages': results,
+        # 「下一关」按钮的数据：按置顶行（用户正在看的难度视角）推进
+        'next': resources.next_stage(results[0]['stage']) if results else None,
     }
 
 

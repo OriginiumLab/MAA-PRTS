@@ -29,7 +29,7 @@ def make_icon():
     try:
         from PIL import Image, ImageDraw
     except ImportError:
-        print('未安装 Pillow，跳过图标生成（用系统默认图标）')
+        print('Pillow not installed, skipping icon generation (system default icon will be used)')
         return None
 
     os.makedirs(os.path.dirname(ICON), exist_ok=True)
@@ -80,7 +80,7 @@ def make_icon():
 
     sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     img.save(ICON, format='ICO', sizes=sizes)
-    print('图标已生成：%s' % ICON)
+    print('icon generated: %s' % ICON)
     return ICON
 
 
@@ -159,10 +159,10 @@ def build():
     if icon and os.path.isfile(icon):
         cmd[cmd.index('--windowed') + 1:cmd.index('--windowed') + 1] = ['--icon', icon]
 
-    print('执行：\n  ' + ' '.join(cmd))
+    print('executing:\n  ' + ' '.join(cmd))
     rc = subprocess.call(cmd, cwd=HERE)
     if rc != 0:
-        print('\n打包失败，退出码 %d（中间产物保留在 build\\work 以便排查）' % rc)
+        print('\nbuild failed, exit code %d (intermediates kept in build\\work for inspection)' % rc)
         return rc
 
     # 全新产物合并覆盖进发布包：同名文件覆盖，config/、debug/ 等一律不动。
@@ -171,8 +171,8 @@ def build():
     try:
         merge_overwrite(fresh, pkg_dir)
     except PermissionError:
-        print('\n覆盖发布包失败：build\\MAA-PRTS 里有文件被占用（MAA-PRTS.exe 是否还在运行？）。')
-        print('关闭程序后重跑本脚本即可；全新产物保留在 %s。' % fresh)
+        print('\nfailed to merge into build\\MAA-PRTS: files are locked (is MAA-PRTS.exe still running?).')
+        print('Close it and rerun this script; fresh output kept in %s.' % fresh)
         return 1
     stale = count_stale(fresh, pkg_dir)
 
@@ -180,13 +180,14 @@ def build():
     shutil.rmtree(work_dir, ignore_errors=True)
 
     exe = os.path.join(pkg_dir, 'MAA-PRTS.exe')
-    print('\n完成：%s' % exe)
+    print('\ndone: %s' % exe)
     if os.path.isfile(exe):
         size = os.path.getsize(exe) / 1024 / 1024
-        print('  主程序 %.1f MB' % size)
+        print('  main exe %.1f MB' % size)
     if stale:
-        print('  提示：发布包里有 %d 个旧版本残留文件未清理（config/、debug/ 不计），'
-              '发版压缩前可手动删除整个 build\\MAA-PRTS 重新打包' % stale)
+        print('  hint: %d stale files from previous builds remain in the package '
+              '(config/ and debug/ excluded); delete build\\MAA-PRTS entirely and rebuild '
+              'before zipping a release' % stale)
     return 0
 
 

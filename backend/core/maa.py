@@ -307,13 +307,14 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
 
     old = list(cop.get('TaskList') or []) if mode == 'append' else []
     new_entries, files = [], []
-    cache = {}                      # copilotId → (文件名, flags)，同一份作业被普通/突袭两行各加一次时不重复下载
+    # copilotId → (文件名, flags, stage_name)，同一份作业被普通/突袭两行各加一次时不重复下载
+    cache = {}
 
     for idx, it in enumerate(items, 1):
         cid = int(it['copilotId'])
         stage_code = it.get('stageCode') or str(cid)
         if cid in cache:
-            fname, flags = cache[cid]
+            fname, flags, sname = cache[cid]
             log('[%d/%d] 复用已下载的作业 #%s %s' % (idx, len(items), cid, it.get('title') or ''))
         else:
             log('[%d/%d] 下载作业 #%s %s' % (idx, len(items), cid, it.get('title') or ''))
@@ -322,23 +323,24 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
             for n in notes:
                 log('    修正：%s' % n)
             flags = copilot.difficulty_flags(content)
+            sname = content.get('stage_name') or ''
             fname = '%s_%s.json' % (_safe(stage_code), cid)
             os.makedirs(_copilot_dir(d), exist_ok=True)
             fpath = os.path.join(_copilot_dir(d), fname)
             with io.open(fpath, 'w', encoding='utf-8') as f:
                 json.dump(content, f, ensure_ascii=False, indent=2)
-            cache[cid] = (fname, flags)
+            cache[cid] = (fname, flags, sname)
         if fname not in files:
             files.append(fname)
 
-        # 作业集里带 variant 的条目是从「普通 / 突袭」那一行加的，只写对应那一条，
-        # 这样同一关可以分别挑一份普通作业和一份突袭作业；不带 variant 的（卡片、
-        # 详情弹窗）沿用 MAA 的做法，按作业自己的难度标志展开。
-        raids = copilot.entry_variants(flags, it.get('variant'))
+        # 作业集里带 variant 的条目是从「普通 / 突袭 / 磨难 / 险地」那一行加的，
+        # 只写对应那一条；不带 variant 的（卡片、详情弹窗）按作业自己的难度展开。
+        # 险地/磨难/简单以作业 stage_name 为准（entry_variants 里说明）。
+        raids = copilot.entry_variants(flags, it.get('variant'), sname)
         for is_raid in raids:
             new_entries.append({
-                # Name 只是 MAA 列表里的标签，用可读的名字（悖论关卡就是「悖论·仇白」），
-                # 没给名字的仍然退回关卡代号
+                # Name 只是 MAA 列表里的标签，用可读的名字（悖论关卡就是「悖论·仇白」；
+                # 难度变体行是「12-7·磨难」），没给名字的仍然退回关卡代号
                 'Name': it.get('name') or stage_code,
                 'IsNavNameOverride': False,
                 'FilePath': 'config\\copilot\\' + fname,
@@ -348,8 +350,8 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
                 'Index': 0,
             })
         log('    难度：%s → 写入 %s' % (
-            copilot.difficulty_text(flags),
-            ' + '.join('突袭' if r else '普通' for r in raids) or '无'))
+            copilot.difficulty_text_for(sname, flags),
+            ' + '.join('突袭/险地' if r else '普通' for r in raids) or '无'))
 
     task_list = old + new_entries
     for i, t in enumerate(task_list):
