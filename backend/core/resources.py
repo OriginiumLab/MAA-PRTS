@@ -390,6 +390,112 @@ def char_table() -> dict:
     return pack().get('chars') or {}
 
 
+# ---------------------------------------------------------------- 干员联想
+# GB2312 一级字库按拼音分组的编码区间：查汉字首字母用（标准库没拼音库，
+# 这张短表覆盖 3755 个常用字）。二级字库的生僻字查不到，按通配处理
+# （首字母序列里留空位，输入对应位任意字母都算命中），中文子串搜索兜底。
+# 多音字按区间归属取（如「重」归 z），干员搜索场景够用。
+_GB_PINYIN = (
+    (0xB0A1, 0xB0C4, 'a'), (0xB0C5, 0xB2C0, 'b'), (0xB2C1, 0xB4ED, 'c'),
+    (0xB4EE, 0xB6E9, 'd'), (0xB6EA, 0xB7A1, 'e'), (0xB7A2, 0xB8C0, 'f'),
+    (0xB8C1, 0xB9FD, 'g'), (0xB9FE, 0xBBF6, 'h'), (0xBBF7, 0xBFA5, 'j'),
+    (0xBFA6, 0xC0AB, 'k'), (0xC0AC, 0xC2E7, 'l'), (0xC2E8, 0xC4C2, 'm'),
+    (0xC4C3, 0xC5B5, 'n'), (0xC5B6, 0xC5BD, 'o'), (0xC5BE, 0xC6D9, 'p'),
+    (0xC6DA, 0xC8BA, 'q'), (0xC8BB, 0xC8F5, 'r'), (0xC8F6, 0xCBF9, 's'),
+    (0xCBFA, 0xCDD9, 't'), (0xCDDA, 0xCEF3, 'w'), (0xCEF4, 0xD1B8, 'x'),
+    (0xD1B9, 0xD4D0, 'y'), (0xD4D1, 0xD7F9, 'z'),
+)
+
+# 二级字库的拼音补丁：GB2312 一级区间表按拼音排、覆盖 3755 常用字，
+# 二级字库按部首排、区间法完全无效。干员名里查不到首字母的就这 49 个
+# （扫描全部干员名得出），逐个补上——匹配要精确，不留通配位。
+_EXTRA_INITIALS = {
+    '吽': 'h', '啾': 'j', '喙': 'h', '娅': 'y', '孑': 'j', '嵯': 'c',
+    '幡': 'f', '弑': 's', '撷': 'x', '曦': 'x', '枳': 'z', '栎': 'l',
+    '桠': 'y', '梓': 'z', '溟': 'm', '濯': 'z', '燧': 's', '琥': 'h',
+    '瑕': 'x', '祐': 'y', '箸': 'z', '绮': 'q', '缇': 't', '缪': 'm',
+    '翎': 'l', '聆': 'l', '芙': 'f', '荻': 'd', '莓': 'm', '莺': 'y',
+    '菈': 'l', '葚': 's', '薇': 'w', '蚺': 'r', '谟': 'm', '踝': 'h',
+    '钼': 'm', '铎': 'd', '锏': 'j', '隼': 's', '雉': 'z', '霆': 't',
+    '鲨': 's', '鸮': 'x', '麒': 'q', '麟': 'l', '黛': 'd',
+}
+
+_char_initials_cache = [None]
+
+
+def _initial(ch: str) -> str:
+    """单字符拼音首字母；ASCII 字母数字原样小写，查不到的返回 ''（占位）"""
+    if ch.isascii():
+        return ch.lower() if ch.isalnum() else ''
+    hit = _EXTRA_INITIALS.get(ch)
+    if hit:
+        return hit
+    try:
+        b = ch.encode('gb2312')
+    except UnicodeEncodeError:
+        return ''
+    code = b[0] << 8 | b[1]
+    for lo, hi, letter in _GB_PINYIN:
+        if lo <= code <= hi:
+            return letter
+    return ''
+
+
+_ANY = '\x00'   # 生僻字 / 连字符等查不到首字母的占位：匹配时当作通配
+
+
+def _char_initials() -> dict:
+    """{干员名: 首字母序列}（银灰 → 'yh'），全进程只算一次
+
+    查不到首字母的字符用 _ANY 占位而不是丢掉——丢了会错位，「夜莺」就
+    变成 'y' 而匹配不上 'ye' 了。"""
+    with _lock:
+        if _char_initials_cache[0] is None:
+            out = {}
+            for c in char_table().values():
+                name = str(c.get('name') or '')
+                if name:
+                    out[name] = ''.join(_initial(ch) or _ANY for ch in name)
+            _char_initials_cache[0] = out
+        return _char_initials_cache[0]
+
+
+def _ini_match(ini: str, q: str) -> bool:
+    """字母输入按首字母序列前缀**精确**匹配
+
+    通配位（生僻字查不到首字母，如「伊芙利特」的「芙」）不匹配任何
+    字母——yhlt 不能靠通配碰上 y?lt（用户明确要精确）；这类干员用
+    中文名字搜索。"""
+    if len(q) > len(ini):
+        return False
+    for i, ch in enumerate(q):
+        s = ini[i]
+        if s == _ANY or s != ch:
+            return False
+    return True
+
+
+def suggest_chars(q: str, limit: int = 12) -> list:
+    """干员联想：拼音首字母（yh → 银灰）或名字片段，星级降序
+
+    首字母是精确前缀匹配（不含通配）；黑名单弹窗的快速搜索用。"""
+    q = str(q or '').strip().lower()
+    if not q:
+        return []
+    out = []
+    for c in char_table().values():
+        name = str(c.get('name') or '')
+        if not name:
+            continue
+        if q not in name.lower() and not _ini_match(_char_initials().get(name, ''), q):
+            continue
+        out.append({'name': name,
+                    'rarity': int(c.get('rarity') or 0),
+                    'profession': str(c.get('profession') or '')})
+    out.sort(key=lambda x: (-x['rarity'], x['name']))
+    return out[:limit]
+
+
 def skill_table() -> dict:
     return pack().get('skills') or {}
 

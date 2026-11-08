@@ -356,7 +356,25 @@ def _pull(params, pages=2, limit=50):
 
 
 def fetch_ops(stage, pages=2, min_rating=0, force=False):
-    """拉某个关卡的作业。
+    """拉某个关卡的作业（出口滤掉作者黑名单）。
+
+    过滤包在 _fetch_ops_raw 外面：缓存里存的是全量，黑名单增删立即生效，
+    不用等 10 分钟缓存过期。
+    """
+    items = _fetch_ops_raw(stage, pages=pages, min_rating=min_rating, force=force)
+    ban = set()
+    for row in (settings.load().get('authorBlacklist') or []):
+        aid = str((row or {}).get('id') or '').strip() if isinstance(row, dict) else ''
+        if aid:
+            ban.add(aid)
+    if ban:
+        items = [i for i in items
+                 if str((i['meta'].get('uploader_id') or '')).strip() not in ban]
+    return items
+
+
+def _fetch_ops_raw(stage, pages=2, min_rating=0, force=False):
+    """拉某个关卡的作业（原始全量，含黑名单作者）。
 
     `levelKeyword` 只对作业站认识的关卡 id 生效；对 TR-x 这类关卡会退化成
     「返回全站热门」，所以必须用 stage_name 二次校验，再退回 document 搜索。
@@ -418,6 +436,7 @@ def _item(stage, item, mode, missing, training, total, detail, six=0):
         'title': doc.get('title') or '(无标题)',
         'details': (doc.get('details') or '')[:400],
         'uploader': meta.get('uploader') or doc.get('uploader') or '',
+        'uploaderId': str(meta.get('uploader_id') or '').strip(),
         'total': total,
         'mode': mode,
         'difficulty': flags,
@@ -580,6 +599,33 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
         # 「下一关」按钮的数据：按置顶行（用户正在看的难度视角）推进
         'next': resources.next_stage(results[0]['stage']) if results else None,
     }
+
+
+def suggest_authors(name, timeout=10):
+    """按名字反查作业站作者：document 全文搜一页 → 聚合名字匹配的作者
+
+    作业站没有公开的「按名搜用户」接口，但作者名几乎都会署在自己作业的
+    标题 / 简介里，document 搜一页（100 条）再按 meta.uploader 过滤聚合
+    就够黑名单选人用了。id 是唯一键，count 是这次搜索结果里的命中份数。
+    """
+    q = str(name or '').strip()
+    if not q:
+        return []
+    try:
+        items = _pull({'document': q}, pages=1, limit=100)
+    except Exception:  # noqa: BLE001 - 没网就当没搜到，前端还有 id 手填兜底
+        items = []
+    low = q.lower()
+    out = {}
+    for it in items:
+        meta = it['meta']
+        up = str(meta.get('uploader') or '')
+        aid = str(meta.get('uploader_id') or '').strip()
+        if not aid or low not in up.lower():
+            continue
+        rec = out.setdefault(aid, {'id': aid, 'name': up, 'count': 0})
+        rec['count'] += 1
+    return sorted(out.values(), key=lambda r: (-r['count'], r['name']))[:12]
 
 
 def operation_detail(copilot_id):

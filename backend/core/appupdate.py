@@ -49,7 +49,7 @@ import urllib.request
 import webbrowser
 import zipfile
 
-from . import settings
+from . import net, settings
 
 # 只认这一个仓库：写死，不读设置，防止被改配置指向别处
 APP_REPO = 'OriginiumLab/MAA-PRTS'
@@ -179,14 +179,6 @@ def _ua() -> str:
     return UA % (_current(), APP_REPO)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_opener = urllib.request.build_opener(_NoRedirect)
-
-
 def _head_tag(timeout=TIMEOUT_HEAD) -> str:
     """不跟随跳转，从 302 的 Location 里取 tag：releases/latest → releases/tag/v2.4.0
 
@@ -198,7 +190,9 @@ def _head_tag(timeout=TIMEOUT_HEAD) -> str:
                                      headers={'User-Agent': _ua()})
         loc = ''
         try:
-            with _opener.open(req, timeout=timeout) as r:
+            # opener 每次现建（net 会读最新代理设置），检查频率低不心疼；
+            # redirect=False 才能从 302 里拿 Location
+            with net.open(req, timeout=timeout, redirect=False) as r:
                 loc = r.headers.get('Location') or r.geturl()
         except urllib.error.HTTPError as e:
             if e.code in (301, 302, 303, 307, 308):
@@ -224,7 +218,7 @@ def _api_latest(timeout=TIMEOUT_API) -> dict:
         'User-Agent': _ua(),
         'Accept': 'application/vnd.github+json',
     })
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with net.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode('utf-8'))
 
 
@@ -459,7 +453,7 @@ def download(force=False) -> dict:
 
 def _get(url, timeout):
     req = urllib.request.Request(url, headers={'User-Agent': _ua()})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with net.open(req, timeout=timeout) as r:
         return r.read()
 
 
