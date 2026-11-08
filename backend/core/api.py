@@ -138,6 +138,15 @@ def api_account_maa(_q, body):
     return {'maa': accounts.save_maa_meta(body['file'], patch)}
 
 
+def api_account_pref(_q, body):
+    """账号级用户偏好写回账号 json。body: {"file": ..., "preferAlgo": rating/fewer/single}"""
+    body = body or {}
+    algo = (body.get('preferAlgo') or '').strip()
+    if algo not in copilot.ALGOS:
+        raise ValueError('未知算法：%s' % (algo or '(空)'))
+    return {'pref': accounts.save_pref(_account_for(body.get('file')), {'preferAlgo': algo})}
+
+
 def api_account_remove(_q, body):
     return {'removed': accounts.remove_account((body or {}).get('file'))}
 
@@ -450,6 +459,7 @@ ROUTES = {
     '/api/accounts': api_accounts,
     '/api/account': api_account,
     '/api/account/maa': api_account_maa,
+    '/api/account/pref': api_account_pref,
     '/api/account/remove': api_account_remove,
     '/api/account/refresh': api_refresh,
     '/api/account/import-maa': api_account_import_maa,
