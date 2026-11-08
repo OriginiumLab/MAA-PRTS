@@ -24,6 +24,8 @@
 | `core/copilot.py` | 作业站接口 + 干员要求匹配算法 |
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
+| `core/packsync.py` | 资源包自动更新：读远端 manifest → 校验 sha256/条数 → 原子替换 |
+| `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.cmd 替换 |
 | `core/maa.py` | MAA 进程控制、`gui.new.json` 读写、作业文件下载 |
 | `core/tasks.py` | 内存任务表：状态、日志、结果，供前端轮询 |
 
@@ -49,7 +51,7 @@ main()
 | 可写数据 | 运行根 | 运行根（exe 所在目录） |
 
 「运行根」＝程序在哪个目录运行，数据就落在哪个目录，**任何模式都不向上探测**：
-源码运行取启动时的工作目录（`启动.bat` 已先 `cd` 到仓库根），打包运行取 exe 所在目录。
+源码运行取启动时的工作目录（`run.bat` 已先 `cd` 到仓库根），打包运行取 exe 所在目录。
 所以在仓库里跑 exe，数据写在 `build/MAA-PRTS/` 自己的 `config/` 里，和源码运行互不
 干扰；拷给别人也一样，数据始终跟 exe 走。程序**不会**写运行根以外的地方。
 
@@ -74,6 +76,12 @@ main()
 | GET | `/api/activities` | 近期活动列表（快捷栏数据源） |
 | GET | `/api/gamedata` | 资源包版本状态（含 `pending` 更新提示） |
 | POST | `/api/gamedata/ack` | 清掉待提示的资源更新 |
+| GET | `/api/pack/status` | 远端有没有新的资源包（只读；`?force=1` 给更长超时） |
+| POST | `/api/pack/update` | 下载并安装新资源包，返回新的 `pack` 与 `gamedata` |
+| GET | `/api/app/status` | 程序本体有没有新版本（只读；`?force=1` 跳过 6 小时节流） |
+| POST | `/api/app/download` | 下载安装包并校验，**不替换**，等用户点「重启并安装」 |
+| POST | `/api/app/install` | 解压 + 拉起 install.cmd + 退出程序（源码模式直接拒绝） |
+| POST | `/api/app/open` | 用系统浏览器打开 Release 页 |
 | GET | `/api/op?id=` | 作业详情（干员与要求、动作数、`maa://` 代码） |
 | GET | `/api/maa/status` | MAA 是否运行、配置列表、当前配置 |
 | GET | `/api/maa/probe?dir=` | 检测目录是不是 MAA 根目录（引导/设置用）；附干员识别数据 `operbox/operboxCount/operboxSyncTime` |
@@ -107,9 +115,10 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 | 程序版本 `app_version()` | 发布包根 `version.json`（发版 CI 按 PR 标题版号写入）；缺失即 dev 版 | 日志、设置页、请求头 `Server` |
 | 资源版本 | `resources/arknights.json` 的 `version` + `fingerprint` | 判断游戏数据有没有变 |
 
-资源包由 `make_pack.py` 生成时会写入 `version`（生成日期，如 `2026.11.05`）和
-`fingerprint`（内容指纹，同一天多次生成也能区分）。`version.check()` 把它和
-`config/gamedata.json` 里记的「上次见到的版本」比对：
+资源包由 `make_pack.py` 生成时会写入 `version`（**游戏版本日期**，如 `2026.10.29`，
+取自上游 `version` 文件）和 `fingerprint`（纯内容哈希：生成日期和本机学到的分支名都不参与，
+同一份数据在哪台机器上生成都一样）。`version.check()` 把它和 `config/gamedata.json`
+里记的「上次见到的版本」比对：
 
 | 情况 | 行为 |
 |---|---|
@@ -123,6 +132,49 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 资源包装载顺序是「项目目录 `resources/arknights.json` → 程序内置那份」，
 所以想更新游戏数据，把新的 `arknights.json` 覆盖到项目 `resources/` 里就行，
 不用重新打包；下次启动就会看到更新提示，新活动也会排到快捷栏最前面。
+
+### 资源包自动更新（`packsync.py`）
+
+启动约 2.5 秒后前端调 `/api/pack/status`：读 `pack-data` 分支上的 `pack-manifest.json`，
+拿 `fingerprint` 和本地那份比；不一样就 `/api/pack/update` 下载、校验、替换。
+**检查失败一律静默**——没网也要能正常用旧包。
+
+| 环节 | 规则 |
+|---|---|
+| 清单源 | `raw.githubusercontent` → `gh-proxy` → `jsDelivr`，逐个回退（都指向 `pack-data` 分支） |
+| 校验 | 字节数 + `sha256` 必须和 manifest 一致；不是合法 json、缺 `chars/stages` 直接拒 |
+| 防退化 | 各表条数不得比本地少（半截包会把数据清零）；悖论条数同理 |
+| 落盘 | 写 `<运行根>/resources/*.json`，旧文件留 `.bak`，`os.replace` 原子替换 |
+| 生效 | `arknights.json` → `resources.clear_cache()`；`paradox.json` 本就按 mtime 重读 |
+| 源码模式 | 默认不覆盖（免得弄脏工作区），`MAA_PRTS_PACK_FORCE=1` 可强制 |
+
+分支名可用环境变量覆盖：`MAA_PRTS_PACK_REPO` / `MAA_PRTS_PACK_BRANCH`（默认
+`OriginiumLab/MAA-PRTS` + `pack-data`），本地模拟远端时用得上。
+
+上游那半边在 GitHub Actions（`.github/workflows/pack.yml`，每天北京时间 12:00 / 16:00）：
+取上游 commit sha → 和包里的 `sourceCommit` 比 → 变了才按 sha 下载 9 个 json →
+重新生成 → 条数校验 → 推到 `pack-data` 分支（单提交强推）。
+**不推 `main`**：`main` 的规则集强制 PR + 审批，bot 不在绕过名单里。
+
+### 程序本体自动更新（`appupdate.py`）
+
+和资源包是两条完全独立的链路：资源包 0.6 MB、静默换掉；程序 13 MB、
+**必须用户自己点重启**。启动 4 秒后查一次，成功检查后 6 小时内不再自动查。
+
+| 环节 | 规则 |
+|---|---|
+| 查版本 | `HEAD github.com/.../releases/latest` 读 302 的 `Location` 拿 tag，**不消耗 API 配额** |
+| 拿详情 | 版本确实更新了才请求 `api.github.com/.../releases/latest`（changelog + `assets[].digest`） |
+| 降级 | API 不可用时仍提示版本号，但只给「前往下载页」，不给安装按钮（拿不到校验值） |
+| 版本比较 | 按数字比（`2.10 > 2.9`）；预发布 `-beta.N` 永远小于同号正式；解析失败一律不触发 |
+| 下载 | `github.com` 直链 → `gh-proxy` → `ghfast`，校验字节数 + sha256 + zip 内含 `MAA-PRTS.exe` |
+| 解压 | 拒绝绝对路径与 `..`（zip-slip），落到 `<运行根>/update/stage/` |
+| 替换 | 程序退出后由 `update/install.cmd` 执行：等进程消失 → 备份 exe → `robocopy /MIR` 只镜像 `_internal` → 覆盖 exe → 重启 |
+| 不动的东西 | `config/`、`debug/`、`resources/`——那是用户数据，脚本里一个字都不出现 |
+| 结算 | 写 `update/pending.json`；新版本启动时版本号对上才算成功，否则日志留警告 |
+
+`install()` 需要让整个进程退出，而 api 层不能 import main，所以 main 启动时
+把退出函数注册进 `appupdate.set_quit_hook()`。源码模式一律拒绝自动替换。
 
 ## 匹配算法（`copilot.py`）
 

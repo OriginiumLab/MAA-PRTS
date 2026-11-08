@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from core import accounts, api, settings, tasks, version  # noqa: E402
+from core import accounts, api, appupdate, settings, tasks, version  # noqa: E402
 
 WEB = settings.static_dir()
 LOG_PATH = settings.LOG_PATH
@@ -326,9 +326,10 @@ def _quit(code=0, reason='退出'):
 
 def main():
     if not os.path.isdir(WEB):
-        print('[错误] 未找到页面目录：%s' % WEB)
-        print('       程序在哪个目录运行就用哪个目录的资源——源码运行请在项目根')
-        print('       目录启动（双击 启动.bat）；打包运行请保持 exe 与 _internal 同级。')
+        print('[error] frontend dir not found: %s' % WEB)
+        print('        Resources are loaded relative to the working directory --')
+        print('        run from the project root (double-click run.bat) in source mode,')
+        print('        or keep exe next to _internal in packaged mode.')
         return 1
 
     no_window = '--no-window' in sys.argv
@@ -339,6 +340,9 @@ def main():
     time.sleep(0.25)
 
     settings.ensure_dirs()          # config/ 与 debug/ 在启动时才建（import 不建）
+    # 程序自更新：装完后由 api 层调 install()，需要让整个进程退出，
+    # 而 api 不能 import main，所以反过来把退出函数注册进去
+    appupdate.set_quit_hook(lambda reason: _quit(0, reason))
     st = settings.load()
     accounts.ensure_tokens()
     log('=' * 56)
@@ -359,6 +363,16 @@ def main():
             pass
     log('MAA 目录  %s' % maa_line)
     log('=' * 56)
+    # 上一次「重启并安装」到底成没成：pending.json 里记着目标版本
+    try:
+        up = appupdate.on_start()
+        if up.get('state') == 'done':
+            log('程序已更新：%s → %s' % (up.get('from'), up.get('to')))
+        elif up.get('state') == 'stale':
+            log('[警告] 上次更新到 %s 没生效（当前仍是 %s），安装包已保留'
+                % (up.get('to'), version.app_version()))
+    except Exception:
+        log(traceback.format_exc())
     if accounts.TOKENS_WARNING:
         log('[警告] ' + accounts.TOKENS_WARNING)
 

@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICON = os.path.join(HERE, 'resources', 'assets', 'app.ico')
@@ -28,7 +29,7 @@ def make_icon():
     try:
         from PIL import Image, ImageDraw
     except ImportError:
-        print('未安装 Pillow，跳过图标生成（用系统默认图标）')
+        print('Pillow not installed, skipping icon generation (system default icon will be used)')
         return None
 
     os.makedirs(os.path.dirname(ICON), exist_ok=True)
@@ -79,18 +80,53 @@ def make_icon():
 
     sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     img.save(ICON, format='ICO', sizes=sizes)
-    print('图标已生成：%s' % ICON)
+    print('icon generated: %s' % ICON)
     return ICON
 
 
+def _same_content(a, b):
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    import hashlib
+    ha = hashlib.sha256()
+    with open(a, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            ha.update(chunk)
+    hb = hashlib.sha256()
+    with open(b, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            hb.update(chunk)
+    return ha.hexdigest() == hb.hexdigest()
+
+
 def merge_overwrite(src, dst):
-    """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动"""
+    """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动
+
+    单文件级重试：刚被 taskkill 的 exe 句柄释放是异步的，杀软也可能瞬时
+    锁住新 DLL，重试几秒基本都能过去。重试仍锁时比对内容：一样就不覆盖
+    （典型如被 MAA.exe 加载的 VCRUNTIME140.dll，每次构建内容相同，覆盖
+    本无意义）——旧版 MAA-PRTS 启动的 MAA 会锁着这些文件，跳过它们才能
+    把带修复的新 exe 递进去，锁循环自然解开。
+    """
     for base, _dirs, files in os.walk(src):
         rel = os.path.relpath(base, src)
         target = dst if rel == '.' else os.path.join(dst, rel)
         os.makedirs(target, exist_ok=True)
         for f in files:
-            shutil.copy2(os.path.join(base, f), os.path.join(target, f))
+            s = os.path.join(base, f)
+            t = os.path.join(target, f)
+            for attempt in range(6):
+                try:
+                    shutil.copy2(s, t)
+                    break
+                except PermissionError:
+                    if os.path.isfile(t) and _same_content(s, t):
+                        print('locked but identical, skipped: %s' % t)
+                        break
+                    if attempt == 5:
+                        print('still locked after retries: %s' % t)
+                        raise
+                    time.sleep(0.5)
 
 
 def count_stale(fresh, pkg):
@@ -144,10 +180,10 @@ def build():
     if icon and os.path.isfile(icon):
         cmd[cmd.index('--windowed') + 1:cmd.index('--windowed') + 1] = ['--icon', icon]
 
-    print('执行：\n  ' + ' '.join(cmd))
+    print('executing:\n  ' + ' '.join(cmd))
     rc = subprocess.call(cmd, cwd=HERE)
     if rc != 0:
-        print('\n打包失败，退出码 %d（中间产物保留在 build\\work 以便排查）' % rc)
+        print('\nbuild failed, exit code %d (intermediates kept in build\\work for inspection)' % rc)
         return rc
 
     # 全新产物合并覆盖进发布包：同名文件覆盖，config/、debug/ 等一律不动。
@@ -156,8 +192,8 @@ def build():
     try:
         merge_overwrite(fresh, pkg_dir)
     except PermissionError:
-        print('\n覆盖发布包失败：build\\MAA-PRTS 里有文件被占用（MAA-PRTS.exe 是否还在运行？）。')
-        print('关闭程序后重跑本脚本即可；全新产物保留在 %s。' % fresh)
+        print('\nfailed to merge into build\\MAA-PRTS: files are locked (is MAA-PRTS.exe still running?).')
+        print('Close it and rerun this script; fresh output kept in %s.' % fresh)
         return 1
     stale = count_stale(fresh, pkg_dir)
 
@@ -165,13 +201,14 @@ def build():
     shutil.rmtree(work_dir, ignore_errors=True)
 
     exe = os.path.join(pkg_dir, 'MAA-PRTS.exe')
-    print('\n完成：%s' % exe)
+    print('\ndone: %s' % exe)
     if os.path.isfile(exe):
         size = os.path.getsize(exe) / 1024 / 1024
-        print('  主程序 %.1f MB' % size)
+        print('  main exe %.1f MB' % size)
     if stale:
-        print('  提示：发布包里有 %d 个旧版本残留文件未清理（config/、debug/ 不计），'
-              '发版压缩前可手动删除整个 build\\MAA-PRTS 重新打包' % stale)
+        print('  hint: %d stale files from previous builds remain in the package '
+              '(config/ and debug/ excluded); delete build\\MAA-PRTS entirely and rebuild '
+              'before zipping a release' % stale)
     return 0
 
 

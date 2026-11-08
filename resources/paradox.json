@@ -2214,8 +2214,10 @@
 }
 },
 "count": 316,
+"fingerprint": "aabace29",
 "gameVersion": "26-10-29-15-36-11-33649006",
-"generatedAt": "2026-11-05T13:19:50",
+"generatedAt": "2026-11-05T19:09:34Z",
 "schema": 2,
-"source": "ArknightsGameResource"
+"source": "ArknightsGameResource",
+"sourceCommit": "6e5c0541299ef0261bc23de7cf8a03c3ba1aec6b"
 }

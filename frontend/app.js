@@ -8,6 +8,7 @@ const S = {
   maa: {}, activities: [],
   basket: [], result: null, searching: false, appInfo: null,
   paths: {}, pack: {}, setup: {}, gamedata: {}, onboarded: false,
+  appUpdate: null, updateBusy: false,
   paradoxPending: [],
 };
 
@@ -119,6 +120,10 @@ async function boot() {
     fillBasketProfiles();
     if (S.current) await selectAccount(S.current, true);
     startPing();
+    // 资源包后台自动更新：晚几秒，别和首屏渲染抢网络
+    setTimeout(packAutoSync, 2500);
+    // 程序本体检查更晚一点：两条链路错开，别同时占网络
+    setTimeout(appAutoCheck, 4000);
 
     // 首次使用：先让用户填 token 与 MAA 目录，再进主流程
     // （needsMaa 按上次账号绑定的 MAA 判断——账号各自配了 MAA 就不再拦）
@@ -462,6 +467,179 @@ function renderUpdate() {
   });
 }
 
+/* ------------------------------------------------------------ 资源包自动更新 */
+/* 服务器每次同步完会把新包提交到仓库，这里启动几秒后悄悄比对一次：
+   有新包就下下来直接换上（0.6 MB，很快），失败一律静默——没网也要能正常用旧包。 */
+async function packAutoSync() {
+  if (S.settings && S.settings.autoUpdatePack === false) return;
+  try {
+    const st = await api('/api/pack/status');
+    S.packsync = st;
+    if (!st || !st.ok || !(st.available || []).length) return;
+    const r = await api('/api/pack/update', {});
+    if (!r.result || !(r.result.applied || []).length) return;
+    S.pack = r.pack || S.pack;
+    S.gamedata = r.gamedata || S.gamedata;
+    renderUpdate();
+    renderQuick();
+    const v = (r.result.applied.find(a => a.pack === 'arknights') || {}).version || '';
+    toast(v ? `游戏资源已更新到 ${v}` : '游戏资源已更新', 'ok', 5000);
+  } catch (e) { /* 静默：检查更新不该打扰用户 */ }
+}
+
+/* 设置页「检查更新」：强制查一次，有就装，返回结果文案 */
+async function packCheckNow() {
+  const st = await api('/api/pack/status?force=1');
+  S.packsync = st;
+  if (!st.ok) return { text: '检查失败：' + (st.error || '网络不可用'), ok: false };
+  if (!(st.available || []).length) {
+    const cur = ((st.current || {}).arknights || {});
+    return { text: `已是最新（${cur.version || '?'}）`, ok: true };
+  }
+  const r = await api('/api/pack/update', {});
+  S.pack = r.pack || S.pack;
+  S.gamedata = r.gamedata || S.gamedata;
+  renderUpdate();
+  renderQuick();
+  const applied = (r.result && r.result.applied) || [];
+  const skipped = (r.result && r.result.skipped) || [];
+  if (!applied.length) {
+    return { text: '下载失败：' + (skipped.map(s => s.reason).join('；') || (r.result || {}).error || '未知原因'), ok: false };
+  }
+  const v = (applied.find(a => a.pack === 'arknights') || {}).version || '';
+  return { text: `已更新${v ? '到 ' + v : ''}`, ok: true };
+}
+
+/* ------------------------------------------------------------ 程序本体更新 */
+/* 海外源：GitHub Releases。启动 4 秒后查一次（后端 6 小时节流），
+   有新版本只在齿轮上点个红点，绝不自动下载——
+   13 MB 的包和一次重启，必须让用户自己点头。 */
+async function appAutoCheck(force) {
+  if (!force && S.settings && S.settings.autoCheckAppUpdate === false) return null;
+  try {
+    const st = await api('/api/app/status' + (force ? '?force=1' : ''));
+    S.appUpdate = st;
+    renderAppDot();
+    // 上次「重启并安装」没生效（版本号没变）：说一次就够，不要每次启动都弹
+    const li = st && st.lastInstall;
+    if (li && li.state === 'stale' && !S.staleNoticed) {
+      S.staleNoticed = true;
+      toast(`上次更新到 ${li.to} 没有生效，可以再试一次`, 'err', 6000);
+    }
+    return st;
+  } catch (e) {
+    return null;   // 没网就静默，别打扰
+  }
+}
+
+function renderAppDot() {
+  const dot = $('#app-dot');
+  const btn = $('#btn-settings');
+  const u = S.appUpdate || {};
+  const has = !!(u.ok && u.hasUpdate);
+  if (dot) dot.hidden = !has;
+  if (btn) btn.title = has ? `设置（新版本 ${u.tag || u.latest} 可用）` : '设置';
+}
+
+/* 设置页版本行后缀：只有查到更新才追加「→ vX.Y.Z」 */
+function appVerSuffix() {
+  const u = S.appUpdate || {};
+  if (!(u.ok && u.hasUpdate)) return '';
+  const tag = esc(u.tag || ('v' + u.latest));
+  return ` <b class="app-new">→ ${tag}</b>`;
+}
+
+/* 设置页「检查更新」：强制查一次（跳过 6 小时节流），返回给按钮用的文案 */
+async function appCheckNow() {
+  const st = await appAutoCheck(true);
+  if (!st) return { text: '检查失败：连不上 GitHub', ok: false };
+  if (!st.ok) return { text: '检查失败：' + (st.error || '网络不可用'), ok: false };
+  if (!st.hasUpdate) return { text: `已是最新（${st.current}）`, ok: true };
+  return { text: `发现新版本 ${st.tag}`, ok: true, hasUpdate: true };
+}
+
+/* 版本弹窗：下载 → 校验 → 提示「重启并安装」→ 替换由退出后的脚本完成 */
+function openUpdateDialog() {
+  const u = S.appUpdate || {};
+  const cur = u.current || (S.appInfo && S.appInfo.version) || '';
+  const tag = u.tag || (u.latest ? 'v' + u.latest : '');
+  const notes = (u.notes || '').trim().replace(/^##\s*更新内容\s*$/m, '').trim();
+  const asset = u.asset || {};
+  const canDownload = !!(asset.urls || []).length;
+  const frozen = !!u.frozen;
+  const when = u.publishedAt ? String(u.publishedAt).slice(0, 10) : '';
+  const size = asset.size ? (asset.size / 1048576).toFixed(1) + ' MB' : '';
+
+  modal(`
+    <h3>发现新版本 ${esc(tag)}</h3>
+    <div class="sub">当前 ${esc(cur)}${when ? ` · 发布于 ${esc(when)}` : ''}${
+      u.prerelease ? ' · 预发布版' : ''}${size ? ` · 安装包 ${esc(size)}` : ''}</div>
+    <div class="upd-notes">${notes ? esc(notes) : '（这个版本没有写更新说明）'}</div>
+    ${frozen ? '' : '<div class="onb-hint bad" style="margin:10px 0 0">源码模式不支持自动替换，请用「前往下载页」手动覆盖</div>'}
+    <div class="modal-foot">
+      <button class="btn-plain" data-close>以后再说</button>
+      <button class="btn-plain" id="upd-page">前往下载页</button>
+      <button class="btn-solid" id="upd-go"${
+        (frozen && canDownload) || u.ready ? '' : ' disabled'}>${
+        u.ready ? '重启并安装' : '下载并安装'}</button>
+    </div>
+  `, {
+    onMount(el) {
+      $('#upd-page', el).addEventListener('click', async () => {
+        try {
+          const r = await api('/api/app/open', {});
+          if (r && r.ok === false) toast(r.error || '打开失败', 'err');
+        } catch (e) { toast('打开失败：' + e.message, 'err'); }
+      });
+
+      const go = $('#upd-go', el);
+      if (!go) return;
+      go.addEventListener('click', async () => {
+        if (S.updateBusy) return;
+        S.updateBusy = true;
+        const label = go.textContent;
+        try {
+          // 第一次点：只下载，不重启。下完按钮变「重启并安装」，让用户再确认一次
+          if (!S.appUpdate || !S.appUpdate.ready) {
+            go.textContent = '下载中…';
+            go.disabled = true;
+            const r = await api('/api/app/download', {});
+            if (!r || !r.ok) {
+              toast((r && r.error) || '下载失败', 'err', 6000);
+              go.textContent = label;
+              go.disabled = false;
+              return;
+            }
+            S.appUpdate.ready = true;
+            go.textContent = '重启并安装';
+            go.disabled = false;
+            toast('安装包已下载并校验通过，点「重启并安装」完成替换', 'ok', 6000);
+            return;
+          }
+          // 第二次点：解压 + 拉起脚本，后端会让窗口自己关掉
+          go.textContent = '正在重启…';
+          go.disabled = true;
+          const r = await api('/api/app/install', {});
+          if (!r || !r.ok) {
+            toast((r && r.error) || '安装失败', 'err', 6000);
+            go.textContent = label;
+            go.disabled = false;
+            return;
+          }
+          toast('正在安装，窗口即将关闭…', 'ok', 8000);
+        } catch (e) {
+          toast('操作失败：' + e.message, 'err');
+          go.textContent = label;
+          go.disabled = false;
+        } finally {
+          S.updateBusy = false;
+        }
+      });
+    },
+  });
+}
+
+
 /* ------------------------------------------------------------ 快捷入口 */
 function renderQuick() {
   const row = $('#quick-row');
@@ -688,6 +866,35 @@ function renderParadoxPanel(root, d, close) {
 }
 
 /* ------------------------------------------------------------ 搜索 */
+/* 输入停约 0.5s 自动搜索：每次键入重置计时，清空输入不搜也不弹提示 */
+let searchTimer = 0;
+function queueAutoSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if ($('#search-input').value.trim()) doSearch();
+  }, 500);
+}
+
+/* 「下一关」按钮：搜索结果带着 next（同系列同难度的下一关）就亮、带上代号，
+   系列末尾或没搜到就灰。点击 = 填入代号直接搜。 */
+function setNextBtn(next) {
+  const btn = $('#btn-next');
+  if (!btn) return;
+  if (next && next.code) {
+    btn.disabled = false;
+    btn.dataset.code = next.code;
+    btn.textContent = '下一关 ' + next.code;
+    btn.title = next.difficultyCN
+      ? `跳到 ${next.code}（${next.difficultyCN}）`
+      : `跳到 ${next.code}`;
+  } else {
+    btn.disabled = true;
+    delete btn.dataset.code;
+    btn.textContent = '下一关';
+    btn.title = '当前已是这一系列的最后一关（或没搜到关卡）';
+  }
+}
+
 async function doSearch() {
   const q = $('#search-input').value.trim();
   if (!q) { toast('先输入关卡或活动', 'warn'); return; }
@@ -704,13 +911,17 @@ async function doSearch() {
     S.result = d;
     box.dataset.mode = d.mode;
     renderResult(d);
+    setNextBtn(d.next);
     box.scrollTop = 0;
   } catch (e) {
     box.dataset.mode = '';
     box.innerHTML = `<div class="empty-state"><h3>没搜到</h3><p>${esc(e.message)}</p></div>`;
+    setNextBtn(null);
     toast(e.message, 'err', 4000);
   } finally {
     S.searching = false;
+    // 搜索进行中输入又变了（防抖那次会被上面的 S.searching 拦掉）→ 完事后补搜最新词
+    if ($('#search-input').value.trim() !== q) queueAutoSearch();
   }
 }
 
@@ -734,6 +945,31 @@ function difficultyTag(op, code) {
   const txt = op.difficultyText || (f === 2 ? '突袭' : (f === 3 ? '通用' : '普通'));
   const tip = f === 3 ? '这份作业普通与突袭都能用' : (f === 2 ? '只适用于突袭' : '只适用于普通难度');
   return `<span class="badge diff ${cls}" title="${tip}">${esc(txt)}</span>`;
+}
+
+/* 行级难度说明（10-14 章磨难/简单、15+ 章险地、0-9 章普通/突袭） */
+function diffTip(st) {
+  switch (st.difficultyCN) {
+    case '磨难': return '磨难难度（10-14 章第三档）。游戏里章节页要切到磨难，MAA 才会进磨难关卡';
+    case '标准': return '标准难度（这一章的中间档）';
+    case '简单': return '简单模式（10-14 章第一档），作业较少';
+    case '险地': return '险地难度（15 章起）。写入 MAA 后会自动切到险地再开打';
+    default: return st.variant === 'raid' ? '突袭难度，写入 MAA 时自动选突袭' : '普通难度';
+  }
+}
+
+/* 难度徽标配色：磨难亮红、标准亮蓝、简单灰；险地/突袭沿用 raid 红 */
+function diffBadgeCls(dcn, variant) {
+  if (dcn === '磨难') return 'tough';
+  if (dcn === '标准') return variant === 'raid' ? 'raid' : 'std';
+  if (dcn === '简单') return 'normal';
+  return variant === 'raid' ? 'raid' : 'normal';
+}
+
+/* 作业集里的难度标签：9 章这类「标准档的突袭」要跟标准普通行分得开 */
+function diffLabel(dcn, variant) {
+  if (variant === 'raid') return dcn && dcn !== '险地' ? `${dcn}·突袭` : (dcn || '突袭');
+  return dcn || '';
 }
 
 function opChips(op, max = 8) {
@@ -833,9 +1069,13 @@ function renderResult(d) {
   if (d.stages.length === 1) {
     const s = d.stages[0];
     const ops = s.ops || [];
+    const dcn = s.stage.difficultyCN || '';
+    const dBadge = dcn
+      ? ` <em class="badge diff ${diffBadgeCls(dcn, s.stage.variant)}" title="${esc(diffTip(s.stage))}">${esc(diffLabel(dcn, s.stage.variant))}</em>`
+      : '';
     const head = `
       <div class="result-head">
-        <div class="result-title">${esc(s.stage.code)} ${esc(s.stage.name)}
+        <div class="result-title">${esc(s.stage.code)} ${esc(s.stage.name)}${dBadge}
           ${s.stage.activity ? `<em class="result-act">${esc(s.stage.activity)}</em>` : ''}
           <span>${s.total} 份作业 · 可直接抄 ${s.counts.ready} · 差一人 ${s.counts.borrow} · 需练度 ${s.counts.train}</span>
         </div>
@@ -870,10 +1110,10 @@ function renderResult(d) {
   const head = `
     <div class="result-head">
       <div class="result-title">${esc(d.title)}
-        <span>${codes.length} 关 · ${totalOps} 份作业 · ${readyStages} 关可直接抄${raidRows ? ` · ${raidRows} 个突袭关` : ''}</span>
+        <span>${codes.length} 关 · ${totalOps} 份作业 · ${readyStages} 关可直接抄${raidRows ? ` · ${raidRows} 个突袭/险地行` : ''}</span>
       </div>
       <div class="result-actions">
-        <button class="ghost-btn mint" id="add-all-best">全部加入（每关最佳）</button>
+        <button class="ghost-btn mint" id="add-all-best" title="每关只加真正要打的难度：0-8/9 章普通+突袭，10-14 章只加磨难，15 章起只加险地（简单不加；某档没作业就跳过不降档）">全部加入（每关要打的档）</button>
       </div>
     </div>`;
   const rows = d.stages.map(s => {
@@ -882,8 +1122,12 @@ function renderResult(d) {
     const cls = b ? b.mode : 'blocked';
     const has = (s.ops || []).length;
     const isRaid = st.variant === 'raid';
+    // 难度行徽标配色见 diffBadgeCls；文本见 diffLabel（「标准·突袭」这类）
+    const dcn = st.difficultyCN || '';
+    const vCls = diffBadgeCls(dcn, st.variant);
+    const vTxt = diffLabel(dcn, st.variant) || (isRaid ? '突袭' : '普通');
     const variant = st.variant
-      ? `<em class="badge diff ${isRaid ? 'raid' : 'normal'}">${isRaid ? '突袭' : '普通'}</em>`
+      ? `<em class="badge diff ${vCls}" title="${esc(diffTip(st))}">${vTxt}</em>`
       : '';
     return `
       <div class="stage-row${isRaid ? ' is-raid' : ''}" data-stage="${esc(st.stageId)}" data-variant="${esc(st.variant || '')}">
@@ -919,7 +1163,7 @@ function renderResult(d) {
               <span style="font-size:11px;color:var(--text-3)">${op.total} 人</span>
               <button class="mini-btn" data-copy="${esc(op.maaCode)}">复制</button>
               <button class="mini-btn accent" data-add-id="${op.id}" data-add-variant="${esc(st.variant || '')}" data-stage="${esc(st.stageId)}" data-add-label="加入" data-added-label="已在" ${inBasket(op.id, st.variant) ? 'disabled' : ''}>${inBasket(op.id, st.variant) ? '已在' : '加入'}</button>
-            </div>`).join('') || `<div style="font-size:12px;color:var(--text-3)">没有${isRaid ? '突袭' : ''}作业</div>`}
+            </div>`).join('') || `<div style="font-size:12px;color:var(--text-3)">没有${dcn || (isRaid ? '突袭' : '')}作业</div>`}
         </div>
       </div>`;
   }).join('');
@@ -957,19 +1201,32 @@ function renderResult(d) {
   if (all) all.addEventListener('click', () => {
     let n = 0;
     const seen = new Set();
+    // 一关真正要打的难度（用户口径）：0-8 普通+突袭、9 标准+突袭、
+    // 10-14 只打磨难、15+ 只打险地。简单永远不打；同一关出现磨难/险地行
+    // 时普通/标准行就不算「要打的档」了（不擅自降档：磨难行没作业就空着）
+    const hasHardRow = {};
+    d.stages.forEach(s => {
+      if (s.stage.difficulty === 'tough' || s.stage.difficulty === 'risky')
+        hasHardRow[s.stage.code] = true;
+    });
     d.stages.forEach(s => {
       if (!s.best) return;
-      // 按「关卡 + 难度行」去重：有突袭版的关卡普通、突袭各加一份，
-      // 这样 MAA 里两档都有作业可跑
+      if (s.stage.difficulty === 'easy') return;
+      if (s.stage.difficulty === 'normal' && hasHardRow[s.stage.code]) return;
+      // 按「关卡 + 难度行」去重：同一关同一档只加一份
       const key = s.stage.stageId + '|' + (s.stage.variant || '');
       if (seen.has(key) || inBasket(s.best.id, s.stage.variant || undefined)) return;
       seen.add(key);
+      const dcn = s.best.difficultyCN || '';
+      const dlab = diffLabel(dcn, s.stage.variant);
       S.basket.push({
         id: s.best.id, copilotId: s.best.id, title: s.best.title, rating: s.best.rating,
         mode: s.best.mode, stageCode: s.best.stageCode || '', stageId: s.best.stageId || '',
+        name: dlab ? `${s.best.stageCode || ''}·${dlab}` : '',
         maaCode: s.best.maaCode,
         difficulty: Number(s.best.difficulty) || 1,
         difficultyText: s.best.difficultyText || '普通',
+        difficultyCN: dcn,
         variant: s.stage.variant || '',
       });
       n++;
@@ -1057,20 +1314,23 @@ function addToBasket(op, variant, quiet) {
     if (!quiet) toast(v === 'raid' ? '这份作业已经在作业集的突袭里了' : (v === 'normal' ? '这份作业已经在作业集的普通里了' : '已经在作业集里了'), 'warn');
     return false;
   }
+  const dcn = op.difficultyCN || '';
   S.basket.push({
     id: op.id, copilotId: op.id, title: op.title, rating: op.rating,
     mode: op.mode, stageCode: op.stageCode || '', stageId: op.stageId || '',
-    name: op.name || '',
+    // 磨难/险地/简单行在 MAA 列表里的标签带上难度，同一代号三行也能分清
+    name: dcn ? `${op.stageCode || ''}·${dcn}` : (op.name || ''),
     maaCode: op.maaCode,
     difficulty: Number(op.difficulty) || 1,
     difficultyText: op.difficultyText || '普通',
+    difficultyCN: dcn,
     variant: v,
   });
   if (quiet) return true;
   renderBasket();
   const fab = $('#basket-fab');
   if (fab) { fab.classList.remove('pulse'); void fab.offsetWidth; fab.classList.add('pulse'); }
-  toast(v === 'raid' ? '已加入作业集（突袭）' : '已加入作业集');
+  toast(v === 'raid' ? `已加入作业集${dcn ? '（' + dcn + '）' : '（突袭）'}` : '已加入作业集');
   return true;
 }
 
@@ -1086,6 +1346,10 @@ function addManyToBasket(ops) {
 }
 
 function basketDiffTag(o) {
+  // 磨难/险地/简单/标准行：难度就是行的身份，直接标难度（配色/文本见 diffBadgeCls、diffLabel）
+  if (o.difficultyCN) {
+    return `<i class="diff-pill ${diffBadgeCls(o.difficultyCN, o.variant)}">${esc(diffLabel(o.difficultyCN, o.variant))}</i>`;
+  }
   if (o.variant === 'raid') return '<i class="diff-pill raid">突袭</i>';
   if (o.variant === 'normal') return '<i class="diff-pill normal">普通</i>';
   const f = Number(o.difficulty) || 1;
@@ -1207,6 +1471,9 @@ async function applyToMaa() {
   try {
     const { taskId } = await api('/api/maa/apply', payload);
     await pollTask(taskId, m.el);
+    // 写完自动收弹窗：日志末尾的「✓ 完成」给读者留一眼的工夫；
+    // 之前这里不关，弹窗会一直挂着等用户手点「后台执行」
+    setTimeout(() => m.close(), 900);
     const px = S.paradoxPending || [];
     S.basket = [];
     renderBasket();
@@ -1555,10 +1822,7 @@ function openAccountWizard(mode) {
   const cancelBtn = $('#aa-cancel', m);
   if (cancelBtn) cancelBtn.addEventListener('click', close);
   const skipBtn = $('#onb-skip', m);
-  if (skipBtn) skipBtn.addEventListener('click', () => {
-    close();
-    if (!S.accounts.length) setTimeout(() => openAccountWizard('add'), 200);
-  });
+  if (skipBtn) skipBtn.addEventListener('click', close);
   $('#aa-back', m).addEventListener('click', () => showPage(1));
   $('#aa-next', m).addEventListener('click', async () => {
     const dir = input.value.trim();
@@ -1817,12 +2081,24 @@ function openSettings() {
       <input type="checkbox" id="set-autostart" ${s.autoStartMaa ? 'checked' : ''}>
       <span>写完作业后自动启动 MAA</span>
     </label>
+    <label class="check-row" style="margin-bottom:14px">
+      <input type="checkbox" id="set-autopack" ${s.autoUpdatePack === false ? '' : 'checked'}>
+      <span>启动后自动更新游戏资源（新关卡 / 新干员 / 新活动）</span>
+    </label>
+    <label class="check-row" style="margin-bottom:14px">
+      <input type="checkbox" id="set-autocheck" ${s.autoCheckAppUpdate === false ? '' : 'checked'}>
+      <span>启动后检查程序新版本（6 小时最多一次，只提醒，装不装由你定）</span>
+    </label>
 
     <div class="path-list">
       <div class="path-item"><span>账号数据</span><code>${esc(p.accounts || '')}</code>${openBtn('accounts', '打开')}</div>
       <div class="path-item"><span>配置与日志</span><code>${esc(p.config || '')}</code>${openBtn('config', '打开')}</div>
-      <div class="path-item"><span>游戏资源</span><code>v${esc(gd.version || pk.version || '?')} · ${counts.chars || 0} 干员 · ${counts.stages || 0} 关卡</code></div>
-      <div class="path-item"><span>程序版本</span><code>MAA-PRTS ${esc(gd.app || (S.appInfo && S.appInfo.version) || '')}</code></div>
+      <div class="path-item"><span>游戏资源</span><code id="set-pack-msg">v${esc(gd.version || pk.version || '?')} · ${counts.chars || 0} 干员 · ${counts.stages || 0} 关卡</code>
+        <button class="btn-plain mini" id="set-pack-check">检查更新</button></div>
+      <div class="path-item"><span>程序版本</span><code id="set-app-msg">MAA-PRTS ${esc(
+        gd.app || (S.appInfo && S.appInfo.version) || '')}${appVerSuffix()}</code>
+        <button class="btn-plain mini" id="set-app-check">${
+          S.appUpdate && S.appUpdate.ok && S.appUpdate.hasUpdate ? '查看新版本' : '检查更新'}</button></div>
     </div>
 
     <div class="modal-foot">
@@ -1857,11 +2133,57 @@ function openSettings() {
           box.textContent = '检测失败：' + e.message;
         }
       });
+      $('#set-pack-check', el).addEventListener('click', async () => {
+        const btn = $('#set-pack-check', el);
+        const msg = $('#set-pack-msg', el);
+        btn.disabled = true;
+        msg.textContent = '检查中…';
+        try {
+          const r = await packCheckNow();
+          msg.textContent = r.text;
+          toast(r.text, r.ok ? 'ok' : 'err', 4000);
+        } catch (e) {
+          msg.textContent = '检查失败';
+          toast('检查失败：' + e.message, 'err');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      $('#set-app-check', el).addEventListener('click', async () => {
+        const btn = $('#set-app-check', el);
+        const msg = $('#set-app-msg', el);
+        // 启动时已经查到有更新：直接开弹窗，不用再查一遍
+        if (S.appUpdate && S.appUpdate.ok && S.appUpdate.hasUpdate) {
+          close();
+          setTimeout(openUpdateDialog, 160);
+          return;
+        }
+        btn.disabled = true;
+        const old = msg.textContent;
+        msg.textContent = '检查中…';
+        try {
+          const r = await appCheckNow();
+          msg.textContent = old;
+          renderAppDot();
+          toast(r.text, r.ok ? 'ok' : 'err', 4000);
+          if (r.hasUpdate) {
+            close();
+            setTimeout(openUpdateDialog, 160);
+          }
+        } catch (e) {
+          msg.textContent = old;
+          toast('检查失败：' + e.message, 'err');
+        } finally {
+          btn.disabled = false;
+        }
+      });
       $('#btn-save-set', el).addEventListener('click', async () => {
         try {
           const d = await api('/api/settings', {
             maaDir: $('#set-maa', el).value.trim(),
             autoStartMaa: $('#set-autostart', el).checked,
+            autoUpdatePack: $('#set-autopack', el).checked,
+            autoCheckAppUpdate: $('#set-autocheck', el).checked,
           });
           S.settings = d.settings;
           S.maa = d.maa;
@@ -1877,8 +2199,14 @@ function openSettings() {
 
 /* ------------------------------------------------------------ 事件绑定 */
 function bindGlobal() {
-  $('#btn-search').addEventListener('click', doSearch);
+  $('#btn-next').addEventListener('click', () => {
+    const code = $('#btn-next').dataset.code;
+    if (!code) return;
+    $('#search-input').value = code;
+    doSearch();
+  });
   $('#search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  $('#search-input').addEventListener('input', queueAutoSearch);
   bindAccountOrder($('#account-list'));
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);
@@ -1897,6 +2225,7 @@ function bindGlobal() {
     try {
       const { taskId } = await api('/api/account/refresh', {});
       await pollTask(taskId, m.el);
+      setTimeout(() => m.close(), 900);   // 同步完自动收弹窗（与写入 MAA 一致）
       const d = await api('/api/accounts');
       S.accounts = d.accounts;
       renderAccounts();

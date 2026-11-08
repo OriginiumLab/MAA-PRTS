@@ -11,6 +11,15 @@
     python resources/make_pack.py --excel ... --subprof config/subprof_cache.json
 
 只在游戏大版本更新后需要重跑一次；平时程序只读 arknights.json，不碰原始表。
+CI 自动同步走 tools/sync_pack.py，它直接 import 本文件的 build()。
+
+幂等约定（自动同步的前提，改动前先看这里）：
+    version      来自上游仓库根的 version 文件（游戏版本日期），不是"生成日期"，
+                 同一份上游数据任何时候生成都得到同一个 version
+    fingerprint  只由内容决定（干员/技能/模组/关卡/区域/活动），日期和分支名缓存
+                 都不参与，所以在任意机器上重跑结果一致
+    generatedAt  调用方给了就照抄（CI 传上游提交时间），没给才用当前时间
+    数据没变 → 产物除 generatedAt 外逐字节相同，git diff 能直接判出"无需提交"
 """
 from __future__ import annotations
 
@@ -20,6 +29,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +43,57 @@ def load(path, default=None):
         return default
 
 
-def build(excel_dir, subprof_path=None, base_path=None):
+def read_game_version(excel_dir):
+    """上游仓库根目录的 version 文件（gamedata/excel 上两级）
+
+    老版本是纯文本 `26-10-29-15-36-11-33649006`，新版本可能是
+    `{"versionId": "..."}` 的 json，两种都认；读不到返回空串。
+    """
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(excel_dir))), 'version')
+    try:
+        with io.open(p, encoding='utf-8') as f:
+            raw = f.read().strip()
+    except Exception:
+        return ''
+    try:
+        v = (json.loads(raw) or {}).get('versionId')
+        if v:
+            return str(v)
+    except Exception:
+        pass
+    return raw[:64]
+
+
+def norm_version(game_version, fallback=''):
+    """游戏版本串 → 界面展示的 2026.10.29
+
+    '26-10-29-15-36-11-33649006' 是上游的「客户端版本-时间戳」，取前三位；
+    也兼容 2026-10-29 / 20261029 这类写法。认不出就用 fallback。
+    """
+    s = str(game_version or '')
+    m = re.search(r'(?<!\d)(\d{2})-(\d{2})-(\d{2})(?!\d)', s)
+    if m:
+        return '20%s.%s.%s' % m.groups()
+    m = re.search(r'(?<!\d)(\d{4})[-.]?(\d{2})[-.]?(\d{2})(?!\d)', s)
+    if m:
+        return '%s.%s.%s' % m.groups()
+    return fallback
+
+
+def content_fingerprint(chars, skills, equips, stages, zones, activities):
+    """内容指纹：只由数据决定
+
+    日期、分支名缓存（subProfessions 来自本地学习，各机器不一样）都不参与，
+    否则「同一天重复生成」或「换台机器生成」都会让用户白弹一次更新提示。
+    """
+    payload = {'chars': chars, 'skills': skills, 'equips': equips,
+               'stages': stages, 'zones': zones, 'activities': activities}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8]
+
+
+def build(excel_dir, subprof_path=None, base_path=None, game_version='',
+          source_commit='', generated_at=''):
     chars_src = load(os.path.join(excel_dir, 'character_table.json')) or {}
     patch = (load(os.path.join(excel_dir, 'char_patch_table.json')) or {}).get('patchChars') or {}
     skills_src = load(os.path.join(excel_dir, 'skill_table.json')) or {}
@@ -120,6 +180,8 @@ def build(excel_dir, subprof_path=None, base_path=None):
         subprof.update((load(base_path) or {}).get('subProfessions') or {})
     if subprof_path and os.path.isfile(subprof_path):
         subprof.update(load(subprof_path) or {})
+    # 排序后落盘：本地有 subprof_cache、CI 只有旧包，两边来源不同但结果必须逐字节一致
+    subprof = dict(sorted(subprof.items()))
 
     counts = {
         'chars': len(chars),
@@ -131,21 +193,17 @@ def build(excel_dir, subprof_path=None, base_path=None):
         'subProfessions': len(subprof),
     }
     now = dt.datetime.now().astimezone()
-    version = now.strftime('%Y.%m.%d')
-    # 内容指纹：同一天重复生成也能区分（程序侧靠它判断资源有没有变）。
-    # 除了关卡 id，还要带上「剧情关条数」——story 字段是后加的，
-    # 只算 id 的话改了这个字段指纹不动，用户侧就收不到资源变更提示。
-    story_count = sum(1 for s in stages if s.get('story'))
-    fingerprint = hashlib.sha1(
-        json.dumps([version, counts, story_count, [s['id'] for s in stages]],
-                   sort_keys=True).encode('utf-8')
-    ).hexdigest()[:8]
+    version = norm_version(game_version) or now.strftime('%Y.%m.%d')
+    # 内容指纹：同数据必然同指纹（日期、分支名缓存都不参与，见文件头「幂等约定」）
+    fingerprint = content_fingerprint(chars, skills, equips, stages, zones, activities)
 
     return {
         'schema': 1,
         'version': version,
         'fingerprint': fingerprint,
-        'generatedAt': now.isoformat(timespec='seconds'),
+        'generatedAt': generated_at or now.isoformat(timespec='seconds'),
+        'gameVersion': game_version or '',
+        'sourceCommit': source_commit or '',
         'source': 'ArknightsGameResource/gamedata/excel',
         'counts': counts,
         'chars': chars,
@@ -176,20 +234,38 @@ def main(argv=None):
     ap.add_argument('--out', default=os.path.join(HERE, 'arknights.json'))
     ap.add_argument('--subprof', default=None,
                     help='分支名缓存（默认自动找 config/subprof_cache.json）')
+    ap.add_argument('--game-version', default=None,
+                    help='上游游戏版本串（默认自动读 <excel>/../../version）')
+    ap.add_argument('--source-commit', default='',
+                    help='上游仓库提交 sha（写进包，自动同步用）')
+    ap.add_argument('--commit-time', default='',
+                    help='上游提交时间（写进 generatedAt，保证重跑结果一致）')
     args = ap.parse_args(argv)
 
     subprof_path = args.subprof or _default_subprof(root)
+    game_version = args.game_version
+    if game_version is None:
+        game_version = read_game_version(args.excel)
     old = load(args.out) or {}
     old_counts = old.get('counts') or {}
-    pack = build(args.excel, subprof_path, base_path=args.out)
+    pack = build(args.excel, subprof_path, base_path=args.out,
+                 game_version=game_version or '',
+                 source_commit=args.source_commit or '',
+                 generated_at=args.commit_time or '')
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
     tmp = args.out + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
+    with io.open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(pack, f, ensure_ascii=False, separators=(',', ':'))
+        f.write('\n')
     os.replace(tmp, args.out)
 
     size = os.path.getsize(args.out) / 1024 / 1024
     print('已生成：%s（%.2f MB）' % (args.out, size))
+    print('  游戏版本：%s → 资源版本 %s｜指纹 %s' % (
+        pack.get('gameVersion') or '（没读到 version 文件，退回生成日期）',
+        pack['version'], pack['fingerprint']))
+    if pack.get('sourceCommit'):
+        print('  上游提交：%s' % pack['sourceCommit'][:12])
     if os.path.isfile(subprof_path):
         print('  分支名缓存：%s' % subprof_path)
     else:

@@ -53,15 +53,15 @@ MAA-PRTS\
 
 ### 方式二：自己打包（需要 Python 3.10+）
 
-双击 `打包.bat` 即可：首次运行会自动创建项目专用环境 `.venv` 并安装依赖，然后调用 PyInstaller 打包。
+双击 `build.bat` 即可：首次运行会自动创建项目专用环境 `.venv` 并安装依赖，然后调用 PyInstaller 打包。
 
 产物在 `build\MAA-PRTS\`：整个文件夹就是发布包，压缩成 zip 即为 Release 附件。
 
 ### 方式三：跑源码（需要 Python 3.10+）
 
-双击 `启动.bat`：优先启动编译版，没有编译版时自动以源码模式运行，首次会创建 `.venv` 并安装依赖。
+双击 `run.bat`：优先启动编译版，没有编译版时自动以源码模式运行，首次会创建 `.venv` 并安装依赖。
 
-调试模式（带 devtools）：双击 `调试启动.bat`。
+调试模式（带 devtools）：双击 `debug.bat`。
 
 自动初始化失败时，也可以手动准备环境：
 
@@ -100,7 +100,7 @@ MAA-PRTS-1/
 ├── debug/               运行日志 app.log（可随手删）
 ├── build/               构建产物（MAA-PRTS/ 发布包；中间文件用后即删）
 ├── tools/               setup/（启动打包的环境引导）、build.py（打包脚本）、smoketest/（冒烟测试）
-├── 启动.bat / 调试启动.bat / 打包.bat
+├── run.bat / debug.bat / build.bat / "build and run.bat"
 └── README.md
 ```
 
@@ -142,18 +142,24 @@ python tools\build.py
 
 ## 更新游戏资源包
 
-游戏出新干员 / 新关卡后，资源包需要重新生成一次（否则缺卡会漏算新干员）：
+**现在不用手动跑了。** GitHub Actions（`.github/workflows/pack.yml`）每天北京时间
+12:00 / 16:00 检查上游资源库，有新数据就自动重新生成，推到独立的数据分支 `pack-data`
+（`main` 有规则集，bot 推不进去）；用户那边启动 2.5 秒后自动拉新包，0.6 MB，
+静默换掉不用重启。详见 `docs/resources.md`。
+
+需要手工兜底时（排查、或上游没同步）：
 
 ```bat
 python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 ```
 
-生成的新包会带上新的 `version`（生成日期）和 `fingerprint`（内容指纹）。
-把它放进 `resources\arknights.json` 即可，不用重新打包程序——
-下次启动时程序会发现版本变了，在界面顶部提示：
+生成的新包带 `version`（上游游戏版本日期，如 `2026.10.29`）和 `fingerprint`
+（只看内容的指纹）。同一份数据无论跑多少次，产物逐字节一致——这是自动化的前提。
+
+换了资源包之后第一次启动，界面顶部会提示：
 
 ```
-游戏资源已更新到 2026.11.05（原 2026.10.01）
+游戏资源已更新到 2026.10.29（原 2026.10.01）
 +1 干员 · +7 关卡 · 新活动 时间啊，向前！ TL、月行水上 SR …     [知道了]
 ```
 
@@ -162,17 +168,26 @@ python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 
 ---
 
+## 更新程序本体
+
+程序启动 4 秒后查一次 GitHub Releases（6 小时节流），有新版本只在设置齿轮上点个红点，
+**不自动安装**。用户在弹窗里点「下载并安装」→「重启并安装」，
+退出后由 `update/install.cmd` 替换 `MAA-PRTS.exe` 与 `_internal/`，
+`config/`、`debug/`、`resources/` 一律不碰。详见 `docs/update.md`。
+
+---
+
 ## 更新悖论模拟清单
 
 悖论清单在 `resources\paradox.json`（哪个干员有悖论、关卡代号、解锁条件）。
-新干员开了悖论之后要重新生成一次，否则面板里看不到：
+它和资源包**在同一次同步里一起生成**（同一个上游提交、同一个 manifest），平时不用管。
+手工重跑时：
 
 ```bat
 python tools\build_paradox_data.py --src "E:\.github-ARK\ArknightsGameResource"
 ```
 
-只需要资源库里的两个 json，不用任何图片。步骤与校验点见
-`E:\project\MAA-PRTS-版本更新\悖论模拟数据更新.md`（同目录还有一个一键 bat）。
+只需要资源库里的两个 json，不用任何图片。校验点与排查见 `docs/resources.md`。
 
 ---
 

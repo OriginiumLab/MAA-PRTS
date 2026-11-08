@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -55,13 +56,12 @@ def game_version(src):
         return ''
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--src', default=DEFAULT_SRC, help='ArknightsGameResource 目录')
-    ap.add_argument('--out', default=DEFAULT_OUT, help='输出 json 路径')
-    args = ap.parse_args()
+def build(src, generated_at='', source_commit=''):
+    """生成悖论清单数据
 
-    src = args.src
+    generated_at 传了就用它（CI 传上游提交时间），没传才用当前时间——
+    只是显示用；客户端判断「要不要更新」看的是 fingerprint（纯内容哈希）。
+    """
     hb = os.path.join(src, 'gamedata', 'excel', 'handbook_info_table.json')
     ct = os.path.join(src, 'gamedata', 'excel', 'character_table.json')
     for p in (hb, ct):
@@ -104,25 +104,45 @@ def main():
 
     data = {
         'schema': 2,
-        'generatedAt': time.strftime('%Y-%m-%dT%H:%M:%S'),
+        'generatedAt': generated_at or time.strftime('%Y-%m-%dT%H:%M:%S'),
         'gameVersion': game_version(src),
+        'sourceCommit': source_commit or '',
         'source': os.path.basename(src.rstrip('\\/')) or src,
         'count': len(out),
+        # 内容指纹：客户端拿它和本地那份比，决定要不要下载（与日期无关）
+        'fingerprint': hashlib.sha1(
+            json.dumps(out, sort_keys=True, ensure_ascii=False,
+                       separators=(',', ':')).encode('utf-8')
+        ).hexdigest()[:8],
         'chars': out,
     }
+    return data, {'no_name': no_name, 'no_stage': no_stage}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--src', default=DEFAULT_SRC, help='ArknightsGameResource 目录')
+    ap.add_argument('--out', default=DEFAULT_OUT, help='输出 json 路径')
+    ap.add_argument('--source-commit', default='', help='上游提交 sha（自动同步用）')
+    ap.add_argument('--commit-time', default='', help='上游提交时间（写进 generatedAt）')
+    args = ap.parse_args()
+
+    data, diag = build(args.src, generated_at=args.commit_time,
+                       source_commit=args.source_commit)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    with io.open(args.out, 'w', encoding='utf-8') as f:
+    with io.open(args.out, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(data, f, ensure_ascii=False, indent=0, sort_keys=True)
 
     size = os.path.getsize(args.out)
-    print('已写出 %s（%d 条，%.1f KB）' % (args.out, len(out), size / 1024.0))
-    print('解锁条件分布 精英化:', dict(Counter(v['elite'] for v in out.values())))
-    print('解锁条件分布 等级  :', dict(Counter(v['level'] for v in out.values())))
-    if no_name:
-        print('！以下干员在 character_table 里查不到名字：%s' % ', '.join(no_name[:10]))
-    if no_stage:
-        print('！以下干员没有 stageId：%s' % ', '.join(no_stage[:10]))
-    if not (no_name or no_stage):
+    print('已写出 %s（%d 条，%.1f KB）｜指纹 %s' % (
+        args.out, data['count'], size / 1024.0, data['fingerprint']))
+    print('解锁条件分布 精英化:', dict(Counter(v['elite'] for v in data['chars'].values())))
+    print('解锁条件分布 等级  :', dict(Counter(v['level'] for v in data['chars'].values())))
+    if diag['no_name']:
+        print('！以下干员在 character_table 里查不到名字：%s' % ', '.join(diag['no_name'][:10]))
+    if diag['no_stage']:
+        print('！以下干员没有 stageId：%s' % ', '.join(diag['no_stage'][:10]))
+    if not (diag['no_name'] or diag['no_stage']):
         print('校验通过：干员名、关卡代号均完整')
 
 
