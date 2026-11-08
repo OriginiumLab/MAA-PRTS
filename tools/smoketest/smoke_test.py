@@ -1386,6 +1386,40 @@ def check_mainline_difficulty_variants():
         resources.TR_AFTER.pop('act55side_tr01', None)
 
 
+# ---------------------------------------------------------------- B23 作业黑名单
+def check_op_blacklist(tmp):
+    """作业黑名单：条目按 MAA 代码存（maa://12345），归一化容错（裸数字补全、
+    去重、非法丢弃）；fetch_ops 出口按代码滤，与作者黑名单同一出口"""
+    from core import copilot, settings
+
+    _reset_config(tmp)
+
+    saved = settings.save({'opBlacklist': ['maa://1', '456', 456, 'x', 'maa://abc', '']})
+    assert saved['opBlacklist'] == ['maa://1', 'maa://456'], saved['opBlacklist']
+    settings.save({'opBlacklist': []})      # 归一化段存的条目别带进下面的过滤段
+
+    # fetch_ops 出口过滤：patch 掉网络层，只验证过滤逻辑
+    fake = [
+        {'meta': {'id': 1, 'uploader_id': '10'}},
+        {'meta': {'id': 2, 'uploader_id': '20'}},
+        {'meta': {'id': 3, 'uploader_id': '30'}},
+    ]
+    orig = copilot._fetch_ops_raw
+    copilot._fetch_ops_raw = lambda stage, pages=2, min_rating=0, force=False: list(fake)
+    try:
+        stage = {'stageId': 's', 'code': 'c'}
+        got = [i['meta']['id'] for i in copilot.fetch_ops(stage)]
+        assert got == [1, 2, 3], got
+        settings.save({'opBlacklist': ['maa://2']})
+        got = [i['meta']['id'] for i in copilot.fetch_ops(stage)]
+        assert got == [1, 3], got                          # 作业黑名单按代码滤
+        settings.save({'authorBlacklist': [{'id': '30', 'name': ''}]})
+        got = [i['meta']['id'] for i in copilot.fetch_ops(stage)]
+        assert got == [1], got                            # 作者黑名单同一出口
+    finally:
+        copilot._fetch_ops_raw = orig
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -1424,6 +1458,7 @@ def main():
         r.check('B20 资源包生成幂等（版本/指纹）', check_pack_idempotent)
         r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
         r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
+        r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

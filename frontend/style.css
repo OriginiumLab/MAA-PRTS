@@ -968,12 +968,14 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   border: 1px solid var(--line-strong); color: var(--text-2); font-size: 12.5px;
 }
 .btn-plain:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.btn-plain:disabled { opacity: .4; cursor: not-allowed; }
+.btn-plain:disabled:hover { color: var(--text-2); background: none; }
 .btn-plain.mini { height: 38px; padding: 0 12px; font-size: 12px; flex: 0 0 auto; }
 .path-row { display: flex; gap: 8px; align-items: stretch; }
 .path-row input[type=text] { flex: 1 1 auto; min-width: 0; }
 /* 黑名单：设置弹窗里的两个入口按钮 */
 .bl-entry-row { display: flex; gap: 8px; margin: 2px 0 16px; }
-.bl-entry-row .btn-plain { flex: 1 1 50%; }
+.bl-entry-row .btn-plain { flex: 1 1 0; }
 /* 黑名单二级弹窗：顶部新增、下面条目列表（自己滚） */
 .bl-list {
   max-height: 320px; overflow-y: auto;

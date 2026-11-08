@@ -413,20 +413,24 @@ def _pull(params, pages=2, limit=50):
 
 
 def fetch_ops(stage, pages=2, min_rating=0, force=False):
-    """拉某个关卡的作业（出口滤掉作者黑名单）。
+    """拉某个关卡的作业（出口滤掉作者 / 作业黑名单）。
 
     过滤包在 _fetch_ops_raw 外面：缓存里存的是全量，黑名单增删立即生效，
     不用等 10 分钟缓存过期。
     """
     items = _fetch_ops_raw(stage, pages=pages, min_rating=min_rating, force=force)
+    st = settings.load()
     ban = set()
-    for row in (settings.load().get('authorBlacklist') or []):
+    for row in (st.get('authorBlacklist') or []):
         aid = str((row or {}).get('id') or '').strip() if isinstance(row, dict) else ''
         if aid:
             ban.add(aid)
     if ban:
         items = [i for i in items
                  if str((i['meta'].get('uploader_id') or '')).strip() not in ban]
+    ban_ops = set(st.get('opBlacklist') or [])
+    if ban_ops:
+        items = [i for i in items if ('maa://%s' % i['meta'].get('id')) not in ban_ops]
     return items
 
 

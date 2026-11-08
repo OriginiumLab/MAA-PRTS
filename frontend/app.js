@@ -13,13 +13,14 @@ const S = {
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
 };
 
-/* ------------------------------------------------------ 黑名单（干员 / 作者）
+/* ------------------------------------------------------ 黑名单（干员 / 作者 / 作业）
    干员黑名单是纯显示层过滤：比对结论（可直接抄 / 差一人 / 需练度）不变，
    只是屏蔽的干员 / 技能不再出现在搜索卡片与作业详情里。
    条目 {name, skills}：skills 空 = 整个干员；勾了技能 = 只隐藏带对应技能
    的要求（作业 chips、详情行有技能号，按它对位）。「缺 X / 练度不足 X」
    徽标只跟干员走（缺人是缺这个人，与技能无关），只有整个干员被屏蔽才隐藏。
-   作者黑名单在后端过滤（fetch_ops 出口按 uploader_id 滤），这里不参与。 */
+   作者 / 作业黑名单都在后端过滤（fetch_ops 出口按 uploader_id / maa://id 滤），
+   软件级、不跟账号走，这里不参与。作业黑名单条目直接存 MAA 代码（maa://12345）。 */
 const charBL = () => {
   const m = new Map();
   (S.settings.charBlacklist || []).forEach(row => {
@@ -1289,12 +1290,19 @@ function renderResult(d) {
 
 /* ------------------------------------------------------------ 作业详情 */
 async function showOpDetail(op, variant) {
+  // 作业黑名单条目就是 MAA 代码，直接比对；作者黑名单按作业站数字 id 屏蔽，
+  // 老作业没有 uploader_id 就不给拉黑作者入口
+  const opBL = S.settings.opBlacklist || [];
+  const opBanned = opBL.includes(op.maaCode);
+  const banned = op.uploaderId && (S.settings.authorBlacklist || []).some(a => String(a.id) === op.uploaderId);
   const m = modal(`
     <h3>${esc(op.title)}</h3>
     <div class="sub">作业 #${op.id} · ${esc(op.stageCode || '')} ${esc(op.stageName || '')} · ${esc(op.difficultyText || '普通')} · ${op.total} 人 · 评分 ${op.rating}</div>
     <div style="display:flex;gap:8px;margin-bottom:14px">
       <button class="btn-plain" id="copy-code">复制 ${esc(op.maaCode)}</button>
       <button class="btn-solid" id="add-op">加入作业集</button>
+      <button class="btn-plain" id="ban-op"${opBanned ? ' disabled title="已在黑名单里，可在设置 → 作业黑名单移除"' : ''}>${opBanned ? '已拉黑作业' : '拉黑作业'}</button>
+      ${op.uploaderId ? `<button class="btn-plain" id="ban-author"${banned ? ' disabled title="已在黑名单里，可在设置 → 作者黑名单移除"' : ''}>${banned ? '已拉黑作者' : '拉黑作者'}</button>` : ''}
     </div>
     <label class="field"><span>干员与要求</span></label>
     <div id="op-detail-body" style="font-size:12px;color:var(--text-2);line-height:1.9">
@@ -1304,6 +1312,36 @@ async function showOpDetail(op, variant) {
     onMount(el, close) {
       $('#copy-code', el).addEventListener('click', () => copyText(op.maaCode, 'MAA 代码已复制'));
       $('#add-op', el).addEventListener('click', () => { addToBasket(op, variant || ''); close(); });
+      /* 两个拉黑共用一套动作：不关弹窗（可以把作业和作者一起拉），按钮原地
+         翻成「已拉黑」态；过滤在后端，改完重搜一次当前结果让它立即生效 */
+      const banFlow = async (btn, key, entry, doneText, tip) => {
+        const next = (S.settings[key] || []).concat([entry]);
+        const old = btn.textContent;
+        btn.disabled = true;   // 请求在途防重复点
+        try {
+          const d = await api('/api/settings', { [key]: next });
+          S.settings = d.settings;
+          btn.textContent = doneText;
+          btn.title = tip;
+          toast(`${doneText}，可在设置里移除`, 'ok');
+          if (S.result && $('#search-input').value.trim()) doSearch();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = old;
+          toast('保存失败：' + e.message, 'err');
+        }
+      };
+      $('#ban-op', el).addEventListener('click', () => {
+        if ((S.settings.opBlacklist || []).includes(op.maaCode)) return;
+        banFlow($('#ban-op', el), 'opBlacklist', op.maaCode, '已拉黑作业', '已在黑名单里，可在设置 → 作业黑名单移除');
+      });
+      const banBtn = $('#ban-author', el);
+      if (banBtn) banBtn.addEventListener('click', () => {
+        const id = op.uploaderId;
+        if (!id || !(S.settings.authorBlacklist || []).every(a => String(a.id) !== id)) return;
+        if (op.uploader) S.authorNames[id] = op.uploader;   // 顺手学 id → 昵称，黑名单弹窗显示用
+        banFlow(banBtn, 'authorBlacklist', { id, name: op.uploader || '' }, '已拉黑作者', '已在黑名单里，可在设置 → 作者黑名单移除');
+      });
       // 带上 file：MAA 导入的账号没有技能/模组数据，详情里不展示这类要求
       const opUrl = '/api/op?id=' + op.id + (S.current ? '&file=' + encodeURIComponent(S.current) : '');
       api(opUrl).then(d => {
@@ -2149,6 +2187,7 @@ function openSettings() {
 
     <div class="bl-entry-row">
       <button class="btn-plain" id="set-bl-char">干员黑名单</button>
+      <button class="btn-plain" id="set-bl-op">作业黑名单</button>
       <button class="btn-plain" id="set-bl-author">作者黑名单</button>
     </div>
 
@@ -2247,6 +2286,7 @@ function openSettings() {
       });
       $('#set-bl-char', el).addEventListener('click', () => openBlacklist('char'));
       $('#set-bl-author', el).addEventListener('click', () => openBlacklist('author'));
+      $('#set-bl-op', el).addEventListener('click', openOpBlacklist);
       $('#btn-save-set', el).addEventListener('click', async () => {
         const host = $('#set-proxy-host', el).value.trim();
         const port = $('#set-proxy-port', el).value.trim();
@@ -2598,6 +2638,71 @@ function openBlacklist(kind) {
         close();
         // 作者黑名单的过滤在后端：改过就重搜一次当前结果让它立即生效
         if (!isChar && dirty && S.result && $('#search-input').value.trim()) doSearch();
+      });
+      render();
+    }
+  });
+}
+
+/* ------------------------------------------------------------ 作业黑名单（设置 → 二级弹窗）
+   条目就是 MAA 代码（maa://12345），软件级、不跟账号走；过滤在后端
+   （fetch_ops 出口按代码滤），与作者黑名单一样改完关闭时重搜一次。 */
+function openOpBlacklist() {
+  let dirty = false;
+  modal(`
+    <h3>作业黑名单</h3>
+    <div class="sub">拉黑的作业不再出现在搜索结果里。条目按 MAA 代码存，软件级、不跟账号走。</div>
+    <div class="path-row" style="margin-bottom:12px">
+      <input type="text" id="obl-add" placeholder="MAA 代码，如 maa://12345（或直接输数字）" autocomplete="off">
+      <button class="btn-plain mini" id="obl-add-btn" style="flex:0 0 auto">添加</button>
+    </div>
+    <div class="bl-list" id="obl-list"></div>
+    <div class="modal-foot"><button class="btn-plain" id="obl-close">关闭</button></div>
+  `, {
+    onMount(el, close) {
+      const render = () => {
+        const list = S.settings.opBlacklist || [];
+        const box = $('#obl-list', el);
+        box.innerHTML = list.length ? list.map((code, i) => `
+          <div class="bl-item" data-i="${i}">
+            <span class="bl-name"><code>${esc(code)}</code></span>
+            <span class="bl-ops">
+              <button class="btn-plain mini" data-act="del">删除</button>
+            </span>
+          </div>`).join('')
+          : '<div class="onb-hint">还没有拉黑任何作业。作业详情里点「拉黑作业」，或在这里粘贴 MAA 代码。</div>';
+        $$('.bl-item[data-i]', box).forEach(row => {
+          row.addEventListener('click', e => {
+            if (!e.target.closest('[data-act="del"]')) return;
+            persist((S.settings.opBlacklist || []).filter((_, j) => j !== Number(row.dataset.i)));
+          });
+        });
+      };
+      const persist = async next => {
+        try {
+          const d = await api('/api/settings', { opBlacklist: next });
+          S.settings = d.settings;
+          dirty = true;
+          render();
+        } catch (e) { toast('保存失败：' + e.message, 'err'); }
+      };
+      const add = () => {
+        const inp = $('#obl-add', el);
+        let q = inp.value.trim();
+        if (!q) { toast('先输入 MAA 代码', 'warn'); return; }
+        if (/^\d+$/.test(q)) q = 'maa://' + q;   // 只输数字也当作业 id，补全成代码
+        const list = S.settings.opBlacklist || [];
+        if (list.includes(q)) { toast('这个作业已经在列表里了', 'warn'); return; }
+        if (!/^maa:\/\/\d+$/.test(q)) { toast('格式要像 maa://12345', 'warn'); return; }
+        persist(list.concat([q]));
+        inp.value = '';
+      };
+      $('#obl-add-btn', el).addEventListener('click', add);
+      $('#obl-add', el).addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+      $('#obl-close', el).addEventListener('click', () => {
+        close();
+        // 过滤在后端：改过就重搜一次当前结果让它立即生效
+        if (dirty && S.result && $('#search-input').value.trim()) doSearch();
       });
       render();
     }
