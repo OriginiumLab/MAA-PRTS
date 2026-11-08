@@ -187,6 +187,7 @@ DEFAULTS = {
     'proxy': '',                  # 更新链路（程序/资源包检查下载）走的代理，空=直连
     'charBlacklist': [],          # 干员黑名单：干员名，纯显示层不再出现
     'authorBlacklist': [],        # 作者黑名单：[{id, name}]，按作业站数字 id 屏蔽作业
+    'opBlacklist': [],            # 作业黑名单：['maa://12345']，直接存 MAA 代码
     'lastAccount': '',
     'accountOrder': [],     # 账号列表手动排序（长按拖动保存的文件名顺序）
 }
@@ -289,6 +290,23 @@ def _norm_author_blacklist(v) -> list:
     return out
 
 
+def _norm_op_blacklist(v) -> list:
+    """作业黑名单：['maa://12345', ...]，条目就是 MAA 代码本身
+
+    手写 '12345' 或数字也能容（补成 maa://12345）；id 非数字或重复的丢弃。
+    """
+    out = []
+    for row in (v or []):
+        s = str(row or '').strip()
+        if s.isdigit():
+            s = 'maa://' + s
+        code, sep, num = s.partition('maa://')
+        if code or not sep or not num.isdigit() or s in out:
+            continue
+        out.append(s)
+    return out
+
+
 def _merged_dirs(dirs, extra):
     """历史目录列表并入一个新目录（过滤脏值，大小写不敏感去重）"""
     out = [d for d in (dirs or []) if isinstance(d, str) and d]
@@ -321,6 +339,8 @@ def save(patch: dict) -> dict:
                 v = _norm_char_blacklist(v)
             elif k == 'authorBlacklist':
                 v = _norm_author_blacklist(v)
+            elif k == 'opBlacklist':
+                v = _norm_op_blacklist(v)
             elif k == 'accountOrder':
                 v = [str(x) for x in (v or []) if str(x).endswith('.json')][:200]
             cur[k] = v
