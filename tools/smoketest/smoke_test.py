@@ -1222,6 +1222,19 @@ def check_app_update():
         # 版本号读的是包内 version.json：漏了会「装完还是旧版本 → 反复提示更新」
         assert 'version.json' in text, '安装脚本必须一起替换 version.json'
         assert 'if errorlevel 8 goto :fail' in text, 'robocopy 失败必须中断，不能半新半旧地启动'
+
+        # 6. API 不通时的兜底：按命名规则拼地址，照样能下载
+        fb = A._fallback_asset('v2.4.0')
+        assert fb['degraded'] and fb['sha256'] == '' and fb['size'] == 0, fb
+        assert fb['name'] == 'MAA-PRTS-v2.4.0-win-%s.zip' % A._arch(), fb['name']
+        assert fb['urls'][0].endswith('/releases/download/v2.4.0/' + fb['name']), fb['urls'][0]
+        assert len(fb['urls']) == 3, '直链 + 两个反代都要有：%s' % fb['urls']
+
+        # 没有 size/sha256 时不能把残包当「已下载」，否则解压必失败
+        bad = os.path.join(tmp, 'broken.zip')
+        with open(bad, 'wb') as f:
+            f.write(b'not a zip')
+        assert not A._match(bad, {'size': 0, 'sha256': ''}), '残包被当成了已下载'
     finally:
         A.update_dir = backup
         shutil.rmtree(tmp, ignore_errors=True)
