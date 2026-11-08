@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
 import time
@@ -53,6 +54,15 @@ DEFAULT_REQ = {
 #   0/缺失 = 未标注（MAA 按普通处理）、1 = 普通、2 = 突袭、3 = 普通与突袭兼容
 DIFF_NORMAL, DIFF_RAID = 1, 2
 DIFF_CN = {DIFF_NORMAL: '普通', DIFF_RAID: '突袭', DIFF_NORMAL | DIFF_RAID: '通用'}
+
+# 好评率门槛（用户规则）用连续函数代替硬分档：评价量 n（like+dislike）越多，
+# 要求的好评率越高。对数曲线锚在 (5, 65%) 和 (100, 85%) 两点，中间平滑过渡
+# （n=20 处 ≈74.3%，与原分段规则的 75% 档基本重合）；n>100 封顶 85%，评价量
+# 再大也不加码；n<5 没有统计意义，不按好评率筛。
+# 作业站列表接口每条直接带 like/dislike 原始计数；返回的 rating_ratio 是
+# 四舍五入到 1 位小数的点赞率（0.995 也显示 1.0），判不了高门槛档，自己算。
+RATING_LO, RATING_HI = 0.65, 0.85
+RATING_N_MIN, RATING_N_MAX = 5, 100
 
 
 def difficulty_flags(content) -> int:
@@ -407,6 +417,28 @@ def _fetch_ops_raw(stage, pages=2, min_rating=0, force=False):
     return items
 
 
+def required_rating(n) -> float:
+    """评价量 n → 所需好评率：对数插值，见 RATING_* 常量注释。
+
+    n<5 返回 0（不筛），n>=100 恒为 RATING_HI。
+    """
+    if n < RATING_N_MIN:
+        return 0.0
+    r = RATING_LO + (RATING_HI - RATING_LO) * \
+        math.log(n / RATING_N_MIN) / math.log(RATING_N_MAX / RATING_N_MIN)
+    return min(RATING_HI, r)
+
+
+def rating_ok(meta) -> bool:
+    """好评率门槛：like/(like+dislike) 达到 required_rating(评价量)。"""
+    lk = int(meta.get('like') or 0)
+    dk = int(meta.get('dislike') or 0)
+    n = lk + dk
+    if not n:
+        return True
+    return lk / n >= required_rating(n)
+
+
 def difficulty_text_for(stage_name, flags):
     """写入日志/列表用的难度名：险地/磨难/简单按作业的 stageId 说，其余按位标志"""
     s = str(stage_name or '')
@@ -473,10 +505,15 @@ def rank_key(row, newbie=False):
 def _collect_rows(stage, owned_map, pages=2, min_rating=0, newbie=False):
     """拉一个关卡的作业并打分（不截断，供普通/突袭两行共用）
 
+    拉取后先按好评率门槛滤一轮（rating_ok，评价量太少的不筛），
+    全不达标时退回不过滤（跟下面的 pass 规则一致，免得一关作业都不剩）；
     用户规则：缺 ≥2 个干员、或练度不满足 ≥2 人的作业直接 pass（不推荐）；
-    整关全被 pass 时退回不过滤，免得一关作业都不剩。
+    整关全被 pass 时同样退回不过滤。
     """
     items = fetch_ops(stage, pages=pages, min_rating=min_rating)
+    rated = [it for it in items if rating_ok(it['meta'])]
+    if rated:
+        items = rated
     rows, dropped = [], []
     for it in items:
         mode, missing, training, total, detail, six = match_operation(it['content'], owned_map)
@@ -497,19 +534,6 @@ def _pack_stage(stage, rows, limit=12):
         'best': rows[0] if rows else None,
         'ops': rows[:limit],
     }
-
-
-def match_stage(stage, owned_map, pages=2, min_rating=0, limit=12, variant=None):
-    """variant: None 不区分 / 'normal' 只要普通可用 / 'raid' 只要突袭可用
-
-    宽度 3（普通+突袭通用）的作业两边都算。
-    """
-    rows = _collect_rows(stage, owned_map, pages=pages, min_rating=min_rating)
-    if variant == 'normal':
-        rows = [r for r in rows if r['difficulty'] & DIFF_NORMAL]
-    elif variant == 'raid':
-        rows = [r for r in rows if r['difficulty'] & DIFF_RAID]
-    return _pack_stage(stage, rows, limit=limit)
 
 
 def stage_variants(stage, rows, limit=12):
