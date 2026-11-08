@@ -84,11 +84,29 @@ def make_icon():
     return ICON
 
 
+def _same_content(a, b):
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    import hashlib
+    ha = hashlib.sha256()
+    with open(a, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            ha.update(chunk)
+    hb = hashlib.sha256()
+    with open(b, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            hb.update(chunk)
+    return ha.hexdigest() == hb.hexdigest()
+
+
 def merge_overwrite(src, dst):
     """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动
 
     单文件级重试：刚被 taskkill 的 exe 句柄释放是异步的，杀软也可能瞬时
-    锁住新 DLL，重试几秒基本都能过去；重试耗尽才向调用方抛 PermissionError。
+    锁住新 DLL，重试几秒基本都能过去。重试仍锁时比对内容：一样就不覆盖
+    （典型如被 MAA.exe 加载的 VCRUNTIME140.dll，每次构建内容相同，覆盖
+    本无意义）——旧版 MAA-PRTS 启动的 MAA 会锁着这些文件，跳过它们才能
+    把带修复的新 exe 递进去，锁循环自然解开。
     """
     for base, _dirs, files in os.walk(src):
         rel = os.path.relpath(base, src)
@@ -102,6 +120,9 @@ def merge_overwrite(src, dst):
                     shutil.copy2(s, t)
                     break
                 except PermissionError:
+                    if os.path.isfile(t) and _same_content(s, t):
+                        print('locked but identical, skipped: %s' % t)
+                        break
                     if attempt == 5:
                         print('still locked after retries: %s' % t)
                         raise
