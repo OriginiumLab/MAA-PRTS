@@ -170,6 +170,9 @@ DEFAULTS = {
     'maaDir': '',
     'maaDirs': [],          # 用过的 MAA 根目录历史（添加账号时「已存过」列表的数据源）
     'autoStartMaa': True,
+    'autoUpdatePack': True,  # 启动后自动拉取新的游戏资源包（关卡/干员/活动）
+    'autoCheckAppUpdate': True,   # 启动后检查程序本体有没有新版本（6 小时一次）
+    'acceptPrerelease': False,    # 要不要接收 vX.Y.Z-beta.N 这类预发布版
     'lastAccount': '',
     'accountOrder': [],     # 账号列表手动排序（长按拖动保存的文件名顺序）
 }

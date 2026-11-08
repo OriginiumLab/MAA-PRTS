@@ -1015,6 +1015,210 @@ def check_story_stage_filter():
     assert any(s['code'] == 'NL-EX-7' for s in r['stages']), '战斗关被误删了'
 
 
+# ------------------------------------------------- B20 资源包幂等
+def check_pack_idempotent():
+    """自动同步的前提：同一份上游数据，任何时候生成都得到同一个包。
+
+    以前 version 是「生成日期」、fingerprint 又把 version 算进去，
+    隔天重跑就会凭空变出新指纹，全体用户白弹一次「资源已更新」。
+    """
+    import importlib.util
+
+    path = os.path.join(REPO, 'resources', 'make_pack.py')
+    spec = importlib.util.spec_from_file_location('mp_under_test', path)
+    mp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mp)
+
+    # 1. 游戏版本 → 展示版本
+    assert mp.norm_version('26-10-29-15-36-11-33649006') == '2026.10.29'
+    assert mp.norm_version('2026-10-29') == '2026.10.29'
+    assert mp.norm_version('') == ''
+
+    # 2. 指纹只看内容：同内容必同指纹，换内容必变
+    args = ({'char_a': {'name': 'A'}}, {'sk': 'S'}, {'eq': {'n': 1}},
+            [{'id': 'main_01-07', 'code': '1-7'}], {'z': {'name': 'Z'}},
+            {'act1': {'name': '活动'}})
+    fp1 = mp.content_fingerprint(*args)
+    fp2 = mp.content_fingerprint(*args)
+    assert fp1 == fp2, '同内容生成了不同指纹：%s / %s' % (fp1, fp2)
+    changed = (args[0], args[1], args[2], args[3], args[4],
+               {'act1': {'name': '活动改'}})
+    assert mp.content_fingerprint(*changed) != fp1, '内容变了指纹却不变'
+
+    # 3. 仓库里这份包必须带新字段，且 version 是游戏版本而不是生成日期
+    with open(os.path.join(REPO, 'resources', 'arknights.json'), encoding='utf-8') as f:
+        pack = json.load(f)
+    assert re.match(r'^\d{4}\.\d{2}\.\d{2}$', pack.get('version') or ''), \
+        '资源包 version 格式不对：%r' % pack.get('version')
+    assert re.match(r'^[0-9a-f]{8}$', pack.get('fingerprint') or ''), \
+        '资源包 fingerprint 应为 8 位十六进制'
+    for key in ('gameVersion', 'sourceCommit'):
+        assert key in pack, '资源包缺字段 %s（自动同步依赖它）' % key
+
+    # 4. manifest 与包对得上
+    with open(os.path.join(REPO, 'resources', 'pack-manifest.json'), encoding='utf-8') as f:
+        man = json.load(f)
+    item = (man.get('packs') or {}).get('arknights') or {}
+    assert item.get('fingerprint') == pack['fingerprint'], 'manifest 与资源包指纹不一致'
+    assert item.get('sha256') and item.get('urls'), 'manifest 缺校验值或下载地址'
+
+    # 5. 版本口径切换不能弹「更新到更旧的版本」
+    from core import version as vmod
+    assert vmod._is_older('2026.10.29', '2026.11.07'), '口径迁移应判成「更旧」并静默处理'
+    assert not vmod._is_older('2026.11.07', '2026.10.29')
+    assert not vmod._is_older('v2.3.0', '2026.10.29'), '非点分三段的版本号不该误判'
+
+
+# ------------------------------------------------- B21 资源更新校验
+def check_pack_verify():
+    """客户端换包前的三道闸：sha256、大小、条数不许变少。
+
+    任何一条不满足都必须拒绝落盘——半截包覆盖下去就是「资源表全空」。
+    """
+    import hashlib
+    from core import packsync
+
+    path = os.path.join(REPO, 'resources', 'arknights.json')
+    raw = open(path, 'rb').read()
+    good = {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+    data = packsync._verify('arknights', raw, good)
+    assert data.get('counts', {}).get('chars') == json.loads(raw)['counts']['chars']
+
+    # 校验值不对
+    bad = dict(good, sha256='f' * 64)
+    try:
+        packsync._verify('arknights', raw, bad)
+        raise AssertionError('sha256 不对却通过了校验')
+    except RuntimeError:
+        pass
+
+    # 大小不对
+    try:
+        packsync._verify('arknights', raw, dict(good, size=len(raw) - 1))
+        raise AssertionError('大小不对却通过了校验')
+    except RuntimeError:
+        pass
+
+    # 条数变少（把干员砍到 1 个，其余字段照抄，sha256 仍是对的）
+    shrunk = json.loads(raw)
+    shrunk['counts'] = dict(shrunk.get('counts') or {}, chars=1)
+    raw2 = json.dumps(shrunk, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    meta2 = {'size': len(raw2), 'sha256': hashlib.sha256(raw2).hexdigest()}
+    try:
+        packsync._verify('arknights', raw2, meta2)
+        raise AssertionError('条数变少却通过了校验')
+    except RuntimeError as e:
+        assert '比本地少' in str(e), '拒绝原因不对：%s' % e
+
+    # 不是 json
+    try:
+        packsync._verify('arknights', b'not json', {'size': 8, 'sha256': ''})
+        raise AssertionError('坏 json 却通过了校验')
+    except RuntimeError:
+        pass
+
+
+# ------------------------------------------------- B22 程序自更新
+def check_app_update():
+    """版本比较、安装包校验、安装脚本的替换边界。
+
+    这里最容易出事的三处：脏 tag 触发更新、压缩包路径穿越、
+    替换时误删 config/。安装脚本本身没法在冒烟里跑（要真等进程退出），
+    所以退一步断言它生成的文本：只动 MAA-PRTS.exe 与 _internal。
+    """
+    import hashlib
+    import io
+    import zipfile
+    from core import appupdate as A
+
+    # 1. 版本比较
+    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0)
+    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 2)
+    assert A.is_newer('v2.10.0', '2.9.0'), '2.10 必须大于 2.9（按数字比，不是字符串比）'
+    assert not A.is_newer('v2.4.0-beta.1', '2.4.0'), '预发布不该比同号正式版新'
+    assert A.is_newer('v2.4.0', '2.4.0-beta.1')
+    assert not A.is_newer('v2.4.0', '2.4.0')
+    for junk in ('', 'latest', 'v2', '2.4', 'v2.4.0.1', 'release-2.4'):
+        assert A.parse_version(junk) is None, '脏 tag 不该解析成功：%r' % junk
+        assert not A.is_newer(junk, '2.0.0'), '脏 tag 不该触发更新：%r' % junk
+
+    # 2. 按架构选包 + digest 解析
+    asset = A._pick_asset([
+        {'name': 'MAA-PRTS-v2.4.0-win-arm64.zip'},
+        {'name': 'MAA-PRTS-v2.4.0-win-x64.zip'},
+        {'name': 'source.tar.gz'},
+    ])
+    assert asset and asset['name'].endswith('%s.zip' % A._arch()), asset
+    assert A._digest_sha256({'digest': 'sha256:AB12'}) == 'ab12'
+    assert A._digest_sha256({}) == ''
+
+    # 3. 安装包完整性
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        zf.writestr('MAA-PRTS/MAA-PRTS.exe', b'MZ' + b'\0' * 4096)
+        zf.writestr('MAA-PRTS/_internal/x.dll', b'\0' * 2048)
+    good = buf.getvalue()
+    meta = {'size': len(good), 'sha256': hashlib.sha256(good).hexdigest()}
+    A._verify_zip(good, meta)          # 不抛就算过
+
+    for label, m in (
+        ('sha256 不对', dict(meta, sha256='0' * 64)),
+        ('大小不对', dict(meta, size=len(good) - 1)),
+    ):
+        try:
+            A._verify_zip(good, m)
+            raise AssertionError('%s却通过了校验' % label)
+        except RuntimeError:
+            pass
+
+    # 不含 exe 的包必须拒
+    noexe = io.BytesIO()
+    with zipfile.ZipFile(noexe, 'w') as zf:
+        zf.writestr('MAA-PRTS/readme.txt', b'hi')
+    raw = noexe.getvalue()
+    try:
+        A._verify_zip(raw, {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
+        raise AssertionError('压缩包里没有 exe 却通过了校验')
+    except RuntimeError:
+        pass
+
+    # 4. 路径穿越（zip-slip）必须拒
+    evil = io.BytesIO()
+    with zipfile.ZipFile(evil, 'w') as zf:
+        zf.writestr('MAA-PRTS/MAA-PRTS.exe', b'MZ')
+        zf.writestr('../../evil.exe', b'x')
+    evil.seek(0)
+    try:
+        with zipfile.ZipFile(evil) as zf:
+            A._safe_members(zf)
+        raise AssertionError('压缩包里的 ../ 没有拦住')
+    except RuntimeError as e:
+        assert '可疑路径' in str(e), e
+
+    # 5. 安装脚本：只碰 exe 与 _internal，用户数据一个都不能出现在脚本里
+    tmp = tempfile.mkdtemp(prefix='maaprts-appupd-')
+    backup = A.update_dir
+    try:
+        A.update_dir = lambda: tmp
+        stage = os.path.join(tmp, 'stage', 'MAA-PRTS')
+        os.makedirs(stage, exist_ok=True)
+        exe = os.path.join(stage, 'MAA-PRTS.exe')
+        with open(exe, 'wb') as f:
+            f.write(b'MZ')
+        cmd = A._write_installer(exe, '2.4.0')
+        assert cmd and os.path.isfile(cmd), '安装脚本没生成'
+        text = open(cmd, encoding='ascii').read()
+
+        assert 'tasklist' in text and 'robocopy' in text, '脚本缺少等待/替换步骤'
+        assert 'update\\stage\\MAA-PRTS\\MAA-PRTS.exe' in text, '包内路径拼错了'
+        assert 'echo 2.4.0 > ' in text, '版本号后的 0> 会被 cmd 当成 stdin 重定向，必须留空格'
+        for keep in ('config', 'debug', 'resources'):
+            assert keep not in text, '安装脚本不该出现 %s（那是用户数据）' % keep
+        assert '_internal' in text, '没有替换 _internal，会留下新旧混装'
+    finally:
+        A.update_dir = backup
+        shutil.rmtree(tmp, ignore_errors=True)
+
 # ---------------------------------------------------------------- B19 主线难度变体
 def check_mainline_difficulty_variants():
     """主线难度体系（按章梳理，作业站按完整 stageId 索引作业）：
@@ -1174,6 +1378,9 @@ def main():
         r.check('B17 MAA 导入账号只比等级', check_maa_import_level_only)
         r.check('B18 剧情关不进搜索', check_story_stage_filter)
         r.check('B19 主线难度变体（简单/标准/磨难/险地）', check_mainline_difficulty_variants)
+        r.check('B20 资源包生成幂等（版本/指纹）', check_pack_idempotent)
+        r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
+        r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

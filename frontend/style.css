@@ -104,6 +104,7 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .icon-btn {
   width: 32px; height: 32px; border-radius: 9px;
   display: grid; place-items: center;
+  position: relative;
   color: var(--text-2);
   transition: .16s ease;
 }
@@ -111,6 +112,32 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .icon-btn:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
 .icon-btn.small { width: 26px; height: 26px; }
 .icon-btn.small svg { width: 15px; height: 15px; }
+
+/* 有新版本时齿轮右上角的小红点（不挡图标，也不抢注意力） */
+.app-dot {
+  position: absolute; top: 5px; right: 5px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--rose);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.app-new { color: var(--amber); font-weight: 600; }
+
+/* 更新弹窗里的 changelog：原样保留 Release 里的换行与缩进 */
+.upd-notes {
+  margin: 12px 0 6px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-2);
+}
 
 .account-list {
   flex: 1;

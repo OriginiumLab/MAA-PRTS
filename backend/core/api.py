@@ -7,7 +7,8 @@ import os
 import traceback
 import urllib.parse
 
-from . import accounts, copilot, maa, operbox, paradox, resources, settings, sklogin, tasks, version
+from . import (accounts, appupdate, copilot, maa, operbox, packsync, paradox,
+               resources, settings, sklogin, tasks, version)
 
 WEB = settings.static_dir()
 
@@ -47,7 +48,9 @@ def bootstrap(_q, _body):
     acts = resources.activity_list(18)
     sv = _settings_view(st, accs)
     return {
-        'settings': {k: sv[k] for k in ('maaDir', 'maaDirs', 'autoStartMaa')},
+        'settings': {k: sv[k] for k in ('maaDir', 'maaDirs', 'autoStartMaa',
+                                        'autoUpdatePack', 'autoCheckAppUpdate',
+                                        'acceptPrerelease')},
         'accounts': accs,
         'lastAccount': last,
         'maa': status,
@@ -200,6 +203,41 @@ def api_gamedata(_q, _body):
 def api_gamedata_ack(_q, _body):
     """用户点「知道了」之后清掉更新提示"""
     return version.ack(resources.activity_list(18))
+
+
+def api_pack_status(q, _body):
+    """资源包有没有新版本（只查不下载；force=1 时给更长的超时）"""
+    force = str((q or {}).get('force') or '').lower() in ('1', 'true', 'yes')
+    return packsync.status(timeout=8 if force else 4)
+
+
+def api_pack_update(_q, _body):
+    """下载并安装新的资源包（换完立即重算「新活动」提示）"""
+    r = packsync.apply()
+    acts = resources.activity_list(18)
+    return {'result': r, 'pack': resources.pack_info(),
+            'gamedata': version.check(acts)}
+
+
+def api_app_status(q, _body):
+    """程序本体有没有新版本（只查不下载；force=1 跳过 6 小时节流）"""
+    force = str((q or {}).get('force') or '').lower() in ('1', 'true', 'yes')
+    return appupdate.status(force=force)
+
+
+def api_app_download(_q, _body):
+    """下载安装包并校验（不替换，等用户点「重启并安装」）"""
+    return appupdate.download()
+
+
+def api_app_install(_q, _body):
+    """解压 + 拉起安装脚本 + 让程序退出；前端会看到窗口自己关掉"""
+    return appupdate.install()
+
+
+def api_app_open(q, _body):
+    """用系统浏览器打开 Release 页（前端跨域拿不到）"""
+    return appupdate.open_page((q or {}).get('url') or '')
 
 
 def api_op(q, _body):
@@ -396,6 +434,12 @@ ROUTES = {
     '/api/activities': api_activities,
     '/api/gamedata': api_gamedata,
     '/api/gamedata/ack': api_gamedata_ack,
+    '/api/pack/status': api_pack_status,
+    '/api/pack/update': api_pack_update,
+    '/api/app/status': api_app_status,
+    '/api/app/download': api_app_download,
+    '/api/app/install': api_app_install,
+    '/api/app/open': api_app_open,
     '/api/op': api_op,
     '/api/maa/status': api_maa_status,
     '/api/maa/running': api_maa_running,

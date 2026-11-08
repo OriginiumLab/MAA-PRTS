@@ -17,6 +17,9 @@ build/*
 dist/
 *.spec
 
+# 程序自更新：下载的安装包与解压暂存（一次十几 MB，不入库）
+/update/
+
 # Python
 __pycache__/
 *.py[cod]

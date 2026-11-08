@@ -90,9 +90,25 @@ def pack_meta() -> dict:
         'version': ver,
         'fingerprint': fp,
         'generatedAt': p.get('generatedAt'),
+        'gameVersion': p.get('gameVersion') or '',
         'counts': counts,
         'path': settings.pack_path(),
     }
+
+
+def _is_older(a, b) -> bool:
+    """a 是否比 b 旧（只认 X.Y.Z 点分数字，其它格式一律 False）
+
+    用途：2026-11 起资源包的 version 从「生成日期」改成「游戏版本日期」，
+    老用户存的是 2026.11.07（生成那天），新包是 2026.10.29（游戏版本），
+    直接比会把这次口径切换显示成「更新到更旧的版本」。这种情况静默记下即可。
+    """
+    try:
+        pa = [int(x) for x in str(a or '').split('.')]
+        pb = [int(x) for x in str(b or '').split('.')]
+    except Exception:
+        return False
+    return len(pa) == 3 and len(pb) == 3 and pa < pb
 
 
 # ---------------------------------------------------------------- 本地记录
@@ -153,6 +169,28 @@ def check(activities=None) -> dict:
 
     changed = (st.get('fingerprint') != meta['fingerprint']
                or st.get('version') != meta['version'])
+
+    # version 口径从「生成日期」改成「游戏版本日期」后，老用户存的是生成那天，
+    # 新包版本号反而更小。这不是回退，静默重新记一次，别弹「更新到更旧的版本」。
+    if changed and _is_older(meta['version'], st.get('version')):
+        _save_state({
+            'version': meta['version'],
+            'fingerprint': meta['fingerprint'],
+            'counts': meta['counts'],
+            'acts': [a['id'] for a in acts],
+            'seenAt': _now(),
+            'pending': None,
+        })
+        return {
+            'app': app_version(),
+            'version': meta['version'],
+            'fingerprint': meta['fingerprint'],
+            'generatedAt': meta['generatedAt'],
+            'counts': meta['counts'],
+            'fresh': False,
+            'updated': False,
+            'pending': None,
+        }
 
     if changed:
         old_counts = st.get('counts') or {}

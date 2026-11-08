@@ -92,6 +92,10 @@ def _stages():
             # 「共 0 份 / 打不了」，用户点了也永远没作业）
             if _is_story(st):
                 continue
+            # 剧情关不进搜索，也不参与活动展开（以前每个活动都多出几行
+            # 「共 0 份 / 打不了」，用户点了也永远没作业）
+            if _is_story(st):
+                continue
             zid = st.get('zone') or ''
             if sid.endswith('#s'):
                 diff, diff_cn = 'risky', '险地'
