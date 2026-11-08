@@ -172,7 +172,7 @@ python resources\make_pack.py --excel "D:\ArknightsGameResource\gamedata\excel"
 
 程序启动 4 秒后查一次 GitHub Releases（6 小时节流），有新版本只在设置齿轮上点个红点，
 **不自动安装**。用户在弹窗里点「下载并安装」→「重启并安装」，
-退出后由 `update/install.cmd` 替换 `MAA-PRTS.exe` 与 `_internal/`，
+退出后由 `update/install.ps1` 替换 `MAA-PRTS.exe` 与 `_internal/`，
 `config/`、`debug/`、`resources/` 一律不碰。详见 `docs/update.md`。
 
 ---
