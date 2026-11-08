@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 from . import copilot, settings, tasks
@@ -232,11 +233,29 @@ def close(maa_dir=None):
     return not is_running()
 
 
+def _launch_env():
+    """启动 MAA 用的环境：把 PyInstaller 注入 PATH 的包内目录剔掉。
+
+    打包运行时 bootloader 会把 exe 目录与 _internal 前插进 PATH；这个
+    环境会被 MAA.exe 原样继承。MAA 目录自己没带 VCRUNTIME140.dll 时，
+    它会沿 PATH 捞到我们 _internal 里的那份——此后 MAA.exe 反向锁死
+    发布包，build and run.bat 覆盖合并必失败（taskkill 又绝不能碰 MAA）。
+    启动前清干净，MAA 就只会用自己的/系统的 CRT。
+    """
+    env = os.environ.copy()
+    me = os.path.dirname(os.path.abspath(sys.executable))
+    drop = {os.path.normcase(me), os.path.normcase(os.path.join(me, '_internal'))}
+    parts = [p for p in env.get('PATH', '').split(os.pathsep)
+             if p and os.path.normcase(p) not in drop]
+    env['PATH'] = os.pathsep.join(parts)
+    return env
+
+
 def launch(maa_dir=None):
     exe = _exe(maa_dir)
     if not os.path.isfile(exe):
         raise FileNotFoundError('找不到 MAA.exe：%s' % exe)
-    subprocess.Popen([exe], cwd=_dir(maa_dir), close_fds=True)
+    subprocess.Popen([exe], cwd=_dir(maa_dir), env=_launch_env(), close_fds=True)
     time.sleep(1.0)
     return bool(running_in(_dir(maa_dir)))
 

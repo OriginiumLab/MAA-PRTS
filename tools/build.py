@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICON = os.path.join(HERE, 'resources', 'assets', 'app.ico')
@@ -84,13 +85,27 @@ def make_icon():
 
 
 def merge_overwrite(src, dst):
-    """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动"""
+    """把全新产物 src 合并覆盖进发布包目录 dst：同名文件覆盖，dst 独有的内容一律不动
+
+    单文件级重试：刚被 taskkill 的 exe 句柄释放是异步的，杀软也可能瞬时
+    锁住新 DLL，重试几秒基本都能过去；重试耗尽才向调用方抛 PermissionError。
+    """
     for base, _dirs, files in os.walk(src):
         rel = os.path.relpath(base, src)
         target = dst if rel == '.' else os.path.join(dst, rel)
         os.makedirs(target, exist_ok=True)
         for f in files:
-            shutil.copy2(os.path.join(base, f), os.path.join(target, f))
+            s = os.path.join(base, f)
+            t = os.path.join(target, f)
+            for attempt in range(6):
+                try:
+                    shutil.copy2(s, t)
+                    break
+                except PermissionError:
+                    if attempt == 5:
+                        print('still locked after retries: %s' % t)
+                        raise
+                    time.sleep(0.5)
 
 
 def count_stale(fresh, pkg):
