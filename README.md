@@ -53,15 +53,15 @@ MAA-PRTS\
 
 ### 方式二：自己打包（需要 Python 3.10+）
 
-双击 `打包.bat` 即可：首次运行会自动创建项目专用环境 `.venv` 并安装依赖，然后调用 PyInstaller 打包。
+双击 `build.bat` 即可：首次运行会自动创建项目专用环境 `.venv` 并安装依赖，然后调用 PyInstaller 打包。
 
 产物在 `build\MAA-PRTS\`：整个文件夹就是发布包，压缩成 zip 即为 Release 附件。
 
 ### 方式三：跑源码（需要 Python 3.10+）
 
-双击 `启动.bat`：优先启动编译版，没有编译版时自动以源码模式运行，首次会创建 `.venv` 并安装依赖。
+双击 `run.bat`：优先启动编译版，没有编译版时自动以源码模式运行，首次会创建 `.venv` 并安装依赖。
 
-调试模式（带 devtools）：双击 `调试启动.bat`。
+调试模式（带 devtools）：双击 `debug.bat`。
 
 自动初始化失败时，也可以手动准备环境：
 
@@ -100,7 +100,7 @@ MAA-PRTS-1/
 ├── debug/               运行日志 app.log（可随手删）
 ├── build/               构建产物（MAA-PRTS/ 发布包；中间文件用后即删）
 ├── tools/               setup/（启动打包的环境引导）、build.py（打包脚本）、smoketest/（冒烟测试）
-├── 启动.bat / 调试启动.bat / 打包.bat
+├── run.bat / debug.bat / build.bat / "build and run.bat"
 └── README.md
 ```
 

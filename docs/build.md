@@ -2,7 +2,7 @@
 
 ## 用途
 
-仓库里唯一的构建输出目录，由 `打包.bat` / `python tools/build.py` 生成：
+仓库里唯一的构建输出目录，由 `build.bat` / `python tools/build.py` 生成：
 
 ```
 build/
@@ -20,7 +20,7 @@ build/
 
 ## 生成
 
-双击根目录 `打包.bat`（或 `python tools/build.py`）。每次都全量构建出新包，再以
+双击根目录 `build.bat`（或 `python tools/build.py`）。每次都全量构建出新包，再以
 **同名文件覆盖**的方式合并进 `build/MAA-PRTS/`：目录里已有的其它内容（如原地
 运行产生的 `config/`、`debug/`）一律不动；新包里已不存在的旧文件也不清理
 （打包结束会提示残留数量，介意就手动删掉整个目录重新打包）。

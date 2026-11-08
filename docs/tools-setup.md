@@ -2,7 +2,7 @@
 
 ## 用途
 
-`prepare-python.bat` 是 `启动.bat` / `打包.bat` 共享的 Python 环境引导脚本，
+`prepare-python.bat` 是 `run.bat` / `build.bat` 共享的 Python 环境引导脚本，
 不要单独运行。它做三件事：
 
 1. 选解释器：优先项目 `.venv`，其次 `py -3` / `python` / `python3`，

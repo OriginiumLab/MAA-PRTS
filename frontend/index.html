@@ -72,13 +72,15 @@
     </header>
 
     <section class="search-wrap">
-      <div class="search-box">
-        <svg class="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
-        </svg>
-        <input id="search-input" type="text" autocomplete="off" spellcheck="false"
-               placeholder="输入关卡代号 TL-10，或活动代号 act55side / 活动名 月行水上">
-        <button class="search-btn" id="btn-search">搜索作业</button>
+      <div class="search-bar">
+        <div class="search-box">
+          <svg class="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+          </svg>
+          <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="输入关卡代号 TL-10，或活动代号 act55side / 活动名 月行水上">
+        </div>
+        <button class="search-btn" id="btn-next" disabled title="搜索同一系列、同一难度的下一关">下一关</button>
       </div>
       <div class="quick-row" id="quick-row"></div>
     </section>
@@ -133,7 +135,7 @@
         <span>写完自动启动 MAA</span>
       </label>
       <button class="primary-btn" id="btn-apply" disabled>写入 MAA 并重启</button>
-      <p class="hint">拖动可调整顺序，顺序就是 MAA 里的执行顺序<br>有突袭版的关卡在搜索结果里会分「普通 / 突袭」两行，通用作业两边都在<br>从哪一行加的作业就只写哪一档，两行各加一份 = MAA 里普通、突袭各一条<br>会先关闭 MAA → 备份配置 → 写入作业 → 重新启动</p>
+      <p class="hint">拖动可调整顺序，顺序就是 MAA 里的执行顺序<br>多难度的关卡会按难度分行：突袭关分「普通 / 突袭」，10-14 章分「磨难 / 标准 / 简单」（默认看磨难），15 章起分「普通 / 险地」<br>从哪一行加的作业就只写哪一档，险地行会自动让 MAA 切到险地<br>会先关闭 MAA → 备份配置 → 写入作业 → 重新启动</p>
     </div>
   </aside>
 
