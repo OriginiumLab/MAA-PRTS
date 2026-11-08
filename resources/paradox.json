@@ -1,0 +1,2223 @@
+{
+"chars": {
+"char_003_kalts": {
+"elite": 2,
+"level": 1,
+"name": "凯尔希",
+"pname": "文明切片",
+"stage": "mem_kalts_1"
+},
+"char_009_12fce": {
+"elite": 0,
+"level": 30,
+"name": "12F",
+"pname": "生还者",
+"stage": "mem_12fce_1"
+},
+"char_010_chen": {
+"elite": 2,
+"level": 1,
+"name": "陈",
+"pname": "永不后退",
+"stage": "mem_chen_1"
+},
+"char_017_huang": {
+"elite": 2,
+"level": 1,
+"name": "煌",
+"pname": "一夫当关",
+"stage": "mem_huang_1"
+},
+"char_1011_lava2": {
+"elite": 2,
+"level": 1,
+"name": "炎狱炎熔",
+"pname": "训练成果",
+"stage": "mem_lava2_1"
+},
+"char_1013_chen2": {
+"elite": 2,
+"level": 1,
+"name": "假日威龙陈",
+"pname": "去往高处",
+"stage": "mem_chen2_1"
+},
+"char_1014_nearl2": {
+"elite": 2,
+"level": 1,
+"name": "耀骑士临光",
+"pname": "出鞘",
+"stage": "mem_nearl2_1"
+},
+"char_1016_agoat2": {
+"elite": 2,
+"level": 1,
+"name": "纯烬艾雅法拉",
+"pname": "学者的实力",
+"stage": "mem_agoat2_1"
+},
+"char_101_sora": {
+"elite": 2,
+"level": 1,
+"name": "空",
+"pname": "准备好了，一起上吧",
+"stage": "mem_sora_1"
+},
+"char_1021_kroos2": {
+"elite": 2,
+"level": 1,
+"name": "寒芒克洛丝",
+"pname": "可信赖的同伴",
+"stage": "mem_kroos2_1"
+},
+"char_1023_ghost2": {
+"elite": 2,
+"level": 1,
+"name": "归溟幽灵鲨",
+"pname": "倒影",
+"stage": "mem_ghost2_1"
+},
+"char_1024_hbisc2": {
+"elite": 2,
+"level": 1,
+"name": "濯尘芙蓉",
+"pname": "并蒂花",
+"stage": "mem_hbisc2_1"
+},
+"char_1026_gvial2": {
+"elite": 2,
+"level": 1,
+"name": "百炼嘉维尔",
+"pname": "“百炼”",
+"stage": "mem_gvial2_1"
+},
+"char_1027_greyy2": {
+"elite": 2,
+"level": 1,
+"name": "承曦格雷伊",
+"pname": "光源",
+"stage": "mem_greyy2_1"
+},
+"char_102_texas": {
+"elite": 2,
+"level": 1,
+"name": "德克萨斯",
+"pname": "因地制宜",
+"stage": "mem_texas_1"
+},
+"char_1032_excu2": {
+"elite": 2,
+"level": 1,
+"name": "圣约送葬人",
+"pname": "安全框架",
+"stage": "mem_excu2_1"
+},
+"char_1034_jesca2": {
+"elite": 2,
+"level": 1,
+"name": "涤火杰西卡",
+"pname": "携盾机动",
+"stage": "mem_jesca2_1"
+},
+"char_1038_whitw2": {
+"elite": 2,
+"level": 1,
+"name": "荒芜拉普兰德",
+"pname": "玩家",
+"stage": "mem_whitw2_1"
+},
+"char_103_angel": {
+"elite": 2,
+"level": 1,
+"name": "能天使",
+"pname": "拉特兰风格",
+"stage": "mem_angel_1"
+},
+"char_1047_halo2": {
+"elite": 2,
+"level": 1,
+"name": "溯光星源",
+"pname": "单相的追索者",
+"stage": "mem_halo2_1"
+},
+"char_106_franka": {
+"elite": 2,
+"level": 1,
+"name": "芙兰卡",
+"pname": "削铁如泥",
+"stage": "mem_franka_1"
+},
+"char_107_liskam": {
+"elite": 2,
+"level": 1,
+"name": "雷蛇",
+"pname": "攻守兼备",
+"stage": "mem_liskam_1"
+},
+"char_108_silent": {
+"elite": 2,
+"level": 1,
+"name": "赫默",
+"pname": "全域救护",
+"stage": "mem_silent_1"
+},
+"char_109_fmout": {
+"elite": 2,
+"level": 1,
+"name": "远山",
+"pname": "预卜先知",
+"stage": "mem_fmout_1"
+},
+"char_110_deepcl": {
+"elite": 2,
+"level": 1,
+"name": "深海色",
+"pname": "战场绘图",
+"stage": "mem_deepcl_1"
+},
+"char_112_siege": {
+"elite": 2,
+"level": 1,
+"name": "推进之王",
+"pname": "头阵冲锋",
+"stage": "mem_siege_1"
+},
+"char_115_headbr": {
+"elite": 2,
+"level": 1,
+"name": "凛冬",
+"pname": "互帮互助",
+"stage": "mem_headbr_1"
+},
+"char_117_myrrh": {
+"elite": 2,
+"level": 1,
+"name": "末药",
+"pname": "良药苦口",
+"stage": "mem_myrrh_1"
+},
+"char_118_yuki": {
+"elite": 2,
+"level": 1,
+"name": "白雪",
+"pname": "控制距离",
+"stage": "mem_yuki_1"
+},
+"char_120_hibisc": {
+"elite": 1,
+"level": 55,
+"name": "芙蓉",
+"pname": "“持续关注”",
+"stage": "mem_hibisc_1"
+},
+"char_121_lava": {
+"elite": 1,
+"level": 55,
+"name": "炎熔",
+"pname": "不过是几只小虫子！",
+"stage": "mem_lava_1"
+},
+"char_122_beagle": {
+"elite": 1,
+"level": 55,
+"name": "米格鲁",
+"pname": "A1的基石",
+"stage": "mem_beagle_1"
+},
+"char_123_fang": {
+"elite": 1,
+"level": 55,
+"name": "芬",
+"pname": "愉快合作",
+"stage": "mem_fang_1"
+},
+"char_124_kroos": {
+"elite": 1,
+"level": 55,
+"name": "克洛丝",
+"pname": "模拟场景1122K",
+"stage": "mem_kroos_1"
+},
+"char_126_shotst": {
+"elite": 2,
+"level": 1,
+"name": "流星",
+"pname": "万箭齐发",
+"stage": "mem_shotst_1"
+},
+"char_127_estell": {
+"elite": 2,
+"level": 1,
+"name": "艾丝黛尔",
+"pname": "据守险地",
+"stage": "mem_estell_1"
+},
+"char_128_plosis": {
+"elite": 2,
+"level": 1,
+"name": "白面鸮",
+"pname": "量化治疗",
+"stage": "mem_plosis_1"
+},
+"char_129_bluep": {
+"elite": 2,
+"level": 1,
+"name": "蓝毒",
+"pname": "渗骨毒液",
+"stage": "mem_bluep_1"
+},
+"char_130_doberm": {
+"elite": 2,
+"level": 1,
+"name": "杜宾",
+"pname": "她的骄傲",
+"stage": "mem_doberm_1"
+},
+"char_133_mm": {
+"elite": 2,
+"level": 1,
+"name": "梅",
+"pname": "“不许靠近！”",
+"stage": "mem_mm_1"
+},
+"char_134_ifrit": {
+"elite": 2,
+"level": 1,
+"name": "伊芙利特",
+"pname": "互为后盾",
+"stage": "mem_ifrit_1"
+},
+"char_135_halo": {
+"elite": 2,
+"level": 1,
+"name": "星源",
+"pname": "群星闪烁相映",
+"stage": "mem_halo_1"
+},
+"char_136_hsguma": {
+"elite": 2,
+"level": 1,
+"name": "星熊",
+"pname": "无路可退",
+"stage": "mem_hsguma_1"
+},
+"char_137_brownb": {
+"elite": 2,
+"level": 1,
+"name": "猎蜂",
+"pname": "车轮战",
+"stage": "mem_brownb_1"
+},
+"char_141_nights": {
+"elite": 2,
+"level": 1,
+"name": "夜烟",
+"pname": "险中求胜",
+"stage": "mem_nights_1"
+},
+"char_143_ghost": {
+"elite": 2,
+"level": 1,
+"name": "幽灵鲨",
+"pname": "魂骨尚存",
+"stage": "mem_ghost_1"
+},
+"char_145_prove": {
+"elite": 2,
+"level": 1,
+"name": "普罗旺斯",
+"pname": "别让自己冻僵",
+"stage": "mem_prove_1"
+},
+"char_147_shining": {
+"elite": 2,
+"level": 1,
+"name": "闪灵",
+"pname": "坚如磐石",
+"stage": "mem_shining_1"
+},
+"char_149_scave": {
+"elite": 2,
+"level": 1,
+"name": "清道夫",
+"pname": "独行者的合谋",
+"stage": "mem_scave_1"
+},
+"char_1502_crosly": {
+"elite": 2,
+"level": 1,
+"name": "弑君者",
+"pname": "吹过冰原的风",
+"stage": "mem_crosly_1"
+},
+"char_150_snakek": {
+"elite": 2,
+"level": 1,
+"name": "蛇屠箱",
+"pname": "关键球员",
+"stage": "mem_snakek_1"
+},
+"char_151_myrtle": {
+"elite": 2,
+"level": 1,
+"name": "桃金娘",
+"pname": "“将军风范”",
+"stage": "mem_myrtle_1"
+},
+"char_154_morgan": {
+"elite": 2,
+"level": 1,
+"name": "摩根",
+"pname": "速度至上",
+"stage": "mem_morgan_1"
+},
+"char_155_tiger": {
+"elite": 2,
+"level": 1,
+"name": "因陀罗",
+"pname": "乘风追击",
+"stage": "mem_tiger_1"
+},
+"char_157_dagda": {
+"elite": 2,
+"level": 1,
+"name": "达格达",
+"pname": "患难与共",
+"stage": "mem_dagda_1"
+},
+"char_158_milu": {
+"elite": 2,
+"level": 1,
+"name": "守林人",
+"pname": "最佳视野",
+"stage": "mem_milu_1"
+},
+"char_163_hpsts": {
+"elite": 2,
+"level": 1,
+"name": "火神",
+"pname": "扼守",
+"stage": "mem_hpsts_1"
+},
+"char_166_skfire": {
+"elite": 2,
+"level": 1,
+"name": "天火",
+"pname": "焮天铄地",
+"stage": "mem_skfire_1"
+},
+"char_171_bldsk": {
+"elite": 2,
+"level": 1,
+"name": "华法琳",
+"pname": "战力增强剂",
+"stage": "mem_bldsk_1"
+},
+"char_172_svrash": {
+"elite": 2,
+"level": 1,
+"name": "银灰",
+"pname": "睥睨",
+"stage": "mem_svrash_1"
+},
+"char_173_slchan": {
+"elite": 2,
+"level": 1,
+"name": "崖心",
+"pname": "险路伏击",
+"stage": "mem_slchan_1"
+},
+"char_174_slbell": {
+"elite": 2,
+"level": 1,
+"name": "初雪",
+"pname": "风雪将至",
+"stage": "mem_slbell_1"
+},
+"char_179_cgbird": {
+"elite": 2,
+"level": 1,
+"name": "夜莺",
+"pname": "牢不可破的幻影",
+"stage": "mem_cgbird_1"
+},
+"char_180_amgoat": {
+"elite": 2,
+"level": 1,
+"name": "艾雅法拉",
+"pname": "一个人的包围圈",
+"stage": "mem_amgoat_1"
+},
+"char_181_flower": {
+"elite": 2,
+"level": 1,
+"name": "调香师",
+"pname": "花香四溢",
+"stage": "mem_flower_1"
+},
+"char_183_skgoat": {
+"elite": 2,
+"level": 1,
+"name": "地灵",
+"pname": "三人的阵线",
+"stage": "mem_skgoat_1"
+},
+"char_185_frncat": {
+"elite": 2,
+"level": 1,
+"name": "慕斯",
+"pname": "双手十指",
+"stage": "mem_frncat_1"
+},
+"char_187_ccheal": {
+"elite": 2,
+"level": 1,
+"name": "嘉维尔",
+"pname": "斧刃或是杖尖",
+"stage": "mem_ccheal_1"
+},
+"char_188_helage": {
+"elite": 2,
+"level": 1,
+"name": "赫拉格",
+"pname": "吾往矣",
+"stage": "mem_helage_1"
+},
+"char_190_clour": {
+"elite": 2,
+"level": 1,
+"name": "红云",
+"pname": "离雨之箭",
+"stage": "mem_clour_1"
+},
+"char_192_falco": {
+"elite": 1,
+"level": 55,
+"name": "翎羽",
+"pname": "迅捷之羽",
+"stage": "mem_falco_1"
+},
+"char_193_frostl": {
+"elite": 2,
+"level": 1,
+"name": "霜叶",
+"pname": "小队",
+"stage": "mem_frostl_1"
+},
+"char_194_leto": {
+"elite": 2,
+"level": 1,
+"name": "烈夏",
+"pname": "战鼓擂擂",
+"stage": "mem_leto_1"
+},
+"char_195_glassb": {
+"elite": 2,
+"level": 1,
+"name": "真理",
+"pname": " 风暴中心",
+"stage": "mem_glassb_1"
+},
+"char_196_sunbr": {
+"elite": 2,
+"level": 1,
+"name": "古米",
+"pname": "战场烹调师",
+"stage": "mem_sunbr_1"
+},
+"char_197_poca": {
+"elite": 2,
+"level": 1,
+"name": "早露",
+"pname": "习惯成自然",
+"stage": "mem_poca_1"
+},
+"char_198_blackd": {
+"elite": 2,
+"level": 1,
+"name": "讯使",
+"pname": "影子护卫",
+"stage": "mem_blackd_1"
+},
+"char_199_yak": {
+"elite": 2,
+"level": 1,
+"name": "角峰",
+"pname": " 岿然不动",
+"stage": "mem_yak_1"
+},
+"char_2013_cerber": {
+"elite": 2,
+"level": 1,
+"name": "刻俄柏",
+"pname": "打坏人的诀窍",
+"stage": "mem_cerber_1"
+},
+"char_2014_nian": {
+"elite": 2,
+"level": 1,
+"name": "年",
+"pname": "“除夕”",
+"stage": "mem_nian_1"
+},
+"char_2015_dusk": {
+"elite": 2,
+"level": 1,
+"name": "夕",
+"pname": "戒骄戒躁",
+"stage": "mem_dusk_1"
+},
+"char_201_moeshd": {
+"elite": 2,
+"level": 1,
+"name": "可颂",
+"pname": "重重一击",
+"stage": "mem_moeshd_1"
+},
+"char_2023_ling": {
+"elite": 2,
+"level": 1,
+"name": "令",
+"pname": "有无",
+"stage": "mem_ling_1"
+},
+"char_2024_chyue": {
+"elite": 2,
+"level": 1,
+"name": "重岳",
+"pname": "“友情出演”",
+"stage": "mem_chyue_1"
+},
+"char_2025_shu": {
+"elite": 2,
+"level": 1,
+"name": "黍",
+"pname": "归去来兮",
+"stage": "mem_shu_1"
+},
+"char_2026_yu": {
+"elite": 2,
+"level": 1,
+"name": "余",
+"pname": "闲客莫进",
+"stage": "mem_yu_1"
+},
+"char_202_demkni": {
+"elite": 2,
+"level": 1,
+"name": "塞雷娅",
+"pname": "死路",
+"stage": "mem_demkni_1"
+},
+"char_204_platnm": {
+"elite": 2,
+"level": 1,
+"name": "白金",
+"pname": "无人机筛选",
+"stage": "mem_platnm_1"
+},
+"char_206_gnosis": {
+"elite": 2,
+"level": 1,
+"name": "灵知",
+"pname": "俯瞰风雪",
+"stage": "mem_gnosis_1"
+},
+"char_208_melan": {
+"elite": 1,
+"level": 55,
+"name": "玫兰莎",
+"pname": "伤痛坚守",
+"stage": "mem_melan_1"
+},
+"char_209_ardign": {
+"elite": 1,
+"level": 55,
+"name": "卡缇",
+"pname": "都放下来！",
+"stage": "mem_ardign_1"
+},
+"char_211_adnach": {
+"elite": 1,
+"level": 55,
+"name": "安德切尔",
+"pname": "俯瞰战场",
+"stage": "mem_adnach_1"
+},
+"char_212_ansel": {
+"elite": 1,
+"level": 55,
+"name": "安赛尔",
+"pname": "冷静的支援者",
+"stage": "mem_ansel_1"
+},
+"char_213_mostma": {
+"elite": 2,
+"level": 1,
+"name": "莫斯提马",
+"pname": "钥与匙的守护者",
+"stage": "mem_mostma_1"
+},
+"char_214_kafka": {
+"elite": 2,
+"level": 1,
+"name": "卡夫卡",
+"pname": "步步紧逼",
+"stage": "mem_kafka_1"
+},
+"char_215_mantic": {
+"elite": 2,
+"level": 1,
+"name": "狮蝎",
+"pname": "看见她",
+"stage": "mem_mantic_1"
+},
+"char_219_meteo": {
+"elite": 2,
+"level": 1,
+"name": "陨星",
+"pname": " 狙击高地",
+"stage": "mem_meteo_1"
+},
+"char_220_grani": {
+"elite": 2,
+"level": 1,
+"name": "格拉尼",
+"pname": "“孤胆骑兵”",
+"stage": "mem_grani_1"
+},
+"char_222_bpipe": {
+"elite": 2,
+"level": 1,
+"name": "风笛",
+"pname": "维多利亚之矛",
+"stage": "mem_bpipe_1"
+},
+"char_225_haak": {
+"elite": 2,
+"level": 1,
+"name": "阿",
+"pname": "\t别问了，快吃",
+"stage": "mem_haak_1"
+},
+"char_226_hmau": {
+"elite": 2,
+"level": 1,
+"name": "吽",
+"pname": "浑金一块",
+"stage": "mem_hmau_1"
+},
+"char_230_savage": {
+"elite": 2,
+"level": 1,
+"name": "暴行",
+"pname": "哈！一线贯通！",
+"stage": "mem_savage_1"
+},
+"char_235_jesica": {
+"elite": 2,
+"level": 1,
+"name": "杰西卡",
+"pname": "战战兢兢",
+"stage": "mem_jesica_1"
+},
+"char_236_rope": {
+"elite": 2,
+"level": 1,
+"name": "暗索",
+"pname": "哎呀，人呢？",
+"stage": "mem_rope_1"
+},
+"char_237_gravel": {
+"elite": 2,
+"level": 1,
+"name": "砾",
+"pname": "东奔西走",
+"stage": "mem_gravel_1"
+},
+"char_240_wyvern": {
+"elite": 1,
+"level": 55,
+"name": "香草",
+"pname": "告别软弱",
+"stage": "mem_wyvern_1"
+},
+"char_241_panda": {
+"elite": 2,
+"level": 1,
+"name": "食铁兽",
+"pname": "拳风拂面",
+"stage": "mem_panda_1"
+},
+"char_242_otter": {
+"elite": 2,
+"level": 1,
+"name": "梅尔",
+"pname": "爆炸美学",
+"stage": "mem_otter_1"
+},
+"char_243_waaifu": {
+"elite": 2,
+"level": 1,
+"name": "槐琥",
+"pname": "诛邪义举",
+"stage": "mem_waaifu_1"
+},
+"char_245_cello": {
+"elite": 2,
+"level": 1,
+"name": "塑心",
+"pname": "魔鬼的低语",
+"stage": "mem_cello_1"
+},
+"char_248_mgllan": {
+"elite": 2,
+"level": 1,
+"name": "麦哲伦",
+"pname": "取之不尽，用之不竭",
+"stage": "mem_mgllan_1"
+},
+"char_249_mlyss": {
+"elite": 2,
+"level": 1,
+"name": "缪尔赛思",
+"pname": "“亲身经历”",
+"stage": "mem_mlyss_1"
+},
+"char_250_phatom": {
+"elite": 2,
+"level": 1,
+"name": "傀影",
+"pname": "控局",
+"stage": "mem_phatom_1"
+},
+"char_252_bibeak": {
+"elite": 2,
+"level": 1,
+"name": "柏喙",
+"pname": "一击必胜",
+"stage": "mem_bibeak_1"
+},
+"char_253_greyy": {
+"elite": 2,
+"level": 1,
+"name": "格雷伊",
+"pname": "闪烁徘徊",
+"stage": "mem_greyy_1"
+},
+"char_254_vodfox": {
+"elite": 2,
+"level": 1,
+"name": "巫恋",
+"pname": "幼小的恐惧",
+"stage": "mem_vodfox_1"
+},
+"char_258_podego": {
+"elite": 2,
+"level": 1,
+"name": "波登可",
+"pname": "幽径",
+"stage": "mem_podego_1"
+},
+"char_260_durnar": {
+"elite": 2,
+"level": 1,
+"name": "坚雷",
+"pname": "如雷坚守",
+"stage": "mem_durnar_1"
+},
+"char_261_sddrag": {
+"elite": 2,
+"level": 1,
+"name": "苇草",
+"pname": "生命的重量",
+"stage": "mem_sddrag_1"
+},
+"char_263_skadi": {
+"elite": 2,
+"level": 1,
+"name": "斯卡蒂",
+"pname": "纯粹的强大",
+"stage": "mem_skadi_1"
+},
+"char_264_f12yin": {
+"elite": 2,
+"level": 1,
+"name": "山",
+"pname": "不动如山",
+"stage": "mem_f12yin_1"
+},
+"char_265_sophia": {
+"elite": 2,
+"level": 1,
+"name": "鞭刃",
+"pname": "因材施教",
+"stage": "mem_sophia_1"
+},
+"char_271_spikes": {
+"elite": 2,
+"level": 1,
+"name": "芳汀",
+"pname": "插翅难逃",
+"stage": "mem_spikes_1"
+},
+"char_272_strong": {
+"elite": 2,
+"level": 1,
+"name": "孑",
+"pname": "业精于勤",
+"stage": "mem_strong_1"
+},
+"char_274_astesi": {
+"elite": 2,
+"level": 1,
+"name": "星极",
+"pname": "如星闪耀",
+"stage": "mem_astesi_1"
+},
+"char_275_breeze": {
+"elite": 2,
+"level": 1,
+"name": "微风",
+"pname": "炮与弩的包围网",
+"stage": "mem_breeze_1"
+},
+"char_277_sqrrel": {
+"elite": 2,
+"level": 1,
+"name": "阿消",
+"pname": "喷射！",
+"stage": "mem_sqrrel_1"
+},
+"char_278_orchid": {
+"elite": 1,
+"level": 55,
+"name": "梓兰",
+"pname": "心态平和",
+"stage": "mem_orchid_1"
+},
+"char_279_excu": {
+"elite": 2,
+"level": 1,
+"name": "送葬人",
+"pname": "执行者的工作",
+"stage": "mem_excu_1"
+},
+"char_281_popka": {
+"elite": 1,
+"level": 55,
+"name": "泡普卡",
+"pname": "锯子转呀转",
+"stage": "mem_popka_1"
+},
+"char_282_catap": {
+"elite": 1,
+"level": 55,
+"name": "空爆",
+"pname": "防空炮手",
+"stage": "mem_catap_1"
+},
+"char_283_midn": {
+"elite": 1,
+"level": 55,
+"name": "月见夜",
+"pname": "月夜魔王之剑",
+"stage": "mem_midn_1"
+},
+"char_284_spot": {
+"elite": 1,
+"level": 55,
+"name": "斑点",
+"pname": "吸引火力",
+"stage": "mem_spot_1"
+},
+"char_289_gyuki": {
+"elite": 2,
+"level": 1,
+"name": "缠丸",
+"pname": "正义之鬼",
+"stage": "mem_gyuki_1"
+},
+"char_290_vigna": {
+"elite": 2,
+"level": 1,
+"name": "红豆",
+"pname": "热情",
+"stage": "mem_vigna_1"
+},
+"char_291_aglina": {
+"elite": 2,
+"level": 1,
+"name": "安洁莉娜",
+"pname": "超越重力",
+"stage": "mem_aglina_1"
+},
+"char_293_thorns": {
+"elite": 2,
+"level": 1,
+"name": "棘刺",
+"pname": "搭把手",
+"stage": "mem_thorns_1"
+},
+"char_294_ayer": {
+"elite": 2,
+"level": 1,
+"name": "断崖",
+"pname": " 防卫才能",
+"stage": "mem_ayer_1"
+},
+"char_297_hamoni": {
+"elite": 2,
+"level": 1,
+"name": "和弦",
+"pname": "沉重舞步",
+"stage": "mem_hamoni_1"
+},
+"char_298_susuro": {
+"elite": 2,
+"level": 1,
+"name": "苏苏洛",
+"pname": "急救",
+"stage": "mem_susuro_1"
+},
+"char_300_phenxi": {
+"elite": 2,
+"level": 1,
+"name": "菲亚梅塔",
+"pname": "午后时光",
+"stage": "mem_phenxi_1"
+},
+"char_301_cutter": {
+"elite": 2,
+"level": 1,
+"name": "刻刀",
+"pname": "\t持节之刃",
+"stage": "mem_cutter_1"
+},
+"char_302_glaze": {
+"elite": 2,
+"level": 1,
+"name": "安比尔",
+"pname": "全域静默",
+"stage": "mem_glaze_1"
+},
+"char_304_zebra": {
+"elite": 2,
+"level": 1,
+"name": "暴雨",
+"pname": "犹豫不决",
+"stage": "mem_zebra_1"
+},
+"char_306_leizi": {
+"elite": 2,
+"level": 1,
+"name": "惊蛰",
+"pname": "声威在前",
+"stage": "mem_leizi_1"
+},
+"char_308_swire": {
+"elite": 2,
+"level": 1,
+"name": "诗怀雅",
+"pname": "钱能通神",
+"stage": "mem_swire_1"
+},
+"char_311_mudrok": {
+"elite": 2,
+"level": 1,
+"name": "泥岩",
+"pname": "只此一人",
+"stage": "mem_mudrok_1"
+},
+"char_322_lmlee": {
+"elite": 2,
+"level": 1,
+"name": "老鲤",
+"pname": "生财有道",
+"stage": "mem_lmlee_1"
+},
+"char_325_bison": {
+"elite": 2,
+"level": 1,
+"name": "拜松",
+"pname": "密友战线",
+"stage": "mem_bison_1"
+},
+"char_326_glacus": {
+"elite": 2,
+"level": 1,
+"name": "格劳克斯",
+"pname": "飞行管制",
+"stage": "mem_glacus_1"
+},
+"char_328_cammou": {
+"elite": 2,
+"level": 1,
+"name": "卡达",
+"pname": "机械援助",
+"stage": "mem_cammou_1"
+},
+"char_332_archet": {
+"elite": 2,
+"level": 1,
+"name": "空弦",
+"pname": "箭指远方",
+"stage": "mem_archet_1"
+},
+"char_333_sidero": {
+"elite": 2,
+"level": 1,
+"name": "铸铁",
+"pname": "不息",
+"stage": "mem_sidero_1"
+},
+"char_336_folivo": {
+"elite": 2,
+"level": 1,
+"name": "稀音",
+"pname": "直面",
+"stage": "mem_folivo_1"
+},
+"char_337_utage": {
+"elite": 2,
+"level": 1,
+"name": "宴",
+"pname": "捍卫潮流",
+"stage": "mem_utage_1"
+},
+"char_338_iris": {
+"elite": 2,
+"level": 1,
+"name": "爱丽丝",
+"pname": "\t童话愿望",
+"stage": "mem_iris_1"
+},
+"char_340_shwaz": {
+"elite": 2,
+"level": 1,
+"name": "黑",
+"pname": "火力网",
+"stage": "mem_shwaz_1"
+},
+"char_341_sntlla": {
+"elite": 2,
+"level": 1,
+"name": "寒檀",
+"pname": "风雪已至",
+"stage": "mem_sntlla_1"
+},
+"char_343_tknogi": {
+"elite": 2,
+"level": 1,
+"name": "月禾",
+"pname": "御护",
+"stage": "mem_tknogi_1"
+},
+"char_344_beewax": {
+"elite": 2,
+"level": 1,
+"name": "蜜蜡",
+"pname": "沙礁之上",
+"stage": "mem_beewax_1"
+},
+"char_345_folnic": {
+"elite": 2,
+"level": 1,
+"name": "亚叶",
+"pname": "愤怒的医师",
+"stage": "mem_folnic_1"
+},
+"char_346_aosta": {
+"elite": 2,
+"level": 1,
+"name": "奥斯塔",
+"pname": "琐碎",
+"stage": "mem_aosta_1"
+},
+"char_347_jaksel": {
+"elite": 2,
+"level": 1,
+"name": "杰克",
+"pname": "危机现场",
+"stage": "mem_jaksel_1"
+},
+"char_348_ceylon": {
+"elite": 2,
+"level": 1,
+"name": "锡兰",
+"pname": "静水流深",
+"stage": "mem_ceylon_1"
+},
+"char_349_chiave": {
+"elite": 2,
+"level": 1,
+"name": "贾维",
+"pname": "\t指挥天才",
+"stage": "mem_chiave_1"
+},
+"char_355_ethan": {
+"elite": 2,
+"level": 1,
+"name": "伊桑",
+"pname": "制敌伏兵",
+"stage": "mem_ethan_1"
+},
+"char_356_broca": {
+"elite": 2,
+"level": 1,
+"name": "布洛卡",
+"pname": "坚守",
+"stage": "mem_broca_1"
+},
+"char_362_saga": {
+"elite": 2,
+"level": 1,
+"name": "嵯峨",
+"pname": "一心晦明",
+"stage": "mem_saga_1"
+},
+"char_363_toddi": {
+"elite": 2,
+"level": 1,
+"name": "熔泉",
+"pname": "火矢天降",
+"stage": "mem_toddi_1"
+},
+"char_365_aprl": {
+"elite": 2,
+"level": 1,
+"name": "四月",
+"pname": "狩猎的节拍",
+"stage": "mem_aprl_1"
+},
+"char_366_acdrop": {
+"elite": 2,
+"level": 1,
+"name": "酸糖",
+"pname": "射术传承",
+"stage": "mem_acdrop_1"
+},
+"char_367_swllow": {
+"elite": 2,
+"level": 1,
+"name": "灰喉",
+"pname": "锲而不舍",
+"stage": "mem_swllow_1"
+},
+"char_369_bena": {
+"elite": 2,
+"level": 1,
+"name": "贝娜",
+"pname": "死缠烂打",
+"stage": "mem_bena_1"
+},
+"char_373_lionhd": {
+"elite": 2,
+"level": 1,
+"name": "莱恩哈特",
+"pname": "解构阵域",
+"stage": "mem_lionhd_1"
+},
+"char_377_gdglow": {
+"elite": 2,
+"level": 1,
+"name": "澄闪",
+"pname": "闪耀时刻",
+"stage": "mem_gdglow_1"
+},
+"char_378_asbest": {
+"elite": 2,
+"level": 1,
+"name": "石棉",
+"pname": "耐心！",
+"stage": "mem_asbest_1"
+},
+"char_379_sesa": {
+"elite": 2,
+"level": 1,
+"name": "慑砂",
+"pname": "全面打击",
+"stage": "mem_sesa_1"
+},
+"char_381_bubble": {
+"elite": 2,
+"level": 1,
+"name": "泡泡",
+"pname": "不能白挨打",
+"stage": "mem_bubble_1"
+},
+"char_383_snsant": {
+"elite": 2,
+"level": 1,
+"name": "雪雉",
+"pname": "高效除虫",
+"stage": "mem_snsant_1"
+},
+"char_385_finlpp": {
+"elite": 2,
+"level": 1,
+"name": "清流",
+"pname": "涤净",
+"stage": "mem_finlpp_1"
+},
+"char_388_mint": {
+"elite": 2,
+"level": 1,
+"name": "薄绿",
+"pname": "过来吧你！",
+"stage": "mem_mint_1"
+},
+"char_394_hadiya": {
+"elite": 2,
+"level": 1,
+"name": "哈蒂娅",
+"pname": "风沙中的愿景",
+"stage": "mem_hadiya_1"
+},
+"char_4004_pudd": {
+"elite": 2,
+"level": 1,
+"name": "布丁",
+"pname": "电力充沛",
+"stage": "mem_pudd_1"
+},
+"char_4006_melnte": {
+"elite": 2,
+"level": 1,
+"name": "玫拉",
+"pname": "直线最短",
+"stage": "mem_melnte_1"
+},
+"char_4009_irene": {
+"elite": 2,
+"level": 1,
+"name": "艾丽妮",
+"pname": "细剑的重量",
+"stage": "mem_irene_1"
+},
+"char_400_weedy": {
+"elite": 2,
+"level": 1,
+"name": "温蒂",
+"pname": "准备就绪",
+"stage": "mem_weedy_1"
+},
+"char_4011_lessng": {
+"elite": 2,
+"level": 1,
+"name": "止颂",
+"pname": "巨剑的锋芒",
+"stage": "mem_lessng_1"
+},
+"char_4013_kjera": {
+"elite": 2,
+"level": 1,
+"name": "耶拉",
+"pname": "群山相伴",
+"stage": "mem_kjera_1"
+},
+"char_4014_lunacu": {
+"elite": 2,
+"level": 1,
+"name": "子月",
+"pname": "荒野伏击",
+"stage": "mem_lunacu_1"
+},
+"char_4015_spuria": {
+"elite": 2,
+"level": 1,
+"name": "空构",
+"pname": "铳械匠人",
+"stage": "mem_spuria_1"
+},
+"char_4016_kazema": {
+"elite": 2,
+"level": 1,
+"name": "风丸",
+"pname": "共谋",
+"stage": "mem_kazema_1"
+},
+"char_4017_puzzle": {
+"elite": 2,
+"level": 1,
+"name": "谜图",
+"pname": "看不见的武器",
+"stage": "mem_puzzle_1"
+},
+"char_401_elysm": {
+"elite": 2,
+"level": 1,
+"name": "极境",
+"pname": "目标在这儿呢！",
+"stage": "mem_elysm_1"
+},
+"char_4023_rfalcn": {
+"elite": 2,
+"level": 1,
+"name": "红隼",
+"pname": "荣誉的颜色",
+"stage": "mem_rfalcn_1"
+},
+"char_4025_aprot2": {
+"elite": 2,
+"level": 1,
+"name": "暮落",
+"pname": "主演之人",
+"stage": "mem_aprot2_1"
+},
+"char_402_tuye": {
+"elite": 2,
+"level": 1,
+"name": "图耶",
+"pname": "伞下荫蔽",
+"stage": "mem_tuye_1"
+},
+"char_4031_liesel": {
+"elite": 2,
+"level": 1,
+"name": "复奏",
+"pname": "齐奏落下",
+"stage": "mem_liesel_1"
+},
+"char_4032_provs": {
+"elite": 2,
+"level": 1,
+"name": "但书",
+"pname": "“雄辩是金”",
+"stage": "mem_provs_1"
+},
+"char_4036_forcer": {
+"elite": 2,
+"level": 1,
+"name": "见行者",
+"pname": "预备方案",
+"stage": "mem_forcer_1"
+},
+"char_4037_demetr": {
+"elite": 2,
+"level": 1,
+"name": "贝洛内",
+"pname": "信诺",
+"stage": "mem_demetr_1"
+},
+"char_4039_horn": {
+"elite": 2,
+"level": 1,
+"name": "号角",
+"pname": "号声响起",
+"stage": "mem_horn_1"
+},
+"char_4040_rockr": {
+"elite": 2,
+"level": 1,
+"name": "洛洛",
+"pname": "创造优势",
+"stage": "mem_rockr_1"
+},
+"char_4041_chnut": {
+"elite": 2,
+"level": 1,
+"name": "褐果",
+"pname": "“聚焦”",
+"stage": "mem_chnut_1"
+},
+"char_4042_lumen": {
+"elite": 2,
+"level": 1,
+"name": "流明",
+"pname": "风浪微光",
+"stage": "mem_lumen_1"
+},
+"char_4043_erato": {
+"elite": 2,
+"level": 1,
+"name": "埃拉托",
+"pname": "沉渊美梦",
+"stage": "mem_erato_1"
+},
+"char_4045_heidi": {
+"elite": 2,
+"level": 1,
+"name": "海蒂",
+"pname": "滴水不漏",
+"stage": "mem_heidi_1"
+},
+"char_4046_ebnhlz": {
+"elite": 2,
+"level": 1,
+"name": "黑键",
+"pname": "辗转反侧",
+"stage": "mem_ebnhlz_1"
+},
+"char_4047_pianst": {
+"elite": 2,
+"level": 1,
+"name": "车尔尼",
+"pname": "战场上的旋律",
+"stage": "mem_pianst_1"
+},
+"char_4048_doroth": {
+"elite": 2,
+"level": 1,
+"name": "多萝西",
+"pname": "重塑绿野",
+"stage": "mem_doroth_1"
+},
+"char_4052_surfer": {
+"elite": 2,
+"level": 1,
+"name": "寻澜",
+"pname": "通向初心",
+"stage": "mem_surfer_1"
+},
+"char_4054_malist": {
+"elite": 2,
+"level": 1,
+"name": "至简",
+"pname": "“故地重游”",
+"stage": "mem_malist_1"
+},
+"char_4055_bgsnow": {
+"elite": 2,
+"level": 1,
+"name": "鸿雪",
+"pname": "书写悲痛",
+"stage": "mem_bgsnow_1"
+},
+"char_405_absin": {
+"elite": 2,
+"level": 1,
+"name": "苦艾",
+"pname": "接力行动",
+"stage": "mem_absin_1"
+},
+"char_4062_totter": {
+"elite": 2,
+"level": 1,
+"name": "铅踝",
+"pname": "裂空之镞",
+"stage": "mem_totter_1"
+},
+"char_4063_quartz": {
+"elite": 2,
+"level": 1,
+"name": "石英",
+"pname": "来路无归",
+"stage": "mem_quartz_1"
+},
+"char_4065_judge": {
+"elite": 2,
+"level": 1,
+"name": "斥罪",
+"pname": "坚如信念",
+"stage": "mem_judge_1"
+},
+"char_4071_peper": {
+"elite": 2,
+"level": 1,
+"name": "明椒",
+"pname": "“别动我的同伴！”",
+"stage": "mem_peper_1"
+},
+"char_4072_ironmn": {
+"elite": 2,
+"level": 1,
+"name": "白铁",
+"pname": "远程火力",
+"stage": "mem_ironmn_1"
+},
+"char_4078_bdhkgt": {
+"elite": 2,
+"level": 1,
+"name": "截云",
+"pname": "大漠飞轮",
+"stage": "mem_bdhkgt_1"
+},
+"char_4079_haini": {
+"elite": 2,
+"level": 1,
+"name": "海霓",
+"pname": "穹顶上的瞭望者",
+"stage": "mem_haini_1"
+},
+"char_4080_lin": {
+"elite": 2,
+"level": 1,
+"name": "林",
+"pname": "“紫色的林”",
+"stage": "mem_lin_1"
+},
+"char_4081_warmy": {
+"elite": 2,
+"level": 1,
+"name": "温米",
+"pname": "炉火光明",
+"stage": "mem_warmy_1"
+},
+"char_4082_qiubai": {
+"elite": 2,
+"level": 1,
+"name": "仇白",
+"pname": "同舟共济",
+"stage": "mem_qiubai_1"
+},
+"char_4083_chimes": {
+"elite": 2,
+"level": 1,
+"name": "铎铃",
+"pname": "山间小径",
+"stage": "mem_chimes_1"
+},
+"char_4098_vvana": {
+"elite": 2,
+"level": 1,
+"name": "薇薇安娜",
+"pname": "孤烛",
+"stage": "mem_vvana_1"
+},
+"char_4100_caper": {
+"elite": 2,
+"level": 1,
+"name": "跃跃",
+"pname": "街头转转转",
+"stage": "mem_caper_1"
+},
+"char_4104_coldst": {
+"elite": 2,
+"level": 1,
+"name": "冰酿",
+"pname": "保持清醒",
+"stage": "mem_coldst_1"
+},
+"char_4105_almond": {
+"elite": 2,
+"level": 1,
+"name": "杏仁",
+"pname": "见缝插针",
+"stage": "mem_almond_1"
+},
+"char_4106_bryota": {
+"elite": 2,
+"level": 1,
+"name": "苍苔",
+"pname": "挺过风暴",
+"stage": "mem_bryota_1"
+},
+"char_4107_vrdant": {
+"elite": 2,
+"level": 1,
+"name": "维荻",
+"pname": "请勿踩踏",
+"stage": "mem_vrdant_1"
+},
+"char_4109_baslin": {
+"elite": 2,
+"level": 1,
+"name": "深律",
+"pname": "独当一面",
+"stage": "mem_baslin_1"
+},
+"char_4114_harold": {
+"elite": 2,
+"level": 1,
+"name": "哈洛德",
+"pname": "久病成医",
+"stage": "mem_harold_1"
+},
+"char_4116_blkkgt": {
+"elite": 2,
+"level": 1,
+"name": "锏",
+"pname": "路在脚下",
+"stage": "mem_blkkgt_1"
+},
+"char_4117_ray": {
+"elite": 2,
+"level": 1,
+"name": "莱伊",
+"pname": "沙地兽与弩",
+"stage": "mem_ray_1"
+},
+"char_4119_wanqin": {
+"elite": 2,
+"level": 1,
+"name": "万顷",
+"pname": "长风相助",
+"stage": "mem_wanqin_1"
+},
+"char_411_tomimi": {
+"elite": 2,
+"level": 1,
+"name": "特米米",
+"pname": "双人快打",
+"stage": "mem_tomimi_1"
+},
+"char_4122_grabds": {
+"elite": 2,
+"level": 1,
+"name": "小满",
+"pname": "声遏行云",
+"stage": "mem_grabds_1"
+},
+"char_4130_luton": {
+"elite": 2,
+"level": 1,
+"name": "露托",
+"pname": "举起盾牌",
+"stage": "mem_luton_1"
+},
+"char_4132_ascln": {
+"elite": 2,
+"level": 1,
+"name": "阿斯卡纶",
+"pname": "独刃",
+"stage": "mem_ascln_1"
+},
+"char_4134_cetsyr": {
+"elite": 2,
+"level": 1,
+"name": "魔王",
+"pname": "一段未完演练",
+"stage": "mem_cetsyr_1"
+},
+"char_4137_udflow": {
+"elite": 2,
+"level": 1,
+"name": "深巡",
+"pname": "“继续下潜！”",
+"stage": "mem_udflow_1"
+},
+"char_4138_narant": {
+"elite": 2,
+"level": 1,
+"name": "娜仁图亚",
+"pname": "此路是我开",
+"stage": "mem_narant_1"
+},
+"char_4139_papyrs": {
+"elite": 2,
+"level": 1,
+"name": "莎草",
+"pname": "忙中有序",
+"stage": "mem_papyrs_1"
+},
+"char_4140_lasher": {
+"elite": 2,
+"level": 1,
+"name": "衡沙",
+"pname": "次品处理",
+"stage": "mem_lasher_1"
+},
+"char_4146_nymph": {
+"elite": 2,
+"level": 1,
+"name": "妮芙",
+"pname": "直面心灵",
+"stage": "mem_nymph_1"
+},
+"char_4147_mitm": {
+"elite": 2,
+"level": 1,
+"name": "渡桥",
+"pname": "多管闲事",
+"stage": "mem_mitm_1"
+},
+"char_4148_philae": {
+"elite": 2,
+"level": 1,
+"name": "菲莱",
+"pname": "站在生者之前",
+"stage": "mem_philae_1"
+},
+"char_4151_tinman": {
+"elite": 2,
+"level": 1,
+"name": "锡人",
+"pname": "“快餐派对”",
+"stage": "mem_tinman_1"
+},
+"char_4155_talr": {
+"elite": 2,
+"level": 1,
+"name": "裁度",
+"pname": "剪刀的用途",
+"stage": "mem_talr_1"
+},
+"char_415_flint": {
+"elite": 2,
+"level": 1,
+"name": "燧石",
+"pname": "更快！更强！",
+"stage": "mem_flint_1"
+},
+"char_4162_cathy": {
+"elite": 2,
+"level": 1,
+"name": "凯瑟琳",
+"pname": "后盾",
+"stage": "mem_cathy_1"
+},
+"char_4163_rosesa": {
+"elite": 2,
+"level": 1,
+"name": "瑰盐",
+"pname": "哥哥姐姐你们好呀~",
+"stage": "mem_rosesa_1"
+},
+"char_4164_tecno": {
+"elite": 2,
+"level": 1,
+"name": "特克诺",
+"pname": "木偶舞会",
+"stage": "mem_tecno_1"
+},
+"char_4165_ctrail": {
+"elite": 2,
+"level": 1,
+"name": "云迹",
+"pname": "不要抬头",
+"stage": "mem_ctrail_1"
+},
+"char_416_zumama": {
+"elite": 2,
+"level": 1,
+"name": "森蚺",
+"pname": "钢铁酋长",
+"stage": "mem_zumama_1"
+},
+"char_4171_wulfen": {
+"elite": 2,
+"level": 1,
+"name": "钼铅",
+"pname": "打开通路",
+"stage": "mem_wulfen_1"
+},
+"char_4172_xingzh": {
+"elite": 2,
+"level": 1,
+"name": "行箸",
+"pname": "难得荒唐",
+"stage": "mem_xingzh_1"
+},
+"char_4173_nowell": {
+"elite": 2,
+"level": 1,
+"name": "诺威尔",
+"pname": "背后援手",
+"stage": "mem_nowell_1"
+},
+"char_4177_brigid": {
+"elite": 2,
+"level": 1,
+"name": "水灯心",
+"pname": "花儿干枯之前",
+"stage": "mem_brigid_1"
+},
+"char_4178_alanna": {
+"elite": 2,
+"level": 1,
+"name": "阿兰娜",
+"pname": "狂野之路",
+"stage": "mem_alanna_1"
+},
+"char_4187_graceb": {
+"elite": 2,
+"level": 1,
+"name": "聆音",
+"pname": "请闭上眼",
+"stage": "mem_graceb_1"
+},
+"char_4191_tippi": {
+"elite": 2,
+"level": 1,
+"name": "蒂比",
+"pname": "片场危机",
+"stage": "mem_tippi_1"
+},
+"char_4196_reckpr": {
+"elite": 2,
+"level": 1,
+"name": "录武官",
+"pname": "观形察意",
+"stage": "mem_reckpr_1"
+},
+"char_4198_christ": {
+"elite": 2,
+"level": 1,
+"name": "Miss.Christine",
+"pname": "女士与鼷兽",
+"stage": "mem_christ_1"
+},
+"char_4199_makiri": {
+"elite": 2,
+"level": 1,
+"name": "松桐",
+"pname": "底牌",
+"stage": "mem_makiri_1"
+},
+"char_4203_kichi": {
+"elite": 2,
+"level": 1,
+"name": "吉星",
+"pname": "奖励时刻",
+"stage": "mem_kichi_1"
+},
+"char_4204_mantra": {
+"elite": 2,
+"level": 1,
+"name": "真言",
+"pname": "无所遁形",
+"stage": "mem_mantra_1"
+},
+"char_4207_branch": {
+"elite": 2,
+"level": 1,
+"name": "折桠",
+"pname": "极夜的尽头",
+"stage": "mem_branch_1"
+},
+"char_4208_wintim": {
+"elite": 2,
+"level": 1,
+"name": "冬时",
+"pname": "漫长的冬日",
+"stage": "mem_wintim_1"
+},
+"char_420_flamtl": {
+"elite": 2,
+"level": 1,
+"name": "焰尾",
+"pname": "黑夜中的烛火",
+"stage": "mem_flamtl_1"
+},
+"char_4211_snhunt": {
+"elite": 2,
+"level": 1,
+"name": "雪猎",
+"pname": "裂云兽的狩猎特训",
+"stage": "mem_snhunt_1"
+},
+"char_4213_skybx": {
+"elite": 2,
+"level": 1,
+"name": "天空盒",
+"pname": "“天空征服者”展会",
+"stage": "mem_skybx_1"
+},
+"char_421_crow": {
+"elite": 2,
+"level": 1,
+"name": "羽毛笔",
+"pname": "风中之羽",
+"stage": "mem_crow_1"
+},
+"char_4224_turdus": {
+"elite": 2,
+"level": 1,
+"name": "乌啾",
+"pname": "乌影迷踪",
+"stage": "mem_turdus_1"
+},
+"char_422_aurora": {
+"elite": 2,
+"level": 1,
+"name": "极光",
+"pname": "不惧严寒",
+"stage": "mem_aurora_1"
+},
+"char_4237_jcinta": {
+"elite": 2,
+"level": 1,
+"name": "嘉辛塔",
+"pname": "淑女的实力",
+"stage": "mem_jcinta_1"
+},
+"char_423_blemsh": {
+"elite": 2,
+"level": 1,
+"name": "瑕光",
+"pname": "陷阵之志",
+"stage": "mem_blemsh_1"
+},
+"char_426_billro": {
+"elite": 2,
+"level": 1,
+"name": "卡涅利安",
+"pname": "收割",
+"stage": "mem_billro_1"
+},
+"char_427_vigil": {
+"elite": 2,
+"level": 1,
+"name": "伺夜",
+"pname": "洪流之中",
+"stage": "mem_vigil_1"
+},
+"char_430_fartth": {
+"elite": 2,
+"level": 1,
+"name": "远牙",
+"pname": "聆风",
+"stage": "mem_fartth_1"
+},
+"char_431_ashlok": {
+"elite": 2,
+"level": 1,
+"name": "灰毫",
+"pname": "轰响",
+"stage": "mem_ashlok_1"
+},
+"char_433_windft": {
+"elite": 2,
+"level": 1,
+"name": "掠风",
+"pname": "身后支援",
+"stage": "mem_windft_1"
+},
+"char_436_whispr": {
+"elite": 2,
+"level": 1,
+"name": "絮雨",
+"pname": "抚慰伤痛",
+"stage": "mem_whispr_1"
+},
+"char_437_mizuki": {
+"elite": 2,
+"level": 1,
+"name": "水月",
+"pname": "进化的佯谬",
+"stage": "mem_mizuki_1"
+},
+"char_440_pinecn": {
+"elite": 2,
+"level": 1,
+"name": "松果",
+"pname": "小憩",
+"stage": "mem_pinecn_1"
+},
+"char_445_wscoot": {
+"elite": 2,
+"level": 1,
+"name": "骋风",
+"pname": "先礼后兵",
+"stage": "mem_wscoot_1"
+},
+"char_446_aroma": {
+"elite": 2,
+"level": 1,
+"name": "阿罗玛",
+"pname": "表面活性",
+"stage": "mem_aroma_1"
+},
+"char_449_glider": {
+"elite": 2,
+"level": 1,
+"name": "蜜莓",
+"pname": "紧急救护",
+"stage": "mem_glider_1"
+},
+"char_451_robin": {
+"elite": 2,
+"level": 1,
+"name": "罗宾",
+"pname": "“恶人莫入”",
+"stage": "mem_robin_1"
+},
+"char_452_bstalk": {
+"elite": 2,
+"level": 1,
+"name": "豆苗",
+"pname": "共生共荣",
+"stage": "mem_bstalk_1"
+},
+"char_455_nothin": {
+"elite": 2,
+"level": 1,
+"name": "乌有",
+"pname": "处世之道",
+"stage": "mem_nothin_1"
+},
+"char_464_cement": {
+"elite": 2,
+"level": 1,
+"name": "洋灰",
+"pname": "无坚不陷",
+"stage": "mem_cement_1"
+},
+"char_466_qanik": {
+"elite": 2,
+"level": 1,
+"name": "雪绒",
+"pname": "风雪摇摇乐",
+"stage": "mem_qanik_1"
+},
+"char_469_indigo": {
+"elite": 2,
+"level": 1,
+"name": "深靛",
+"pname": "光影谜面",
+"stage": "mem_indigo_1"
+},
+"char_473_mberry": {
+"elite": 2,
+"level": 1,
+"name": "桑葚",
+"pname": "\t同气连枝",
+"stage": "mem_mberry_1"
+},
+"char_474_glady": {
+"elite": 2,
+"level": 1,
+"name": "歌蕾蒂娅",
+"pname": "陆上共舞",
+"stage": "mem_glady_1"
+},
+"char_475_akafyu": {
+"elite": 2,
+"level": 1,
+"name": "赤冬",
+"pname": "抱剑独行",
+"stage": "mem_akafyu_1"
+},
+"char_476_blkngt": {
+"elite": 2,
+"level": 1,
+"name": "夜半",
+"pname": "小伙伴",
+"stage": "mem_blkngt_1"
+},
+"char_478_kirara": {
+"elite": 2,
+"level": 1,
+"name": "绮良",
+"pname": "最佳拍档",
+"stage": "mem_kirara_1"
+},
+"char_479_sleach": {
+"elite": 2,
+"level": 1,
+"name": "琴柳",
+"pname": "队伍前列",
+"stage": "mem_sleach_1"
+},
+"char_484_robrta": {
+"elite": 2,
+"level": 1,
+"name": "罗比菈塔",
+"pname": "紧急补妆！",
+"stage": "mem_robrta_1"
+},
+"char_486_takila": {
+"elite": 2,
+"level": 1,
+"name": "龙舌兰",
+"pname": "沙滩假期",
+"stage": "mem_takila_1"
+},
+"char_487_bobb": {
+"elite": 2,
+"level": 1,
+"name": "波卜",
+"pname": "温厚者的怒火",
+"stage": "mem_bobb_1"
+},
+"char_488_buildr": {
+"elite": 2,
+"level": 1,
+"name": "青枳",
+"pname": "别来拆家",
+"stage": "mem_buildr_1"
+},
+"char_489_serum": {
+"elite": 2,
+"level": 1,
+"name": "蚀清",
+"pname": "勇往直前",
+"stage": "mem_serum_1"
+},
+"char_491_humus": {
+"elite": 2,
+"level": 1,
+"name": "休谟斯",
+"pname": "“铮铮铁骨”",
+"stage": "mem_humus_1"
+},
+"char_492_quercu": {
+"elite": 2,
+"level": 1,
+"name": "夏栎",
+"pname": "本应如此",
+"stage": "mem_quercu_1"
+},
+"char_493_firwhl": {
+"elite": 2,
+"level": 1,
+"name": "火哨",
+"pname": "“热烈欢迎”",
+"stage": "mem_firwhl_1"
+},
+"char_494_vendla": {
+"elite": 2,
+"level": 1,
+"name": "刺玫",
+"pname": "带刺的玫瑰",
+"stage": "mem_vendla_1"
+},
+"char_496_wildmn": {
+"elite": 2,
+"level": 1,
+"name": "野鬃",
+"pname": "侧翼援护",
+"stage": "mem_wildmn_1"
+},
+"char_497_ctable": {
+"elite": 2,
+"level": 1,
+"name": "晓歌",
+"pname": "匿影藏形",
+"stage": "mem_ctable_1"
+},
+"char_498_inside": {
+"elite": 2,
+"level": 1,
+"name": "隐现",
+"pname": "按部就班",
+"stage": "mem_inside_1"
+},
+"char_499_kaitou": {
+"elite": 2,
+"level": 1,
+"name": "折光",
+"pname": "大盗的眼光",
+"stage": "mem_kaitou_1"
+},
+"char_500_noirc": {
+"elite": 0,
+"level": 30,
+"name": "黑角",
+"pname": "最速防线",
+"stage": "mem_noirc_1"
+},
+"char_501_durin": {
+"elite": 0,
+"level": 30,
+"name": "杜林",
+"pname": "针对性合作",
+"stage": "mem_durin_1"
+},
+"char_502_nblade": {
+"elite": 0,
+"level": 30,
+"name": "夜刀",
+"pname": "锋芒如一",
+"stage": "mem_nblade_1"
+}
+},
+"count": 316,
+"fingerprint": "aabace29",
+"gameVersion": "26-11-06-12-56-09-07186384",
+"generatedAt": "2026-11-08T09:40:09Z",
+"schema": 2,
+"source": "maaprts-pack-yzts4hv6",
+"sourceCommit": "62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac"
+}

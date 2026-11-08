@@ -1,0 +1,48 @@
+{
+  "generatedAt": "2026-11-08T09:40:09Z",
+  "packs": {
+    "arknights": {
+      "counts": {
+        "activities": 327,
+        "chars": 470,
+        "equips": 926,
+        "skills": 1911,
+        "stages": 3671,
+        "subProfessions": 73,
+        "zones": 493
+      },
+      "file": "arknights.json",
+      "fingerprint": "9dd6899f",
+      "sha256": "904db34146319f4141f8cad4095b9737498f8b70d16702ad1535eaeec2703f39",
+      "size": 605194,
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/OriginiumLab/MAA-PRTS@pack-data/resources/arknights.json?v=9dd6899f",
+        "https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/arknights.json?v=9dd6899f",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/arknights.json?v=9dd6899f"
+      ],
+      "version": "2026.11.06"
+    },
+    "paradox": {
+      "counts": {
+        "count": 316
+      },
+      "file": "paradox.json",
+      "fingerprint": "aabace29",
+      "sha256": "a574b882dc914b6683b39e4f6b9ab42ad5636c9ae1c7de317f1fba63398844c4",
+      "size": 37035,
+      "urls": [
+        "https://cdn.jsdelivr.net/gh/OriginiumLab/MAA-PRTS@pack-data/resources/paradox.json?v=aabace29",
+        "https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/paradox.json?v=aabace29",
+        "https://gh-proxy.com/https://raw.githubusercontent.com/OriginiumLab/MAA-PRTS/pack-data/resources/paradox.json?v=aabace29"
+      ],
+      "version": "26-11-06-12-56-09-07186384"
+    }
+  },
+  "schema": 1,
+  "source": {
+    "commit": "62fe51e6cd7faa5c1698e05f8cf63ed61cf6a7ac",
+    "commitTime": "2026-11-08T09:40:09Z",
+    "gameVersion": "26-11-06-12-56-09-07186384",
+    "repo": "yuanyan3060/ArknightsGameResource"
+  }
+}
