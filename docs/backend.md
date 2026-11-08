@@ -25,7 +25,7 @@
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
 | `core/packsync.py` | 资源包自动更新：读远端 manifest → 校验 sha256/条数 → 原子替换 |
-| `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.cmd 替换 |
+| `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.ps1 替换 |
 | `core/maa.py` | MAA 进程控制、`gui.new.json` 读写、作业文件下载 |
 | `core/tasks.py` | 内存任务表：状态、日志、结果，供前端轮询 |
 
@@ -80,7 +80,7 @@ main()
 | POST | `/api/pack/update` | 下载并安装新资源包，返回新的 `pack` 与 `gamedata` |
 | GET | `/api/app/status` | 程序本体有没有新版本（只读；`?force=1` 跳过 6 小时节流） |
 | POST | `/api/app/download` | 下载安装包并校验，**不替换**，等用户点「重启并安装」 |
-| POST | `/api/app/install` | 解压 + 拉起 install.cmd + 退出程序（源码模式直接拒绝） |
+| POST | `/api/app/install` | 解压 + 拉起 install.ps1 + 退出程序（源码模式直接拒绝） |
 | POST | `/api/app/open` | 用系统浏览器打开 Release 页 |
 | GET | `/api/op?id=` | 作业详情（干员与要求、动作数、`maa://` 代码） |
 | GET | `/api/maa/status` | MAA 是否运行、配置列表、当前配置 |
@@ -169,7 +169,7 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 | 版本比较 | 按数字比（`2.10 > 2.9`）；预发布 `-beta.N` 永远小于同号正式；解析失败一律不触发 |
 | 下载 | `github.com` 直链 → `gh-proxy` → `ghfast`，校验字节数 + sha256 + zip 内含 `MAA-PRTS.exe` |
 | 解压 | 拒绝绝对路径与 `..`（zip-slip），落到 `<运行根>/update/stage/` |
-| 替换 | 程序退出后由 `update/install.cmd` 执行：等进程消失 → 备份 exe → `robocopy /MIR` 只镜像 `_internal` → 覆盖 exe → 重启 |
+| 替换 | 程序退出后由 `update/install.ps1` 执行：按 PID 等进程退出 → 备份 exe → `robocopy /MIR` 镜像 `_internal` → 覆盖根级文件 → 校验版本号 → 重启，失败则回滚并重新拉起旧版 |
 | 不动的东西 | `config/`、`debug/`、`resources/`——那是用户数据，脚本里一个字都不出现 |
 | 结算 | 写 `update/pending.json`；新版本启动时版本号对上才算成功，否则日志留警告 |
 

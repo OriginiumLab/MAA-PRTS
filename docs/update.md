@@ -67,16 +67,23 @@ Windows 上运行中的 exe 不能覆盖，`_internal/` 里的 DLL 也不能删�
      ↓
 解压到 <运行根>/update/stage/（拒绝绝对路径和 ..）
      ↓
-写 <运行根>/update/install.cmd，写 update/pending.json
+写 <运行根>/update/install.ps1，写 update/pending.json
      ↓                          ← 用户点「重启并安装」
-拉起 install.cmd（脱离父进程），主进程退出
+无窗口拉起 install.ps1（脱离父进程），主进程退出
      ↓
-cmd：等 MAA-PRTS.exe 消失（最多 30 秒）→ 备份 exe 到 update/backup/
+PowerShell：按 PID 等旧进程退出（最多 60 秒）→ 备份 exe 到 update/backup/
      → robocopy /MIR 镜像 _internal → robocopy 覆盖根级文件（exe、version.json）
-     → 启动程序 → 自删
+     → 校验版本号 → 启动程序 → 清 stage/zip → 自删
 ```
 
-`install.cmd` 换的是**程序本体**：`MAA-PRTS.exe`、`_internal/`，以及根级文件
+**为什么是 `.ps1` 而不是 `.cmd`**：cmd 版用 `tasklist | find` 判断进程是否还在，
+那条管道在 Windows 上会死锁——`tasklist` 退了，但 cmd 不关管道写端，`find` 永远
+等不到 EOF。2026-11-08 真机上就是这么挂的：点「重启并安装」弹出一个黑窗口，
+标题停在 `find /i "MAA-PRTS.exe"`，然后一直不动，安装卡在第一步。
+PowerShell 按 PID 等进程退出，没有管道；配合 `CREATE_NO_WINDOW` 拉起，
+**用户全程看不到任何窗口**。
+
+`install.ps1` 换的是**程序本体**：`MAA-PRTS.exe`、`_internal/`，以及根级文件
 （`version.json`、README 等）；**用户数据目录一个都不碰**。
 
 ```
@@ -87,24 +94,30 @@ MAA-PRTS/                    ← 程序本体整个换掉
 ├─ config/                   ← 不碰：账号、设置、token 密文
 ├─ debug/                    ← 不碰：日志
 ├─ resources/                ← 不碰：可能是用户自己换的资源包
-└─ update/                   ← 安装包、stage、backup，跑完自清
+└─ update/                   ← 安装包、stage、backup、install.log，跑完自清
 ```
 
 根级复制用 `robocopy /E` 而不是 `/MIR`：`/E` 只覆盖、不删除，所以 `config/`
 `debug/` `resources/` 就算没进 `/XD` 排除也不会被删掉；`/XD` 是把它们整个排除，
 连覆盖都不做。`_internal` 单独用 `/MIR`，是为了清掉新版本已经不再使用的旧 DLL。
 
+脚本每一步都写 `update/install.log`（`=== 开始安装 ===` 到 `=== 安装结束 ===`），
+真机出问题直接看这个文件，不用靠猜。
+
 冒烟测试 B22 会把生成的脚本读出来，断言 `config`、`debug`、`resources`
-这三个词**只出现在 `/XD` 排除列表里**，且 `version.json` 必须在替换清单里
-——防止以后有人顺手把用户数据一起镜像，或者漏掉版本号。
+这三个词**只出现在 `/XD` 排除列表里**，`version.json` 必须在替换清单里，
+且脚本里**不许出现 `tasklist` / `find`**——防止以后有人图省事退回那条会死锁的管道。
 
 ### 失败怎么办
 
-- 替换失败（`copy` 报错）：脚本用 `update/backup/MAA-PRTS.exe` 还原，写 `update/install-error.txt`；
+- 替换失败（`robocopy` 返回 ≥ 8、压缩包不完整、版本号没换成功）：脚本先把
+  `update/backup/MAA-PRTS.exe` 还原，写 `update/install-error.txt`（附原因），
+  然后**把旧版本重新拉起来**——不会出现「点了安装，程序没了」；
 - 成功了但版本没变：`update/pending.json` 不会被清掉，新版本启动时日志记一条
   `[警告] 上次更新到 X 没生效`，前端第一次启动会弹一次提示。
 
-排查时直接看 `debug/app.log` 里 `程序已更新：2.3.0 → 2.4.0` 或那条警告。
+排查时直接看 `debug/app.log` 里 `程序已更新：2.3.0 → 2.4.0` 或那条警告，
+再看 `update/install.log`。
 
 ## 发版注意
 
@@ -122,7 +135,9 @@ MAA-PRTS/                    ← 程序本体整个换掉
 |---|---|
 | 一直没红点 | 设置里关了「启动后检查程序新版本」；或 6 小时内已查过；或最新 Release 是预发布而没开开关 |
 | 提示有新版本但「下载并安装」是灰的 | 只拿到了版本号，API 被墙/限流，拿不到下载地址与 sha256。只能「前往下载页」 |
-| 点完「重启并安装」窗口关了但版本没变 | 看 `debug/app.log` 的警告 + `update/install-error.txt`；多半是杀软拦了脚本或 `robocopy` |
+| 点「重启并安装」弹出黑窗口，然后一直不动 | **≤ v2.4.0 的已知缺陷**：cmd 版 `tasklist \| find` 死锁，安装卡在第一步。v2.4.1 起改成 `install.ps1`。旧版本请手动覆盖安装一次 |
+| 点完「重启并安装」窗口关了但版本没变 | 看 `update/install.log` 与 `install-error.txt`；多半是杀软拦了脚本或 `robocopy` |
+| 安装失败后程序自己又起来了，版本没变 | 这是有意设计：失败会回滚 exe 并重新拉起旧版本，不会让你「程序没了」 |
 | 下载很慢或超时 | GitHub 直链慢，会自动退到 `gh-proxy` / `ghfast`；都失败就是网络问题，用下载页手动下 |
 | 源码模式点不了安装 | 正常。源码运行不替换文件，要测请用打包版 |
 
