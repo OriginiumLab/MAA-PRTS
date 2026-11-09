@@ -187,7 +187,11 @@ def effective_req(op, rarity, strict_skill=True):
     """
     r = op.get('requirements') or {}
     if r.get('elite') is None and r.get('level') is None:
-        r = dict(r, **DEFAULT_REQ.get(int(rarity or 6), DEFAULT_REQ[6]), implied=True)
+        # 默认垫底、作者值优先：dict(r, **DEFAULT) 会把条目里已写明的键盖掉
+        # （只写了 skill_level: 7 的六星会被默认的 9 顶掉，还被标成「默认」）；
+        # 显式写了 null 的键当未写，让默认值补位
+        given = {k: v for k, v in r.items() if v is not None}
+        r = {**DEFAULT_REQ.get(int(rarity or 6), DEFAULT_REQ[6]), **given, 'implied': True}
     if not strict_skill:
         r = {k: v for k, v in r.items()
              if k not in ('skill_level', 'skillLevel', 'module')}
@@ -230,19 +234,26 @@ def req_met(req, owned):
 
 
 def _group_ok(group, owned_map):
-    cands = [c for c in (group.get('opers') or []) if norm(c.get('name')) in owned_map]
+    cands = [c for c in (group.get('opers') or []) if isinstance(c, dict)
+             and norm(c.get('name')) in owned_map]
     if any(req_met(c, owned_map[norm(c.get('name'))]) for c in cands):
         return 'ready'
     return 'train' if cands else 'missing'
 
 
 def _group_label(g):
-    return g.get('name') or ' / '.join(o.get('name', '') for o in (g.get('opers') or [])) or '组合'
+    return g.get('name') or ' / '.join(
+        o.get('name', '') for o in (g.get('opers') or []) if isinstance(o, dict)) or '组合'
 
 
 def match_operation(content, owned_map):
-    opers = content.get('opers') or []
-    groups = content.get('groups') or []
+    # content 是站内用户上传的任意 JSON：结构不对（opers 是 dict、元素是
+    # 字符串等）的条目跳过而不是让 AttributeError 沿线程池冒泡成整次搜索
+    # 500（_pull 对解析失败容错，这里对结构同样设防，口径一致）（#55）
+    if not isinstance(content, dict):
+        content = {}
+    opers = [o for o in (content.get('opers') or []) if isinstance(o, dict)]
+    groups = [g for g in (content.get('groups') or []) if isinstance(g, dict)]
     missing, training, detail = [], [], []
     rmap = _rarity_by_name()
     six = 0
@@ -290,7 +301,10 @@ def match_operation(content, owned_map):
     elif len(missing) == 1:
         mode = 'train' if training else 'borrow'
     elif not training:
-        mode = 'borrow' if total == 13 else 'ready'
+        # 走到这里 missing/training 均空——人全齐练度全达标，就是 ready。
+        # 此前 13 人全齐标 borrow（「差一人可借」）与 missing=[] 自相矛盾；
+        # MAA 侧语义也是 unmatched==1 才借人，全拥有不需要助战（#55）
+        mode = 'ready'
     else:
         mode = 'borrow' if (len(training) == 1 and total < 13) else 'train'
     # 阵容权重均值（少人优先排序用）：只算 opers 里的具名干员，除以具名干员数
