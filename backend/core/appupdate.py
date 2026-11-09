@@ -49,7 +49,7 @@ import urllib.request
 import webbrowser
 import zipfile
 
-from . import net, settings
+from . import atomicio, net, settings
 
 # 只认这一个仓库：写死，不读设置，防止被改配置指向别处
 APP_REPO = 'OriginiumLab/MAA-PRTS'
@@ -252,6 +252,11 @@ def _asset_urls(asset):
     return [tpl % base for tpl in DOWNLOAD_TEMPLATES]
 
 
+# 发布资产命名契约：release.yml 打包步骤、docs/update.md 与这里三处一致，
+# 改格式三处一起动（#63）
+ASSET_NAME = 'MAA-PRTS-%s-win-%s.zip'
+
+
 def _fallback_asset(tag: str) -> dict:
     """API 拿不到时，按发版命名规则直接拼下载地址
 
@@ -259,7 +264,7 @@ def _fallback_asset(tag: str) -> dict:
     api.github.com 完全不通（国内很常见），也能照常下载。代价是这次没有
     size/sha256，校验降级成「确实是 zip，里面确实有 exe」（见 _verify_zip）。
     """
-    name = 'MAA-PRTS-%s-win-%s.zip' % (tag, _arch())
+    name = ASSET_NAME % (tag, _arch())
     base = 'https://github.com/%s/releases/download/%s/%s' % (APP_REPO, tag, name)
     return {
         'name': name,

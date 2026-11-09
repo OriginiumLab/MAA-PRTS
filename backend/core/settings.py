@@ -226,6 +226,10 @@ def _norm_dir(v: str) -> str:
     return v
 
 
+# 公开别名：api / operbox 一直在跨模块调 _norm_dir 这个私有名，提为公开契约（#63）
+norm_dir = _norm_dir
+
+
 def _norm_proxy(v: str) -> str:
     """网络代理：'127.0.0.1:7890' 补成 'http://127.0.0.1:7890'；空串 = 不用代理
 

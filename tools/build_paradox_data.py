@@ -40,20 +40,19 @@ def load_json(path):
         return json.load(f)
 
 
+def _load_make_pack():
+    """版本读取用 make_pack 的单点实现（此前两份拷贝截断长度 32/64 已分叉，#63）"""
+    import importlib.util
+    path = os.path.join(ROOT, 'resources', 'make_pack.py')
+    spec = importlib.util.spec_from_file_location('make_pack', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def game_version(src):
-    """资源库里的 version 文件：老版本是纯文本，新版本是 json"""
-    p = os.path.join(src, 'version')
-    if not os.path.isfile(p):
-        return ''
-    try:
-        with io.open(p, encoding='utf-8') as f:
-            raw = f.read().strip()
-        try:
-            return (json.loads(raw) or {}).get('versionId') or raw[:32]
-        except ValueError:
-            return raw[:32]
-    except OSError:
-        return ''
+    """资源库里的 version 文件（委托 make_pack.read_game_version，截断口径一致）"""
+    return _load_make_pack().read_game_version(os.path.join(src, 'gamedata', 'excel'))
 
 
 def build(src, generated_at='', source_commit=''):

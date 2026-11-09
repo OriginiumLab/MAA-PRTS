@@ -23,23 +23,12 @@ import os
 import time
 import urllib.request
 
-from . import net, resources, settings
+from . import net, packrepo, resources, settings
 
-# 与 tools/sync_pack.py 里的 PACK_REPO / PACK_BRANCH 保持一致
-# 数据走独立分支 pack-data：main 有规则集（强制 PR + 审批），bot 推不进去
-PACK_REPO = os.environ.get('MAA_PRTS_PACK_REPO') or 'OriginiumLab/MAA-PRTS'
-PACK_BRANCH = os.environ.get('MAA_PRTS_PACK_BRANCH') or 'pack-data'
-
-_RAW = 'https://raw.githubusercontent.com/%s/%s/' % (PACK_REPO, PACK_BRANCH)
-_GH_PROXY = 'https://gh-proxy.com/https://raw.githubusercontent.com/%s/%s/' % (
-    PACK_REPO, PACK_BRANCH)
-_JSDELIVR = 'https://cdn.jsdelivr.net/gh/%s@%s/' % (PACK_REPO, PACK_BRANCH)
-
-MANIFEST_URLS = [
-    _RAW + 'resources/pack-manifest.json',
-    _GH_PROXY + 'resources/pack-manifest.json',
-    _JSDELIVR + 'resources/pack-manifest.json',
-]
+# 仓库/分支/镜像顺序的契约单点在 packrepo（与 tools/sync_pack.py 共用，#63）
+PACK_REPO = packrepo.PACK_REPO
+PACK_BRANCH = packrepo.PACK_BRANCH
+MANIFEST_URLS = packrepo.mirror_urls('resources/pack-manifest.json')
 
 UA = 'MAA-PRTS/%s'
 TIMEOUT_CHECK = 6      # 启动时的检查不能拖住界面

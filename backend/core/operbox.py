@@ -137,13 +137,10 @@ def build_chars(data: dict, tables) -> dict:
     return {'chars': chars, 'skipped': skipped, 'warnings': warnings}
 
 
-def import_into(file: str, maa_dir: str) -> dict:
-    """把 MAA 干员识别结果写进账号文件，返回导入摘要。
+def _read_operbox(maa_dir):
+    """读并校验 MAA 干员识别结果，返回 (path, data, tables, built)。
 
-    done=false（识别未完成）整单拒绝。chars/stats/missing/sync 被识别结果
-    覆盖（皮肤/信赖按 charId 沿用旧值）；account/maa/tags/note/skd/skins
-    原样保留（合并语义同 updater.merge_preserved），原子替换落盘。
-    """
+    done=false（识别中断的残缺名单）整单拒绝，own_opers 全空报解析失败。"""
     path = operbox_path(maa_dir)
     if not os.path.isfile(path):
         raise FileNotFoundError(
@@ -155,13 +152,16 @@ def import_into(file: str, maa_dir: str) -> dict:
                          '请在 MAA 小工具里重跑一次识别再导入')
     tables = updater.Tables(cache_path=settings.subprof_cache())
     built = build_chars(data, tables)
-    chars = built['chars']
-    if not chars:
+    if not built['chars']:
         raise ValueError('OperBoxData.json 解析失败（own_opers 为空或全部条目无法识别）')
+    return path, data, tables, built
 
-    snap = accounts.get_account(file)
-    # MAA 数据不含皮肤/信赖：按 charId 沿用上次森空岛同步的值——不然同一份
-    # 文件里 per-char 全置零、stats.skinCount 却还计着保留的 skins 列表，自相矛盾
+
+def _apply_chars(snap, chars, tables, path, data):
+    """把识别结果写进快照：皮肤/信赖按 charId 沿用旧值，重建 stats/missing/sync。
+
+    MAA 数据不含皮肤/信赖：不沿用的话同一份文件里 per-char 全置零、
+    stats.skinCount 却还计着保留的 skins 列表，自相矛盾。"""
     old_by_id = {c.get('charId'): c for c in (snap.get('chars') or []) if c.get('charId')}
     for c in chars:
         o = old_by_id.get(c['charId'])
@@ -184,19 +184,36 @@ def import_into(file: str, maa_dir: str) -> dict:
             'done': data.get('done'),
         },
     }
-    accounts.save_account(file, snap)
+
+
+def _summary(fname, path, data, built, snap):
+    """导入/建号共用的返回摘要"""
     return {
-        'file': os.path.basename(str(file)),
+        'file': fname,
         'path': path,
         'source': data.get('source'),
         'syncTime': data.get('syncTime'),
         'done': data.get('done'),
-        'imported': len(chars),
+        'imported': len(built['chars']),
         'skipped': built['skipped'],
         'warnings': built['warnings'],
         'stats': snap['stats'],
         'sync': snap['sync'],
     }
+
+
+def import_into(file: str, maa_dir: str) -> dict:
+    """把 MAA 干员识别结果写进账号文件，返回导入摘要。
+
+    done=false（识别未完成）整单拒绝。chars/stats/missing/sync 被识别结果
+    覆盖（皮肤/信赖按 charId 沿用旧值）；account/maa/tags/note/skd/skins
+    原样保留（合并语义同 updater.merge_preserved），原子替换落盘。
+    """
+    path, data, tables, built = _read_operbox(maa_dir)
+    snap = accounts.get_account(file)
+    _apply_chars(snap, built['chars'], tables, path, data)
+    accounts.save_account(file, snap)
+    return _summary(os.path.basename(str(file)), path, data, built, snap)
 
 
 def _safe_stem(s: str) -> str:
@@ -214,19 +231,8 @@ def create_from_dir(maa_dir: str, alias: str = '') -> dict:
       - 不写 skd 段——没有 token，也就不参与森空岛同步；
       - 文件名 <备注或目录名>.json，重名顺延 (2)(3)。
     """
-    path = operbox_path(maa_dir)
-    if not os.path.isfile(path):
-        raise FileNotFoundError(
-            'MAA 目录下没有 data/OperBoxData.json（先在 MAA 小工具里跑一次干员识别）')
-    data = load(path)
-    if data.get('done') is False:
-        raise ValueError('MAA 干员识别未完成（done=false），'
-                         '请在 MAA 小工具里重跑一次识别再导入')
-    tables = updater.Tables(cache_path=settings.subprof_cache())
-    built = build_chars(data, tables)
+    path, data, tables, built = _read_operbox(maa_dir)
     chars = built['chars']
-    if not chars:
-        raise ValueError('OperBoxData.json 解析失败（own_opers 为空或全部条目无法识别）')
 
     d = settings._norm_dir(maa_dir) or maa_dir
     folder = os.path.basename(d.rstrip('\\/')) or 'MAA'
@@ -248,31 +254,7 @@ def create_from_dir(maa_dir: str, alias: str = '') -> dict:
             'channelName': '本地导入',
         },
         'maa': {'dir': d},
-        'chars': chars,
     }
-    missing = updater.build_missing(chars, tables)
-    snap['stats'] = updater.build_stats(chars, missing, tables, 0)
-    snap['missing'] = missing
-    snap['sync'] = {
-        'syncedAt': updater.now_iso(),
-        'source': 'maa-operbox',
-        'operbox': {
-            'path': path,
-            'source': data.get('source'),
-            'syncTime': data.get('syncTime'),
-            'done': data.get('done'),
-        },
-    }
+    _apply_chars(snap, chars, tables, path, data)   # 新快照无旧值，皮肤/信赖自然为零
     accounts.save_account(name, snap)
-    return {
-        'file': name,
-        'path': path,
-        'source': data.get('source'),
-        'syncTime': data.get('syncTime'),
-        'done': data.get('done'),
-        'imported': len(chars),
-        'skipped': built['skipped'],
-        'warnings': built['warnings'],
-        'stats': snap['stats'],
-        'sync': snap['sync'],
-    }
+    return _summary(name, path, data, built, snap)
