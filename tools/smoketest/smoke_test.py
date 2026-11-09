@@ -1139,12 +1139,17 @@ def check_app_update():
     from core import appupdate as A
 
     # 1. 版本比较
-    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0)
-    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 2)
+    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0, 0)
+    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 1, 2)
+    assert A.parse_version('v2.5.0-rc1') == (2, 5, 0, 0, 2, 1)
     assert A.is_newer('v2.10.0', '2.9.0'), '2.10 必须大于 2.9（按数字比，不是字符串比）'
     assert not A.is_newer('v2.4.0-beta.1', '2.4.0'), '预发布不该比同号正式版新'
     assert A.is_newer('v2.4.0', '2.4.0-beta.1')
     assert not A.is_newer('v2.4.0', '2.4.0')
+    # 预发布段位 alpha < beta < rc：只比序号会把 rc1 判到 beta.2 之下（#52）
+    assert A.is_newer('v2.5.0-rc1', 'v2.5.0-beta.2'), 'rc 必须大于 beta'
+    assert A.is_newer('v2.5.0-beta.3', 'v2.5.0-alpha.9'), 'beta 必须大于 alpha'
+    assert A.is_newer('v2.5.0-beta.2', 'v2.5.0-beta.1'), '同段位比序号'
     for junk in ('', 'latest', 'v2', '2.4', 'v2.4.0.1', 'release-2.4'):
         assert A.parse_version(junk) is None, '脏 tag 不该解析成功：%r' % junk
         assert not A.is_newer(junk, '2.0.0'), '脏 tag 不该触发更新：%r' % junk

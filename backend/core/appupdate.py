@@ -74,6 +74,9 @@ _cache = [None]
 _quit_hook = [None]
 
 _VER_RE = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.\-]+))?$')
+# 预发布段位：alpha < beta < rc，比较元组里排在序号前——只比末尾数字
+# 会把 rc1 判到 beta.2 之下，与 semver 顺序相反（#52）
+_PRE_RANK = {'alpha': 0, 'beta': 1, 'rc': 2}
 
 
 # ---------------------------------------------------------------- 路径
@@ -124,9 +127,11 @@ def _save_state(st: dict):
 
 # ---------------------------------------------------------------- 版本比较
 def parse_version(v):
-    """'v2.4.0' → (2,4,0,1,0)；'v2.4.0-beta.2' → (2,4,0,0,2)
+    """'v2.4.0' → (2,4,0,1,0,0)；'v2.4.0-beta.2' → (2,4,0,0,1,2)
 
     第四位：正式版 1、预发布 0，所以同号的预发布永远小于正式版。
+    第五位是预发布段位（alpha 0 < beta 1 < rc 2，认不出的叫法按 beta 段），
+    第六位是预发布序号——rc1 必须大于 beta.2，只比序号会判反（#52）。
     解析不了一律返回 None —— 脏 tag 绝不触发更新。
     """
     m = _VER_RE.match(str(v or '').strip())
@@ -135,7 +140,9 @@ def parse_version(v):
     major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
     pre = m.group(4)
     if not pre:
-        return (major, minor, patch, 1, 0)
+        return (major, minor, patch, 1, 0, 0)
+    mlabel = re.match(r'[A-Za-z]+', pre)
+    rank = _PRE_RANK.get((mlabel.group(0) if mlabel else '').lower(), 1)
     num = 0
     for part in reversed(pre.split('.')):
         if part.isdigit():
@@ -144,7 +151,7 @@ def parse_version(v):
     else:
         tail = re.search(r'(\d+)$', pre)
         num = int(tail.group(1)) if tail else 0
-    return (major, minor, patch, 0, num)
+    return (major, minor, patch, 0, rank, num)
 
 
 def is_newer(remote, local) -> bool:
@@ -320,7 +327,10 @@ def status(force=False) -> dict:
     """检查有没有新版本（只读，不下载）；force=True 跳过 6 小时节流"""
     st = _state()
     now = time.time()
-    checked = float(st.get('checkedTs') or 0)
+    try:
+        checked = float(st.get('checkedTs') or 0)
+    except (TypeError, ValueError):
+        checked = 0      # appupdate.json 被手改成非数字时不该让接口 500（#52）
     if not force and checked and (now - checked) < CHECK_INTERVAL:
         return _status_from_state(st)
 
@@ -582,9 +592,21 @@ function CleanUp {
 function Fail([string]$m) {
   Log ('失败：' + $m)
   try { Set-Content -LiteralPath (Join-Path $here 'install-error.txt') -Value $m -Encoding UTF8 } catch { }
+  # 整体还原 exe / version.json / _internal：只还 exe 会留下混装——
+  # 旧 exe + 新 _internal 可能闪退；旧 exe + 新 version.json 会让下次
+  # 启动误判已升级成功、清掉 pending 不再提示（#52）
   $bak = Join-Path $bkdir 'MAA-PRTS.exe'
   if (Test-Path -LiteralPath $bak) {
     try { Copy-Item -LiteralPath $bak -Destination $exe -Force } catch { Log '回滚 exe 失败' }
+  }
+  $bakVj = Join-Path $bkdir 'version.json'
+  if (Test-Path -LiteralPath $bakVj) {
+    try { Copy-Item -LiteralPath $bakVj -Destination (Join-Path $root 'version.json') -Force } catch { Log '回滚 version.json 失败' }
+  }
+  $bakInternal = Join-Path $bkdir '_internal'
+  if (Test-Path -LiteralPath $bakInternal) {
+    & robocopy.exe $bakInternal (Join-Path $root '_internal') /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { Log ('回滚 _internal 失败 rc=' + $LASTEXITCODE) }
   }
   # 别把用户扔在「程序没了」的状态里：失败也要把旧版拉起来
   if (Test-Path -LiteralPath $exe) {
@@ -617,12 +639,19 @@ if ($ParentPid -gt 0) {
 # 2) 包结构先校验，别等替换到一半才发现解压不完整
 if (-not (Test-Path -LiteralPath $newExe)) { Fail '解压目录里没有 MAA-PRTS.exe，压缩包不完整' }
 
-# 3) 备份旧 exe，失败可回滚
+# 3) 备份 exe / version.json / _internal：失败要整体还原，只备 exe 不够（#52）
 New-Item -ItemType Directory -Force -Path $bkdir | Out-Null
 if (Test-Path -LiteralPath $exe) {
   Copy-Item -LiteralPath $exe -Destination (Join-Path $bkdir 'MAA-PRTS.exe') -Force
 }
-Log '已备份旧 exe'
+if (Test-Path -LiteralPath (Join-Path $root 'version.json')) {
+  Copy-Item -LiteralPath (Join-Path $root 'version.json') -Destination (Join-Path $bkdir 'version.json') -Force
+}
+if (Test-Path -LiteralPath (Join-Path $root '_internal')) {
+  & robocopy.exe (Join-Path $root '_internal') (Join-Path $bkdir '_internal') /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -ge 8) { Fail ('备份 _internal 失败 rc=' + $LASTEXITCODE + '，尚未改动任何文件') }
+}
+Log '已备份 exe / version.json / _internal'
 
 # 4) _internal 用 /MIR：新版本删掉的旧 DLL 也要清掉，否则新旧混装
 & robocopy.exe (Join-Path $pkg '_internal') (Join-Path $root '_internal') /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -753,6 +782,12 @@ def install() -> dict:
         return r
     lr = launch()
     if not lr['ok']:
+        # 刚写的 pending.json 一并删掉：留着会让下次启动误报
+        # 「上次更新没生效」（#52）
+        try:
+            os.remove(os.path.join(update_dir(), 'pending.json'))
+        except OSError:
+            pass
         return lr
     st = _state()
     st['lastInstall'] = {'from': _current(), 'to': r['pending']['to'],
