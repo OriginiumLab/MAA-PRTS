@@ -1529,9 +1529,17 @@ function syncBasketOrder() {
 function fillBasketProfiles() {
   const sel = $('#basket-profile');
   const list = (S.maa && S.maa.profiles) || [];
-  // 不做预选：档案列表来自当前账号绑定的 MAA，默认选第一个
-  sel.innerHTML = list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
+  // 列表没变就不重建：这个下拉每 30 秒被 refreshMaaStatus 重建一次，
+  // 无条件 innerHTML 会把用户选中的档案弹回第一项，之后点「写入 MAA」
+  // 就写进第一个档案的配置里（#51）
+  const html = list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
     || '<option value="">（无配置）</option>';
+  if (sel.dataset.list === html) return;
+  const keep = sel.value;
+  sel.innerHTML = html;
+  sel.dataset.list = html;
+  // 列表变了也尽量保住选中项（保不住再默认选第一个）
+  if (keep && list.includes(keep)) sel.value = keep;
 }
 
 /* ------------------------------------------------------------ 写入 MAA */
