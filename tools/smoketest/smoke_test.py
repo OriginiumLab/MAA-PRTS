@@ -8,7 +8,8 @@
 三组检查，任何一组失败都以非 0 退出码结束：
 
     A. 静态检查
-       - 三个 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位）
+       - 全仓库 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位；
+         代码实际遍历仓库里所有 .bat，不止根目录三个）
        - backend / tools 全部 .py 可编译
     B. 加密与 token 存储（隔离临时目录，monkeypatch 路径）
        - DPAPI 往返、密文篡改必报错
@@ -83,6 +84,19 @@ def check_py_compile():
 
 
 # ---------------------------------------------------------------- B. 加密与 token 存储
+def _isolate_data_root():
+    """进程起手就把 MAA_PRTS_DATA_ROOT 指到临时目录（#62）。
+
+    core.settings 在 import 时就执行 _migrate_legacy_*，此时模块级 ROOT 若是
+    真实用户数据目录（%LOCALAPPDATA% 下的 dev 根），迁移会碰真实用户数据——
+    与文件头「不碰真实用户数据」的承诺相悖。必须在任何 `from core import ...`
+    之前设好环境变量，让首次 import 就落在隔离根上（C 组子进程也继承它）。
+    """
+    root = tempfile.mkdtemp(prefix='maaprts-smoke-root-')
+    os.environ['MAA_PRTS_DATA_ROOT'] = root
+    return root
+
+
 def _patch_settings(tmp):
     """把 core.settings 的数据路径指到临时目录。
 
@@ -103,11 +117,17 @@ def _patch_settings(tmp):
 
 
 def _reset_config(tmp):
-    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库"""
+    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库。
+
+    顺手清 settings._cache：不清的话缓存还带着上一个检查保存的设置，
+    当前断言恰好不受影响，属潜伏坑（#62）。"""
     cfg = os.path.join(tmp, 'config')
     if os.path.isdir(cfg):
         shutil.rmtree(cfg)
     os.makedirs(cfg, exist_ok=True)
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import settings
+    settings._cache = None
 
 
 def check_vault_roundtrip():
@@ -1139,12 +1159,17 @@ def check_app_update():
     from core import appupdate as A
 
     # 1. 版本比较
-    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0)
-    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 2)
+    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0, 0)
+    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 1, 2)
+    assert A.parse_version('v2.5.0-rc1') == (2, 5, 0, 0, 2, 1)
     assert A.is_newer('v2.10.0', '2.9.0'), '2.10 必须大于 2.9（按数字比，不是字符串比）'
     assert not A.is_newer('v2.4.0-beta.1', '2.4.0'), '预发布不该比同号正式版新'
     assert A.is_newer('v2.4.0', '2.4.0-beta.1')
     assert not A.is_newer('v2.4.0', '2.4.0')
+    # 预发布段位 alpha < beta < rc：只比序号会把 rc1 判到 beta.2 之下（#52）
+    assert A.is_newer('v2.5.0-rc1', 'v2.5.0-beta.2'), 'rc 必须大于 beta'
+    assert A.is_newer('v2.5.0-beta.3', 'v2.5.0-alpha.9'), 'beta 必须大于 alpha'
+    assert A.is_newer('v2.5.0-beta.2', 'v2.5.0-beta.1'), '同段位比序号'
     for junk in ('', 'latest', 'v2', '2.4', 'v2.4.0.1', 'release-2.4'):
         assert A.parse_version(junk) is None, '脏 tag 不该解析成功：%r' % junk
         assert not A.is_newer(junk, '2.0.0'), '脏 tag 不该触发更新：%r' % junk
@@ -1426,6 +1451,7 @@ def main():
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+    _isolate_data_root()   # 必须先于一切 core.* 导入（A 组后面 B/C 都会 import）
     print('MAA-PRTS 冒烟测试  %s' % REPO)
     print('-' * 60)
     r = Report()

@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from . import skland
+from . import atomicio, skland
 from .skland import Skland
 
 SCHEMA_VERSION = 2
@@ -38,14 +38,8 @@ def load_json(path, default=None):
 
 
 def dump_json(path, obj):
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-        f.write('\n')
-    os.replace(tmp, path)
+    """原子写 json（委托 atomicio：唯一 tmp 名 + 进程内写锁，#47）"""
+    atomicio.dump_json(path, obj)
 
 
 def iso(ts):
@@ -441,54 +435,35 @@ def scan_accounts(accounts_dir):
         if name in NON_ACCOUNT_JSON:
             continue
         p = os.path.join(accounts_dir, name)
-        d = load_json(p) or {}
+        d = load_json(p)
+        if not isinstance(d, dict):    # 数组形等非 dict JSON：跳过（#57）
+            continue
         uid = str(((d.get('account') or {}).get('uid')) or '')
         if uid:
             found[uid] = p
     return found
 
 
-def write_index(accounts_dir):
-    rows = []
-    if os.path.isdir(accounts_dir):
-        for name in sorted(os.listdir(accounts_dir)):
-            if not name.endswith('.json') or name.startswith('_'):
-                continue
-            if name in NON_ACCOUNT_JSON:
-                continue
-            d = load_json(os.path.join(accounts_dir, name)) or {}
-            a, s, sy = d.get('account') or {}, d.get('stats') or {}, d.get('sync') or {}
-            if not a.get('uid'):
-                continue
-            rows.append({
-                'uid': str(a.get('uid')), 'nickName': a.get('nickName'),
-                'alias': a.get('alias') or '', 'channelName': a.get('channelName'),
-                'level': a.get('level'),
-                'maaProfile': ((d.get('maa') or {}).get('profile') or ''),
-                'file': name,
-                'charCount': s.get('charCount'), 'charTotal': s.get('charTotal'),
-                'missingCount': s.get('missingCount'),
-                'sixStarCount': s.get('sixStarCount'), 'sixStarTotal': s.get('sixStarTotal'),
-                'e2Count': s.get('e2Count'), 'mastery3Count': s.get('mastery3Count'),
-                'moduleCount': s.get('moduleCount'),
-                'syncedAt': sy.get('syncedAt'), 'gameTime': sy.get('gameTime'),
-            })
-    rows.sort(key=lambda r: (-(r.get('level') or 0), r.get('nickName') or ''))
-    idx = {'schemaVersion': SCHEMA_VERSION, 'updatedAt': now_iso(),
-           'count': len(rows), 'accounts': rows}
-    dump_json(os.path.join(accounts_dir, '_index.json'), idx)
-    return idx
+# 同步自有的数据段：整文件覆盖时以新快照为准的键。
+# 不在这份名单里的顶层键都是「用户/其他入口写的状态」（maa/note/tags/skd、
+# preferAlgo、paradox.imported、今后新增的账号级偏好……），一律从旧文件保留——
+# 原来的「保留键白名单」漏了 preferAlgo/paradox，同步一次就把用户选择
+# 静默清掉（#46）；反转口径后新状态键不再需要记得来改这里。
+_SYNC_OWNED_KEYS = frozenset((
+    'schemaVersion', 'generator', 'account', 'sync', 'stats', 'chars',
+    'missing', 'skins',
+))
 
 
 def merge_preserved(snap, old):
-    """保留用户手写字段（maa/note/tags/skd），刷新不冲掉"""
+    """同步落盘时保留旧文件里的用户状态：只覆盖同步自有的数据段，其余顶层键原样带回"""
     if not old:
         return snap
-    for k in ('maa', 'note'):
-        if k in old:
-            snap[k] = old[k]
-    if old.get('tags'):
-        snap['tags'] = old['tags']
+    for k, v in old.items():
+        # maa/tags 虽由同步重建（空默认值），但值是用户手填/勾选的，以旧为准
+        if k in _SYNC_OWNED_KEYS and k not in ('maa', 'tags'):
+            continue
+        snap[k] = v
     # 新快照不带 skd（重加密失败/兜底路径）而旧文件有 → 原样保留，token 不丢
     if not snap.get('skd') and old.get('skd'):
         snap['skd'] = old['skd']
@@ -548,10 +523,13 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
         for line in changes:
             log('    · %s' % line)
 
-        if old_path and os.path.abspath(old_path) != os.path.abspath(path):
-            os.replace(old_path, path)
-            log('    ~ 重命名 %s → %s' % (os.path.basename(old_path), os.path.basename(path)))
-        dump_json(path, snap)
+        # 重命名与落盘圈进同一把锁：避免与请求线程的 save_account/save_pref
+        # 交错——旧名文件刚被 rename 走、对旧名的写又把它复活成重复账号
+        with atomicio.lock():
+            if old_path and os.path.abspath(old_path) != os.path.abspath(path):
+                os.replace(old_path, path)
+                log('    ~ 重命名 %s → %s' % (os.path.basename(old_path), os.path.basename(path)))
+            dump_json(path, snap)
         log('    → %s' % os.path.basename(path))
         existing[uid] = path
         files.append({'file': os.path.basename(path), 'uid': uid, 'nickName': a['nickName']})
@@ -631,7 +609,6 @@ def sync_many(items, accounts_dir, log, with_skins=False, cache_path=None):
             log('  ✗ 失败：%s' % e)
             fail += 1
 
-    write_index(accounts_dir)
     log('')
     log('完成：成功 %d 个角色，失败 %d 个 token' % (ok, fail))
     return {'ok': ok, 'fail': fail}

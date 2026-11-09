@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import accounts, settings, updater
+from . import accounts, atomicio, settings, updater
 
 
 def operbox_path(maa_dir: str) -> str:
@@ -159,32 +159,35 @@ def import_into(file: str, maa_dir: str) -> dict:
     if not chars:
         raise ValueError('OperBoxData.json 解析失败（own_opers 为空或全部条目无法识别）')
 
-    snap = accounts.get_account(file)
-    # MAA 数据不含皮肤/信赖：按 charId 沿用上次森空岛同步的值——不然同一份
-    # 文件里 per-char 全置零、stats.skinCount 却还计着保留的 skins 列表，自相矛盾
-    old_by_id = {c.get('charId'): c for c in (snap.get('chars') or []) if c.get('charId')}
-    for c in chars:
-        o = old_by_id.get(c['charId'])
-        if o:
-            c['favor'] = int(o.get('favor') or 0)
-            c['skin'] = o.get('skin')
-            c['skinCount'] = int(o.get('skinCount') or 0)
-    missing = updater.build_missing(chars, tables)
-    snap['chars'] = chars
-    snap['stats'] = updater.build_stats(chars, missing, tables,
-                                        len(snap.get('skins') or []))
-    snap['missing'] = missing
-    snap['sync'] = {
-        'syncedAt': updater.now_iso(),
-        'source': 'maa-operbox',
-        'operbox': {
-            'path': path,
-            'source': data.get('source'),
-            'syncTime': data.get('syncTime'),
-            'done': data.get('done'),
-        },
-    }
-    accounts.save_account(file, snap)
+    # 读旧快照 → 合并 → 写回整段圈进写锁：与后台同步/其他请求并发时
+    # 不丢更新（#47）。锁内只有内存合并，没有 IO，拿一会儿没关系。
+    with atomicio.lock():
+        snap = accounts.get_account(file)
+        # MAA 数据不含皮肤/信赖：按 charId 沿用上次森空岛同步的值——不然同一份
+        # 文件里 per-char 全置零、stats.skinCount 却还计着保留的 skins 列表，自相矛盾
+        old_by_id = {c.get('charId'): c for c in (snap.get('chars') or []) if c.get('charId')}
+        for c in chars:
+            o = old_by_id.get(c['charId'])
+            if o:
+                c['favor'] = int(o.get('favor') or 0)
+                c['skin'] = o.get('skin')
+                c['skinCount'] = int(o.get('skinCount') or 0)
+        missing = updater.build_missing(chars, tables)
+        snap['chars'] = chars
+        snap['stats'] = updater.build_stats(chars, missing, tables,
+                                            len(snap.get('skins') or []))
+        snap['missing'] = missing
+        snap['sync'] = {
+            'syncedAt': updater.now_iso(),
+            'source': 'maa-operbox',
+            'operbox': {
+                'path': path,
+                'source': data.get('source'),
+                'syncTime': data.get('syncTime'),
+                'done': data.get('done'),
+            },
+        }
+        accounts.save_account(file, snap)
     return {
         'file': os.path.basename(str(file)),
         'path': path,
