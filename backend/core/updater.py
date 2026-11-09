@@ -478,15 +478,26 @@ def write_index(accounts_dir):
     return idx
 
 
+# 同步自有的数据段：整文件覆盖时以新快照为准的键。
+# 不在这份名单里的顶层键都是「用户/其他入口写的状态」（maa/note/tags/skd、
+# preferAlgo、paradox.imported、今后新增的账号级偏好……），一律从旧文件保留——
+# 原来的「保留键白名单」漏了 preferAlgo/paradox，同步一次就把用户选择
+# 静默清掉（#46）；反转口径后新状态键不再需要记得来改这里。
+_SYNC_OWNED_KEYS = frozenset((
+    'schemaVersion', 'generator', 'account', 'sync', 'stats', 'chars',
+    'missing', 'skins',
+))
+
+
 def merge_preserved(snap, old):
-    """保留用户手写字段（maa/note/tags/skd），刷新不冲掉"""
+    """同步落盘时保留旧文件里的用户状态：只覆盖同步自有的数据段，其余顶层键原样带回"""
     if not old:
         return snap
-    for k in ('maa', 'note'):
-        if k in old:
-            snap[k] = old[k]
-    if old.get('tags'):
-        snap['tags'] = old['tags']
+    for k, v in old.items():
+        # maa/tags 虽由同步重建（空默认值），但值是用户手填/勾选的，以旧为准
+        if k in _SYNC_OWNED_KEYS and k not in ('maa', 'tags'):
+            continue
+        snap[k] = v
     # 新快照不带 skd（重加密失败/兜底路径）而旧文件有 → 原样保留，token 不丢
     if not snap.get('skd') and old.get('skd'):
         snap['skd'] = old['skd']
