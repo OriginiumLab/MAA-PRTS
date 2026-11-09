@@ -91,11 +91,13 @@ def _note(msg):
             pass
 
 
-def _http(method, url, headers, body=None, timeout=30, retries=3):
+def _http(method, url, headers, body=None, timeout=30, retries=3, note=None):
     """带退避重试的请求。
 
     headers 可以传 dict，也可以传无参函数（每次重试重新签名，避免时间戳过期返 401）。
-    只重试网络层超时/断连和 401/403（签名过期）；其他 4xx 直接抛出。
+    只重试网络层超时/断连/坏响应体，以及**可重签名请求**的 401/403（签名过期）；
+    登录链（grant/cred）的 401/403 是坏 token 本身，重试纯属浪费。其他 4xx 直接抛出。
+    note 是本实例的日志回调（重试提示写进各自任务的日志，#61）。
     """
     data = None
     if body is not None:
@@ -115,25 +117,37 @@ def _http(method, url, headers, body=None, timeout=30, retries=3):
                 return json.loads(raw.decode('utf-8'))
         except urllib.error.HTTPError as e:
             last = e
-            if e.code not in (401, 403) or attempt >= retries:
+            # 401/403 只有「headers 是函数」的可重签名请求才值得重试（时间戳
+            # 过期）；登录链的死 token 重试三次只是浪费
+            if e.code not in (401, 403) or not callable(headers) or attempt >= retries:
                 raise
-            _note('    [签名重试 %d/%d] HTTP %s' % (attempt, retries - 1, e.code))
+            (note or _note)('    [签名重试 %d/%d] HTTP %s' % (attempt, retries - 1, e.code))
             time.sleep(1.0 * attempt)
         except (urllib.error.URLError, socket.timeout, TimeoutError,
                 ConnectionError, OSError) as e:
             last = e
             if attempt >= retries:
                 raise
-            _note('    [网络重试 %d/%d] %s' % (attempt, retries - 1, e))
+            (note or _note)('    [网络重试 %d/%d] %s' % (attempt, retries - 1, e))
+            time.sleep(1.5 * attempt)
+        except ValueError:
+            # 网关/代理返回 HTML 错误页时 json.loads 抛 JSONDecodeError（ValueError
+            # 子类）：按网络类重试换下一轮，而不是冒泡成同步任务失败
+            last = ValueError('响应不是 JSON（网关错误页？）')
+            if attempt >= retries:
+                raise last
+            (note or _note)('    [网络重试 %d/%d] 响应不是 JSON' % (attempt, retries - 1))
             time.sleep(1.5 * attempt)
     if last:
         raise last
 
 
 class Skland:
-    def __init__(self, token: str, did: str = None):
+    def __init__(self, token: str, did: str = None, log=None):
         self.token = token          # 森空岛用户 token（鹰角通行证）
         self.did = did or _default_did()
+        self._note = log            # 重试提示随实例走：两个同步任务并行时不再
+                                    # 互相写进对方的任务日志（#61）
         self.cred = None            # 32 位凭证
         self.sign_token = None      # 签名密钥
         self.login()
@@ -143,7 +157,8 @@ class Skland:
         g = _http('POST', GRANT_URL,
                   {'User-Agent': SKLAND_UA, 'Accept-Encoding': 'identity',
                    'Connection': 'close', 'dId': self.did},
-                  {'appCode': APP_CODE, 'token': self.token, 'type': 0})
+                  {'appCode': APP_CODE, 'token': self.token, 'type': 0},
+                  note=self._note)
         if g.get('status') != 0:
             raise RuntimeError('换取 grant code 失败: %s' % (g.get('msg') or g))
         grant = g['data']['code']
@@ -151,7 +166,8 @@ class Skland:
         c = _http('POST', CRED_URL,
                   {'User-Agent': SKLAND_UA, 'Accept-Encoding': 'identity',
                    'Connection': 'close', 'dId': self.did},
-                  {'code': grant, 'kind': 1})
+                  {'code': grant, 'kind': 1},
+                  note=self._note)
         if c.get('code') != 0:
             raise RuntimeError('换取 cred 失败: %s' % (c.get('msg') or c))
         self.cred = c['data']['cred']
@@ -184,7 +200,8 @@ class Skland:
         p = urllib.parse.urlparse(API + path_query)
         # 传函数而不是现成 headers：每次重试都重新签名，时间戳才是新的
         return _http('GET', API + path_query,
-                     lambda: self._sign(p.path, p.query or ''), timeout=timeout)
+                     lambda: self._sign(p.path, p.query or ''),
+                     timeout=timeout, note=self._note)
 
     def _get(self, path_query: str, timeout=40):
         """401/403 视作 cred 过期：重新走一次鉴权链再请求"""
@@ -193,7 +210,7 @@ class Skland:
         except urllib.error.HTTPError as e:
             if e.code not in (401, 403):
                 raise
-            _note('    [凭证过期] 重新登录一次')
+            self._note('    [凭证过期] 重新登录一次')
             self.login()
             return self.api_get(path_query, timeout=timeout)
 

@@ -258,8 +258,14 @@ def launch(maa_dir=None):
     if not os.path.isfile(exe):
         raise FileNotFoundError('找不到 MAA.exe：%s' % exe)
     subprocess.Popen([exe], cwd=_dir(maa_dir), env=_launch_env(), close_fds=True)
-    time.sleep(1.0)
-    return bool(running_in(_dir(maa_dir)))
+    # 冷启动/机械盘上进程创建可能超过 1 秒：5 秒内每 0.5s 探测一次，
+    # 不再单次探测就误报「启动后未检测到进程」（#61）
+    d = _dir(maa_dir)
+    for _ in range(10):
+        if running_in(d):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 # ---------------------------------------------------------------- 写作业
