@@ -127,8 +127,9 @@ MAA-PRTS/                    ← 程序本体整个换掉
    tag 也用它。解析不了的 tag 用户端一律忽略。
 2. **别删旧 Release 的 asset**：没开「接收预发布版」时检查用的是 `/releases/latest`，
    它永远返回最近的非预发布 Release；开了开关才走 `releases` 列表端点把预发布也算进来。
-3. **Windows 的包必须叫 `*-win-x64.zip`（或 arm64）**：`_pick_asset()` 按架构挑，
-   挑不到才退到第一个 zip。
+3. **Windows 的包必须叫 `MAA-PRTS-<tag>-win-<arch>.zip`**：命名契约三处一致——
+   release.yml 打包步骤、`appupdate.ASSET_NAME`（兜底下载按它拼地址）、本文件；
+   `_pick_asset()` 按架构挑，挑不到才退到第一个 zip。
 4. **不需要额外配置**：`digest` 是 GitHub 自己给 asset 算的 sha256，发版流程一个字都不用改。
 
 ## 排查表

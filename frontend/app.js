@@ -1388,7 +1388,7 @@ async function showOpDetail(op, variant) {
         const body = d.content || {};
         const shown = visOpers(d.opers);
         const rows = shown.map(o => {
-          const req = o.requirements || {};
+          const req = o.req || {};   // 与搜索侧同键名（#63）
           const bits = [];
           if (req.elite != null) bits.push('精' + req.elite);
           if (req.level != null) bits.push(req.level + ' 级');

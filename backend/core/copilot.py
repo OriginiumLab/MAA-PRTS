@@ -761,7 +761,9 @@ def detail_opers(content, owned_map=None):
         stars = (idx.get(o.get('name') or '') or (6,))[0]
         owned = (owned_map or {}).get(norm(o.get('name')))
         known = bool(owned.get('skillKnown', True)) if owned else True
-        o['requirements'] = effective_req(op, stars, strict_skill=known)
+        # 键名与搜索侧 _item 的 'req' 统一：两处各叫各的（req/requirements），
+        # 任一侧改名另一侧就静默显示「无特殊要求」（#63）
+        o['req'] = effective_req(op, stars, strict_skill=known)
         o['skillKnown'] = known if owned else None
         out.append(o)
     return out

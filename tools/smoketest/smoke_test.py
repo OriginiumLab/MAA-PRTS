@@ -588,11 +588,13 @@ def check_maa_import_level_only():
                           'requirements': {'elite': 2, 'level': 60,
                                            'skill_level': 9, 'module': 3}}]}
     dop = copilot.detail_opers(content, maa)
-    assert 'skill_level' not in dop[0]['requirements'], dop[0]['requirements']
-    assert 'module' not in dop[0]['requirements'], dop[0]['requirements']
+    # 展示副本的合并要求键与搜索侧统一为 'req'（#63）；'requirements' 是
+    # 原始作业内容的字段，保留不动
+    assert 'skill_level' not in dop[0]['req'], dop[0]['req']
+    assert 'module' not in dop[0]['req'], dop[0]['req']
     assert dop[0]['skillKnown'] is False
-    assert copilot.detail_opers(content, skl)[0]['requirements']['skill_level'] == 9
-    assert copilot.detail_opers(content)[0]['requirements']['skill_level'] == 9, \
+    assert copilot.detail_opers(content, skl)[0]['req']['skill_level'] == 9
+    assert copilot.detail_opers(content)[0]['req']['skill_level'] == 9, \
         '不带账号上下文时不该改变展示'
     v1 = {'opers': [{'name': six, 'skill': 1}]}      # v1 条目：本来没有 requirements
     copilot.detail_opers(v1, maa)
@@ -851,10 +853,11 @@ def check_copilot_v1_default_req():
     mode, missing, training, total, detail, _six, _w = copilot.match_operation(content, owned_map)
     assert mode == 'ready' and not training, '满练号打 v1 作业不该被误伤'
 
-    # 详情弹窗用的 detail_opers：requirements 也要补上默认
+    # 详情弹窗用的 detail_opers：合并要求键为 'req'（与搜索侧统一，#63），
+    # 也要补上默认
     dop = copilot.detail_opers(content)
-    assert dop[0]['requirements']['elite'] == 2 and dop[0]['requirements']['implied']
-    assert dop[0]['requirements']['skill_level'] == 9, '六星默认要带专三要求'
+    assert dop[0]['req']['elite'] == 2 and dop[0]['req']['implied']
+    assert dop[0]['req']['skill_level'] == 9, '六星默认要带专三要求'
     assert 'requirements' not in content['opers'][0], '展示副本不能污染原始 content'
 
 
