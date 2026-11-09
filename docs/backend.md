@@ -70,13 +70,13 @@ main()
 | GET | `/api/accounts` | 账号列表（含每个账号的统计摘要） |
 | GET | `/api/account?file=` | 单个账号完整配置：account / stats / missing / chars |
 | POST | `/api/account/maa` | 把 `maa.profile` 等用户字段写回账号 JSON（同步不覆盖的那几个） |
-| POST | `/api/account/remove` | 删除账号：不真删，移入 `config/_removed/` 备份 |
+| POST | `/api/account/remove` | 删除账号：不真删，移入 `config/_removed/` 备份。**预留，无界面入口** |
 | POST | `/api/account/refresh` | 同步账号。带 `token` 同步单个（密文写进账号文件 `skd` 段）；不带则按各账号文件 ∪ 旧 `tokens.json` 全部同步。返回 `taskId` |
 | POST | `/api/account/import-maa` | 从账号绑定的 MAA 目录读干员识别结果（`done=false` 残缺名单拒绝），覆盖练度/统计/缺卡（账号信息与 `skd` 保留），同步任务直接返回摘要 |
 | POST | `/api/account/create-from-maa` | 不用森空岛 token：用 `dir` 指定 MAA 目录的干员识别结果直接建本地账号（合成 uid、昵称取备注或目录名、无 `skd` 段、重名顺延 (2)(3)），返回建号摘要 |
 | POST | `/api/search` | 搜作业 + 练度匹配（body：`q` / `file` / `pages` / `minRating` / `limit`） |
-| GET | `/api/activities` | 近期活动列表（快捷栏数据源） |
-| GET | `/api/gamedata` | 资源包版本状态（含 `pending` 更新提示） |
+| GET | `/api/activities` | 近期活动列表。**预留，无界面入口**（前端从 bootstrap 拿活动数据） |
+| GET | `/api/gamedata` | 资源包版本状态（含 `pending` 更新提示）。**预留，无界面入口**（前端从 bootstrap 拿，确认更新走 `/api/gamedata/ack`） |
 | POST | `/api/gamedata/ack` | 清掉待提示的资源更新 |
 | GET | `/api/pack/status` | 远端有没有新的资源包（只读；`?force=1` 给更长超时） |
 | POST | `/api/pack/update` | 下载并安装新资源包，返回新的 `pack` 与 `gamedata` |
@@ -87,13 +87,13 @@ main()
 | GET | `/api/op?id=` | 作业详情（干员与要求、动作数、`maa://` 代码） |
 | GET | `/api/maa/status` | MAA 是否运行、配置列表、当前配置 |
 | GET | `/api/maa/probe?dir=` | 检测目录是不是 MAA 根目录（引导/设置用）；附干员识别数据 `operbox/operboxCount/operboxSyncTime` |
-| POST | `/api/maa/close` | 关闭正在运行的 MAA 进程 |
-| POST | `/api/maa/open` | 启动 `MAA.exe` |
+| POST | `/api/maa/close` | 关闭正在运行的 MAA 进程。**预留，无界面入口**（`/api/maa/apply` 流程内部复用同函数） |
+| POST | `/api/maa/open` | 启动 `MAA.exe`。**预留，无界面入口**（同上，apply 流程内部复用） |
 | POST | `/api/maa/apply` | 写入作业集：关 MAA → 备份 → 下载 → 写 TaskList → 重启。返回 `taskId` |
-| POST | `/api/maa/clear` | 清空某配置的 `Copilot.TaskList` |
-| GET | `/api/maa/tasklist?profile=` | 读 MAA 某配置当前的 `TaskList` |
+| POST | `/api/maa/clear` | 清空某配置的 `Copilot.TaskList`。**预留，无界面入口** |
+| GET | `/api/maa/tasklist?profile=` | 读 MAA 某配置当前的 `TaskList`。**预留，无界面入口** |
 | GET | `/api/task?id=&since=` | 后台任务状态与增量日志（`since` 是日志游标） |
-| POST | `/api/export` | 导出「作业站本地导入」格式到 `config/作业站/` |
+| POST | `/api/export` | 导出「作业站本地导入」格式到 `config/作业站/`。**预留，无界面入口**（导出的只有干员练度，不含 token） |
 
 所有响应统一为 `{"ok": true, "data": ...}` 或 `{"ok": false, "error": "..."}`。
 
