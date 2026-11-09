@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import threading
+import time
 
 from . import settings, tasks, updater
 from . import paradox
@@ -74,9 +75,13 @@ def list_accounts():
 
 def get_account(file: str) -> dict:
     path = os.path.join(_accounts_dir(), os.path.basename(file))
+    if not os.path.isfile(path):
+        raise FileNotFoundError('账号文件不存在：%s' % file)
     snap = _load(path)
     if not snap:
-        raise FileNotFoundError('账号文件不存在：%s' % file)
+        # 文件在但读不了（坏 JSON/非对象形）：跟「不存在」分开说，
+        # 不然用户被误导去重新添加账号（#61）
+        raise ValueError('账号文件读不了（可能损坏）：%s' % file)
     return snap
 
 
@@ -338,7 +343,8 @@ def _run_updater(tid, token=None, alias=None, with_skins=False):
 
 def start_refresh(token=None, alias=None, with_skins=False, title=None):
     """启动后台同步，返回任务 id（前端轮询 /api/task）"""
-    title = title or ('同步账号 ' + (token[:6] + '…' if token else '（全部）'))
+    # token 痕迹只留 mask()（尾 4 位）：前缀进任务标题属于凭证泄露面（#61）
+    title = title or ('同步账号 ' + (updater.mask(token) if token else '（全部）'))
     holder = {}
 
     def go():
@@ -373,7 +379,11 @@ def remove_account(file: str, backup=True):
     if backup:
         bak_dir = os.path.join(os.path.dirname(path), '_removed')
         os.makedirs(bak_dir, exist_ok=True)
-        shutil.move(path, os.path.join(bak_dir, os.path.basename(path)))
+        # 备份名带时间戳：同名新账号再次删除时 move 目标已存在会退化成
+        # 覆盖，旧备份被顶掉（#61）
+        dst = os.path.join(bak_dir, '%s.%s' % (
+            os.path.basename(path), time.strftime('%Y%m%d-%H%M%S')))
+        shutil.move(path, dst)
     else:
         os.remove(path)
     return True

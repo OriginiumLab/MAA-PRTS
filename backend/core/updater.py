@@ -64,7 +64,9 @@ def now_iso():
 
 
 def mask(token):
-    return token if len(token) <= 12 else token[:4] + '…' + token[-4:]
+    """token 的展示痕迹：只留尾 4 位。首 4 + 尾 4 会随 tokenHint 落账号文件
+    与 debug/app.log，前缀属于凭证有效信息，日志里不该有（#61）"""
+    return '…' + token[-4:] if len(token) > 8 else '…'
 
 
 def fmt_char(c):
@@ -514,7 +516,7 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
     label = alias or mask(token)
     log('账号：%s  (%s)' % (label, mask(token)))
 
-    sk = Skland(token)
+    sk = Skland(token, log=log)
     bds = [b for b in sk.bindings() if not b.get('isDelete')]
     if not bds:
         raise RuntimeError('该 token 未绑定明日方舟角色')

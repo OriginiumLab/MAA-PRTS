@@ -431,22 +431,26 @@ def download(force=False) -> dict:
                 'degraded': bool(meta.get('degraded'))}
 
     errors = []
-    for url in urls:
-        try:
-            raw = _get(url, TIMEOUT_DOWNLOAD)
-            _verify_zip(raw, meta)
-        except Exception as e:  # noqa: BLE001
-            errors.append('%s -> %s' % (url.split('/')[2], e))
-            continue
-        tmp = dest + '.tmp'
-        with open(tmp, 'wb') as f:
-            f.write(raw)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, dest)
-        return {'ok': True, 'path': dest, 'cached': False,
-                'size': len(raw), 'version': st.get('latest'),
-                'degraded': bool(meta.get('degraded'))}
+    # 13MB 的包每个源只有一次机会太脆：三源全试完再整体重试一轮（#61）
+    for attempt in (1, 2):
+        for url in urls:
+            try:
+                raw = _get(url, TIMEOUT_DOWNLOAD)
+                _verify_zip(raw, meta)
+            except Exception as e:  # noqa: BLE001
+                errors.append('#%d %s -> %s' % (attempt, url.split('/')[2], e))
+                continue
+            tmp = dest + '.tmp'
+            with open(tmp, 'wb') as f:
+                f.write(raw)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, dest)
+            return {'ok': True, 'path': dest, 'cached': False,
+                    'size': len(raw), 'version': st.get('latest'),
+                    'degraded': bool(meta.get('degraded'))}
+        if attempt == 1:
+            time.sleep(2)
 
     return {'ok': False, 'error': '下载失败：' + '；'.join(errors)}
 
@@ -819,9 +823,19 @@ def on_start() -> dict:
 
 
 def open_page(url='') -> dict:
-    """用系统浏览器打开 Release 页（前端拿不到跨域页面，交给后端）"""
+    """用系统浏览器打开 Release 页（前端拿不到跨域页面，交给后端）。
+
+    显式传入的 url 只认本仓库的 github.com 页：Windows 上 webbrowser 走
+    os.startfile，任何 scheme 都会执行——虽有 Host/Origin 三层校验，纵深
+    防御上也不该给前端开「打开任意地址」的口子（#61）。"""
     st = _state()
-    target = url or st.get('pageUrl') or ('https://github.com/%s/releases' % APP_REPO)
+    if url:
+        base = 'https://github.com/%s/' % APP_REPO
+        if not str(url).startswith(base):
+            return {'ok': False, 'error': '只允许打开本仓库的 GitHub 页面', 'url': url}
+        target = url
+    else:
+        target = st.get('pageUrl') or ('https://github.com/%s/releases' % APP_REPO)
     try:
         webbrowser.open(target)
         return {'ok': True, 'url': target}
