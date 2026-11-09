@@ -409,9 +409,12 @@ def api_paradox_mark(_q, body):
     """记下这些悖论已经排进过 MAA，下次默认不勾"""
     body = body or {}
     file = _account_for(body.get('file'))
-    snap = accounts.get_account(file)
-    imp = paradox.mark_imported(snap, body.get('stages') or [])
-    accounts.save_account(file, snap)
+    imp = {}
+
+    def _mut(snap):
+        imp.update(paradox.mark_imported(snap, body.get('stages') or []))
+
+    accounts.update(file, _mut)   # 锁内读-改-写，不与后台同步丢更新（#47）
     return {'file': file, 'imported': len(imp)}
 
 
