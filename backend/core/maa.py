@@ -20,7 +20,9 @@ SAFE = re.compile(r'[\\/:*?"<>|]')
 # 每次写入作业都会备份一份 gui.new.json，只保留最近几份，避免占满用户磁盘
 KEEP_BACKUPS = 2
 BACKUP_PREFIX = '.bak-app-'
-BACKUP_STAMP = re.compile(r'^\d{8}-\d{6}$')
+# 毫秒段：同秒内两次 apply（双击触发）第二次的 copyfile 不再覆盖第一次的备份；
+# 毫秒段可缺省——旧版写出的不带毫秒的备份名也要继续认（清理逻辑用）
+BACKUP_STAMP = re.compile(r'^\d{8}-\d{6}(?:-\d{3})?$')
 
 
 def _dir(maa_dir=None):
@@ -271,13 +273,26 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
     d = _dir(maa_dir)
 
     log('MAA 目录：%s' % d)
+    # 先校验配置可读、档案存在，再关进程：目录配错 / gui.new.json 损坏时
+    # 任务反正会失败，不能先把用户的 MAA 白杀了（#53）
+    cfg = _load_cfg(d)
+    configs = cfg.get('Configurations') or {}
+    # 没指定档案就用 MAA 当前启用的那个；一个都没有才报错
+    profile = profile or cfg.get('Current') or ''
+    if not profile or profile not in configs:
+        raise ValueError('配置「%s」不存在，可选：%s' % (profile, ', '.join(configs)))
+
     want = os.path.normcase(os.path.normpath(d))
     rows = list_running()
     mine = next((r for r in rows if _dir_of(r) == want), None)
     others = [r for r in rows if _dir_of(r) != want]
     if mine:
         log('检测到该目录的 MAA 正在运行（PID %s），先关闭…' % ' / '.join(map(str, mine['pids'])))
-        close(d)
+        if not close(d):
+            # 关不掉还硬写，运行中的 MAA 会在退出时把内存态回写、
+            # 本次 TaskList 直接被覆盖丢失
+            raise RuntimeError('MAA 关闭失败（PID %s），请手动退出 MAA 后重试'
+                               % ' / '.join(map(str, mine['pids'])))
         log('MAA 已关闭')
     else:
         log('MAA 未运行')
@@ -285,19 +300,21 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
         log('其他目录的 MAA 在跑（%d 个），不动它们' % len(others))
 
     time.sleep(0.4)
-    bak = _config_path(d) + BACKUP_PREFIX + time.strftime('%Y%m%d-%H%M%S')
+    bak = _config_path(d) + BACKUP_PREFIX + time.strftime('%Y%m%d-%H%M%S') \
+        + '-%03d' % int((time.time() % 1) * 1000)
     shutil.copyfile(_config_path(d), bak)
     log('配置已备份 → %s' % os.path.basename(bak))
     dropped = _prune_backups(maa_dir=d)
     if dropped:
         log('清理旧备份 %d 个（只保留最近 %d 份）' % (len(dropped), KEEP_BACKUPS))
 
+    # 杀完进程重新读一份：MAA 退出前可能按退出流程再回写一次配置，
+    # 不能拿关进程前读到的旧内容去覆盖
     cfg = _load_cfg(d)
     configs = cfg.get('Configurations') or {}
-    # 没指定档案就用 MAA 当前启用的那个；一个都没有才报错
-    profile = profile or cfg.get('Current') or ''
-    if not profile or profile not in configs:
-        raise ValueError('配置「%s」不存在，可选：%s' % (profile, ', '.join(configs)))
+    if profile not in configs:
+        raise ValueError('配置「%s」在 MAA 退出后不存在了，可选：%s'
+                         % (profile, ', '.join(configs)))
 
     tpl = copy.deepcopy((configs.get('Default') or {}).get('Copilot') or {})
     target = configs[profile]
@@ -403,6 +420,18 @@ def clear_tasklist(profile=None, maa_dir=None):
     profile = profile or cfg.get('Current') or ''
     if not profile or profile not in configs:
         raise ValueError('配置不存在：%s' % (profile or '（没有可用配置）'))
+    # 与 apply_plan 同一套防护：MAA 运行中改 TaskList 会在它退出时被
+    # 内存态全量回写「复活」，必须先关掉且确认关掉了（#53）
+    d = _dir(maa_dir)
+    mine = running_in(d)
+    if mine:
+        if not close(d):
+            raise RuntimeError('MAA 关闭失败（PID %s），请手动退出 MAA 后重试'
+                               % ' / '.join(map(str, mine['pids'])))
+        cfg = _load_cfg(maa_dir)   # 退出回写后再读，别拿旧内容覆盖
+        configs = cfg.get('Configurations') or {}
+        if profile not in configs:
+            raise ValueError('配置「%s」在 MAA 退出后不存在了' % profile)
     configs[profile].setdefault('Copilot', {})['TaskList'] = []
     _save_cfg(cfg, maa_dir=maa_dir)
     return True
