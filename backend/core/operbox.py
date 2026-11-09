@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import accounts, settings, updater
+from . import accounts, atomicio, settings, updater
 
 
 def operbox_path(maa_dir: str) -> str:
@@ -210,9 +210,12 @@ def import_into(file: str, maa_dir: str) -> dict:
     原样保留（合并语义同 updater.merge_preserved），原子替换落盘。
     """
     path, data, tables, built = _read_operbox(maa_dir)
-    snap = accounts.get_account(file)
-    _apply_chars(snap, built['chars'], tables, path, data)
-    accounts.save_account(file, snap)
+    # 读旧快照 → 合并 → 写回整段圈进写锁：与后台同步/其他请求并发时
+    # 不丢更新（#47）。锁内只有内存合并，没有 IO，拿一会儿没关系。
+    with atomicio.lock():
+        snap = accounts.get_account(file)
+        _apply_chars(snap, built['chars'], tables, path, data)
+        accounts.save_account(file, snap)
     return _summary(os.path.basename(str(file)), path, data, built, snap)
 
 

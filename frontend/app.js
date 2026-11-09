@@ -62,6 +62,28 @@ async function api(path, body) {
   return j.data;
 }
 
+/* 设置保存统一走这里（#45）：
+   - 串行排队：后端是整键替换，两个在途保存以陈旧基底各发各的会互相覆盖
+     （快速连续拉黑丢前一条就是这类），排队 + 先把 patch 乐观并进 S.settings，
+     后一个保存就能以前一个的结果为基底；
+   - 成功用服务端返回的全量视图刷新 S.settings；失败先拉一次全量恢复现场
+     （乐观值可能已经写进 UI），再把错误抛给调用方。 */
+let _saveSettingsQ = Promise.resolve();
+function saveSettings(patch) {
+  const run = async () => {
+    Object.assign(S.settings, patch);
+    try {
+      const d = await api('/api/settings', patch);
+      S.settings = d.settings;
+    } catch (e) {
+      try { S.settings = (await api('/api/settings', {})).settings; } catch (_) { }
+      throw e;
+    }
+  };
+  _saveSettingsQ = _saveSettingsQ.then(run, run);
+  return _saveSettingsQ;
+}
+
 /* ------------------------------------------------------------ 提示 */
 function toast(msg, type = 'ok', ms = 2600) {
   const el = document.createElement('div');
@@ -214,7 +236,7 @@ function bindAccountOrder(box) {
     // 还按旧序重建，界面看起来像「拖完又弹回去」
     S.accounts = files.map(f => S.accounts.find(a => a.file === f)).filter(Boolean);
     try {
-      S.settings = (await api('/api/settings', { accountOrder: files })).settings;
+      await saveSettings({ accountOrder: files });
     } catch (e) { /* 保存失败不回滚视觉顺序，刷新后会还原 */ }
   };
 
@@ -249,8 +271,14 @@ function bindAccountOrder(box) {
   });
 }
 
+/* 切号请求的代数：快速连点 A→B 时两个请求并发，晚归的旧响应不能
+   覆盖新选择（详情串台：头像/统计是 A 的、高亮在 B 上） */
+let _selectSeq = 0;
+
 async function selectAccount(file, silent) {
   if (!file) return;
+  const seq = ++_selectSeq;
+  const prev = S.current;
   const changed = S.current && S.current !== file;
   S.current = file;
   renderAccounts();
@@ -259,19 +287,29 @@ async function selectAccount(file, silent) {
     renderBasket();
     toast('已切换账号，作业集重新开始', 'warn');
   }
+  if (changed) {
+    // 悖论 stage 跟着账号走：切号不清理的话，A 挑的悖论写入时会记到
+    // 当前账号（B）的已导入表里
+    S.paradoxPending = [];
+  }
   try {
     const d = await api('/api/account?file=' + encodeURIComponent(file));
+    if (seq !== _selectSeq) return;   // 已被更新的选择取代，丢弃旧响应
     S.detail = d;
     renderHero();
     updateParadoxChip();
-    await api('/api/settings', { lastAccount: file });
-    S.settings.lastAccount = file;
+    // 保存 lastAccount 顺带用响应里的全量 settings 刷新 S.settings——
+    // 修复启动后第一次拉黑以「无 opBlacklist 的陈旧基底」整键覆盖的窗口期（#45）
+    await saveSettings({ lastAccount: file });
     refreshMaaStatus();          // 状态卡与配置下拉切到这个账号绑定的 MAA
     if (!silent) {
       const r = $('#results');
       if (r.dataset.mode) doSearch();
     }
   } catch (e) {
+    if (seq !== _selectSeq) return;   // 有更新选择在途，交给它收尾
+    S.current = prev;                 // 失败回滚高亮，别停在半切换状态
+    renderAccounts();                 // （作业集已清空的不恢复，宁空勿串）
     toast('读取账号失败：' + e.message, 'err');
   }
 }
@@ -882,6 +920,7 @@ function renderParadoxPanel(root, d, close) {
           name: meta.name || '',
           difficulty: x.difficulty, difficultyText: x.difficultyText,
           maaCode: 'maa://' + x.copilotId,
+          px: true,   // 悖论来源标记：作业集里删掉它时联动清 paradoxPending
         });
       });
       const added = addManyToBasket(ops);
@@ -947,6 +986,7 @@ async function doSearch() {
   if (!S.current) { toast('先选一个账号', 'warn'); openAddAccount(); return; }
   if (S.searching) return;
   S.searching = true;
+  const file0 = S.current;      // 发起搜索时的账号：结束时变了要补搜（#59）
   const box = $('#results');
   box.dataset.mode = 'loading';
   box.innerHTML = `<div class="result-head"><div class="result-title">正在检索「${esc(q)}」…<span>比对干员与练度中</span></div></div>
@@ -960,14 +1000,15 @@ async function doSearch() {
     setNextBtn(d.next);
     box.scrollTop = 0;
   } catch (e) {
-    box.dataset.mode = '';
+    box.dataset.mode = 'error';   // 留个非空标记：之后切号仍会触发重搜
     box.innerHTML = `<div class="empty-state"><h3>没搜到</h3><p>${esc(e.message)}</p></div>`;
     setNextBtn(null);
     toast(e.message, 'err', 4000);
   } finally {
     S.searching = false;
-    // 搜索进行中输入又变了（防抖那次会被上面的 S.searching 拦掉）→ 完事后补搜最新词
-    if ($('#search-input').value.trim() !== q) queueAutoSearch();
+    // 搜索进行中输入或账号变了（防抖/切号触发的 doSearch 都会被上面的
+    // S.searching 拦掉）→ 完事后补搜：不然旧账号的比对结果挂在新账号名下
+    if ($('#search-input').value.trim() !== q || S.current !== file0) queueAutoSearch();
   }
 }
 
@@ -1319,8 +1360,7 @@ async function showOpDetail(op, variant) {
         const old = btn.textContent;
         btn.disabled = true;   // 请求在途防重复点
         try {
-          const d = await api('/api/settings', { [key]: next });
-          S.settings = d.settings;
+          await saveSettings({ [key]: next });
           btn.textContent = doneText;
           btn.title = tip;
           toast(`${doneText}，可在设置里移除`, 'ok');
@@ -1479,7 +1519,14 @@ function renderBasket() {
       </button>
     </div>`).join('');
   $$('[data-del]', list).forEach(b => b.addEventListener('click', () => {
-    S.basket.splice(Number(b.dataset.del), 1);
+    const idx = Number(b.dataset.del);
+    const item = S.basket[idx];
+    S.basket.splice(idx, 1);
+    // 悖论作业删出作业集：对应 stage 也从「写完记已导入」清单移除，
+    // 不然没写入的悖论会被标成已导入（#59）
+    if (item && item.px && item.stageId && (S.paradoxPending || []).includes(item.stageId)) {
+      S.paradoxPending = S.paradoxPending.filter(s => s !== item.stageId);
+    }
     renderBasket();
   }));
   bindBasketDrag(list);
@@ -1529,9 +1576,17 @@ function syncBasketOrder() {
 function fillBasketProfiles() {
   const sel = $('#basket-profile');
   const list = (S.maa && S.maa.profiles) || [];
-  // 不做预选：档案列表来自当前账号绑定的 MAA，默认选第一个
-  sel.innerHTML = list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
+  // 列表没变就不重建：这个下拉每 30 秒被 refreshMaaStatus 重建一次，
+  // 无条件 innerHTML 会把用户选中的档案弹回第一项，之后点「写入 MAA」
+  // 就写进第一个档案的配置里（#51）
+  const html = list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
     || '<option value="">（无配置）</option>';
+  if (sel.dataset.list === html) return;
+  const keep = sel.value;
+  sel.innerHTML = html;
+  sel.dataset.list = html;
+  // 列表变了也尽量保住选中项（保不住再默认选第一个）
+  if (keep && list.includes(keep)) sel.value = keep;
 }
 
 /* ------------------------------------------------------------ 写入 MAA */
@@ -1564,7 +1619,11 @@ async function applyToMaa() {
     // 写完自动收弹窗：日志末尾的「✓ 完成」给读者留一眼的工夫；
     // 之前这里不关，弹窗会一直挂着等用户手点「后台执行」
     setTimeout(() => m.close(), 900);
-    const px = S.paradoxPending || [];
+    // 按实际写进 MAA 的条目核对后再记「已导入」：paradoxPending 可能带着
+    // 别的账号挑的、或已从作业集删掉的 stage（#59）
+    const written = new Set(items.map(o => o.stageCode));
+    const px = (S.paradoxPending || []).filter(s => written.has(s));
+    S.paradoxPending = [];
     S.basket = [];
     renderBasket();
     toggleBasket(false);          // 窄屏写完顺手收起抽屉
@@ -1572,7 +1631,6 @@ async function applyToMaa() {
     if (S.result) doSearch();
     // 悖论：写完才记「已导入」，下次打开面板默认不勾
     if (px.length) {
-      S.paradoxPending = [];
       api('/api/paradox/mark', { file: S.current, stages: px })
         .then(() => api('/api/paradox/plan', { file: S.current }))
         .then(p => { if (S.detail) S.detail.paradox = p.stats; updateParadoxChip(); })
@@ -1935,7 +1993,19 @@ function openAccountWizard(mode) {
 
   // 方式一：森空岛 token，一行一个批量导入，失败的不拖累后面的行
   let pendingRetry = [];
+  let aaGoBusy = false;
   $('#aa-go', m).addEventListener('click', async () => {
+    // 第一行就锁：btn.disabled 要等 probe/存目录两个 await 之后才置上，
+    // 窗口期内双击会启动两条 token 同步循环，交错写同一个日志框（#59）
+    if (aaGoBusy) return;
+    aaGoBusy = true;
+    try {
+      await aaGoRun();
+    } finally {
+      aaGoBusy = false;
+    }
+  });
+  const aaGoRun = async () => {
     const btn = $('#aa-go', m);
     const tokens = pendingRetry.length ? pendingRetry
       : [...new Set($('#onb-token', m).value.split(/\r?\n/).map(s => s.trim()).filter(Boolean))];
@@ -2019,7 +2089,7 @@ function openAccountWizard(mode) {
     toast(many ? `${added.length} 个账号已添加${extra}` : `账号已添加${extra}`);
     const target = added[added.length - 1];
     if (target) await selectAccount(target, true);
-  });
+  };
 
   // 方式二：不用 token，直接用选定 MAA 的识别结果建本地账号
   $('#aa-maa-go', m).addEventListener('click', async () => {
@@ -2680,8 +2750,7 @@ function openOpBlacklist() {
       };
       const persist = async next => {
         try {
-          const d = await api('/api/settings', { opBlacklist: next });
-          S.settings = d.settings;
+          await saveSettings({ opBlacklist: next });
           dirty = true;
           render();
         } catch (e) { toast('保存失败：' + e.message, 'err'); }
@@ -2738,8 +2807,15 @@ function bindGlobal() {
     toast(S.maa.running ? 'MAA 正在运行' : 'MAA 未运行');
   });
   $('#btn-apply').addEventListener('click', applyToMaa);
-  $('#btn-clear-basket').addEventListener('click', () => { S.basket = []; renderBasket(); });
+  $('#btn-clear-basket').addEventListener('click', () => {
+    S.basket = [];
+    S.paradoxPending = [];   // 作业集清空，「写完记已导入」的悖论清单一并清（#59）
+    renderBasket();
+  });
   $('#btn-refresh-all').addEventListener('click', async () => {
+    const btn = $('#btn-refresh-all');
+    if (btn.disabled) return;   // 按钮原本无任何禁用，双击=两个并发全量同步+两个弹窗（#59）
+    btn.disabled = true;
     const m = modal(`<h3>同步全部账号</h3>
       <div class="sub">按 tokens.json 逐个刷新，可能耗时 1~3 分钟。</div>
       <div class="log-box" id="task-log"></div>
@@ -2754,6 +2830,7 @@ function bindGlobal() {
       toast('全部账号已同步');
       if (S.current) selectAccount(S.current, true);
     } catch (e) { toast('同步失败：' + e.message, 'err', 5000); }
+    finally { btn.disabled = false; }
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { toggleBasket(false); return; }

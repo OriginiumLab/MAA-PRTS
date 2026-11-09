@@ -8,9 +8,10 @@ import json
 import os
 import shutil
 import threading
+import time
 
 from . import settings, tasks, updater
-from . import paradox
+from . import atomicio, paradox
 
 ELITE_CN = {0: '精零', 1: '精一', 2: '精二'}
 
@@ -20,9 +21,15 @@ def _accounts_dir():
 
 
 def _load(path):
+    """读账号 json；读不了或不是 dict（顶层数组/字符串等）一律返回 None
+
+    config/ 明示可手动放文件，`or {}` 式兜底挡不住「合法 JSON 的其他
+    形态」——数组形的 snap.get 会让 list_accounts 整体崩掉、应用不可用（#57）
+    """
     try:
         with io.open(path, encoding='utf-8') as f:
-            return json.load(f)
+            snap = json.load(f)
+        return snap if isinstance(snap, dict) else None
     except Exception:
         return None
 
@@ -74,9 +81,13 @@ def list_accounts():
 
 def get_account(file: str) -> dict:
     path = os.path.join(_accounts_dir(), os.path.basename(file))
+    if not os.path.isfile(path):
+        raise FileNotFoundError('账号文件不存在：%s' % file)
     snap = _load(path)
     if not snap:
-        raise FileNotFoundError('账号文件不存在：%s' % file)
+        # 文件在但读不了（坏 JSON/非对象形）：跟「不存在」分开说，
+        # 不然用户被误导去重新添加账号（#61）
+        raise ValueError('账号文件读不了（可能损坏）：%s' % file)
     return snap
 
 
@@ -114,29 +125,42 @@ def account_detail(file: str) -> dict:
 
 
 def save_account(file: str, snap: dict) -> None:
-    """把整份账号快照写回磁盘（原子替换）"""
+    """把整份账号快照写回磁盘（原子替换，锁内串行）"""
     settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(snap, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    atomicio.dump_json(path, snap)
+
+
+def update(file: str, mutator) -> dict:
+    """锁内读-改-写：跨函数/跨模块的多步账号更新走这里（#47）
+
+    HTTP 请求线程、后台同步线程会并发写同一批账号文件，先 load 改完再
+    save_account 的两段式在没有锁时会丢后写方；这个入口把「读→mutator→写」
+    整段圈进 atomicio.lock()。返回落盘后的快照。
+    """
+    settings.ensure_dirs()
+    path = os.path.join(_accounts_dir(), os.path.basename(file))
+    with atomicio.lock():
+        snap = _load(path)
+        if not snap:
+            raise FileNotFoundError(file)
+        mutator(snap)
+        atomicio.dump_json(path, snap)
+        return snap
 
 
 def save_maa_meta(file: str, patch: dict) -> dict:
     """把 MAA 配置名等用户字段写回账号 json"""
     settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
-    snap = _load(path)
-    if not snap:
-        raise FileNotFoundError(file)
-    maa = snap.setdefault('maa', {})
-    for k, v in (patch or {}).items():
-        maa[k] = v
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(snap, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    with atomicio.lock():
+        snap = _load(path)
+        if not snap:
+            raise FileNotFoundError(file)
+        maa = snap.setdefault('maa', {})
+        for k, v in (patch or {}).items():
+            maa[k] = v
+        atomicio.dump_json(path, snap)
     return maa
 
 
@@ -144,16 +168,15 @@ def save_pref(file: str, patch: dict) -> dict:
     """把用户偏好字段（如推荐算法 preferAlgo）合并写回账号 json 顶层"""
     settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
-    snap = _load(path)
-    if not snap:
-        raise FileNotFoundError(file)
-    for k, v in (patch or {}).items():
-        snap[k] = v
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(snap, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-    return {k: snap.get(k) for k in (patch or {})}
+    with atomicio.lock():
+        snap = _load(path)
+        if not snap:
+            raise FileNotFoundError(file)
+        for k, v in (patch or {}).items():
+            snap[k] = v
+        atomicio.dump_json(path, snap)
+        out = {k: snap.get(k) for k in (patch or {})}
+    return out
 
 
 # ---------------------------------------------------------------- token 存储
@@ -338,7 +361,8 @@ def _run_updater(tid, token=None, alias=None, with_skins=False):
 
 def start_refresh(token=None, alias=None, with_skins=False, title=None):
     """启动后台同步，返回任务 id（前端轮询 /api/task）"""
-    title = title or ('同步账号 ' + (token[:6] + '…' if token else '（全部）'))
+    # token 痕迹只留 mask()（尾 4 位）：前缀进任务标题属于凭证泄露面（#61）
+    title = title or ('同步账号 ' + (updater.mask(token) if token else '（全部）'))
     holder = {}
 
     def go():
@@ -373,7 +397,11 @@ def remove_account(file: str, backup=True):
     if backup:
         bak_dir = os.path.join(os.path.dirname(path), '_removed')
         os.makedirs(bak_dir, exist_ok=True)
-        shutil.move(path, os.path.join(bak_dir, os.path.basename(path)))
+        # 备份名带时间戳：同名新账号再次删除时 move 目标已存在会退化成
+        # 覆盖，旧备份被顶掉（#61）
+        dst = os.path.join(bak_dir, '%s.%s' % (
+            os.path.basename(path), time.strftime('%Y%m%d-%H%M%S')))
+        shutil.move(path, dst)
     else:
         os.remove(path)
     return True

@@ -48,10 +48,10 @@ def bootstrap(_q, _body):
     acts = resources.activity_list(18)
     sv = _settings_view(st, accs)
     return {
-        'settings': {k: sv[k] for k in ('maaDir', 'maaDirs', 'autoStartMaa',
-                                        'autoUpdatePack', 'autoCheckAppUpdate',
-                                        'acceptPrerelease', 'proxy',
-                                        'charBlacklist', 'authorBlacklist')},
+        # 全量 settings 视图（均非敏感字段）：不再维护键清单白名单——
+        # 清单漏一个键（如 opBlacklist），前端以这份子集为基底整键保存
+        # 就会把磁盘上已有的黑名单覆盖清空（#45）
+        'settings': sv,
         'accounts': accs,
         'lastAccount': last,
         'maa': status,
@@ -409,9 +409,12 @@ def api_paradox_mark(_q, body):
     """记下这些悖论已经排进过 MAA，下次默认不勾"""
     body = body or {}
     file = _account_for(body.get('file'))
-    snap = accounts.get_account(file)
-    imp = paradox.mark_imported(snap, body.get('stages') or [])
-    accounts.save_account(file, snap)
+    imp = {}
+
+    def _mut(snap):
+        imp.update(paradox.mark_imported(snap, body.get('stages') or []))
+
+    accounts.update(file, _mut)   # 锁内读-改-写，不与后台同步丢更新（#47）
     return {'file': file, 'imported': len(imp)}
 
 

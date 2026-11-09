@@ -6,7 +6,7 @@
   2. 和本地包里的 sourceCommit 比，一样就直接退出（零下载、零提交）
   3. 按那个 sha 定点下载 gamedata/excel 下 9 个 json（不 clone，上游仓库 7 GB）
   4. 调 resources/make_pack.py 和 tools/build_paradox_data.py 生成两个包
-  5. 条数只增不减才放行，写出 resources/pack-manifest.json 给客户端用
+  5. 条数只增不减才放行（arknights 各字段 + 悖论条数），写出 resources/pack-manifest.json 给客户端用
 
 用法：
     python tools/sync_pack.py                       # 本地手动同步
@@ -332,6 +332,15 @@ def main(argv=None):
         if not pdata.get('count'):
             log('[失败] 悖论清单为空')
             return 2
+        # 悖论条数与旧包只增不减：客户端 packsync._verify 对条数变少是拒绝
+        # 落盘的，服务端不拦的话每次启动都「资源已更新→校验失败」循环（#49）
+        prev_pc = (read_json(paradox_path) or {}).get('count') or 0
+        new_pc = pdata.get('count') or 0
+        if prev_pc and new_pc < prev_pc:
+            log('[失败] 悖论条数变少：%d → %d（上游可能只推了部分表，等补全再同步）'
+                % (prev_pc, new_pc))
+            return 2
+        log('悖论条数：%d%s' % (new_pc, '（+%d）' % (new_pc - prev_pc) if new_pc > prev_pc else ''))
 
         log('')
         log('落盘')

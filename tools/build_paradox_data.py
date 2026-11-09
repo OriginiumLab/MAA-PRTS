@@ -31,7 +31,7 @@ from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DEFAULT_SRC = r'E:\.github-ARK\ArknightsGameResource'
+DEFAULT_SRC = ''    # 不再默认个人机器路径：裸跑时打印用法而不是报找不到 E:\（#62）
 DEFAULT_OUT = os.path.join(ROOT, 'resources', 'paradox.json')
 
 
@@ -91,7 +91,9 @@ def build(src, generated_at='', source_commit=''):
             elite = int(up.get('unlockParam1') or 0)
             level = int(up.get('unlockParam2') or 0)
         except (TypeError, ValueError):
+            # 静默伪造 elite=2/level=1 的防护见 build() 末尾的阈值闸（#62）
             elite, level = 2, 1
+            bad_unlock.append(cid)
 
         out[cid] = {
             'name': name,
@@ -115,16 +117,24 @@ def build(src, generated_at='', source_commit=''):
         ).hexdigest()[:8],
         'chars': out,
     }
-    return data, {'no_name': no_name, 'no_stage': no_stage}
+    if len(bad_unlock) > max(1, len(stages) // 10):
+        # 上游改字段名时全部条目会走到这：条数不变、CI 的 count>0 抓不住，
+        # 客户端会把大量悖论误判为未解锁。超 10% 即视为上游 schema 变了（#62）
+        raise RuntimeError('unlockParam 解析失败 %d/%d 条，上游字段可能改了： %s…'
+                           % (len(bad_unlock), len(stages), bad_unlock[0]))
+    return data, {'no_name': no_name, 'no_stage': no_stage, 'bad_unlock': bad_unlock}
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--src', default=DEFAULT_SRC, help='ArknightsGameResource 目录')
+    ap.add_argument('--src', default=DEFAULT_SRC,
+                    help='ArknightsGameResource 目录（必填，例如 D:/games/ArknightsGameResource）')
     ap.add_argument('--out', default=DEFAULT_OUT, help='输出 json 路径')
     ap.add_argument('--source-commit', default='', help='上游提交 sha（自动同步用）')
     ap.add_argument('--commit-time', default='', help='上游提交时间（写进 generatedAt）')
     args = ap.parse_args()
+    if not args.src:
+        ap.error('--src 必填：本地 ArknightsGameResource 克隆目录（见文件头用法）')
 
     data, diag = build(args.src, generated_at=args.commit_time,
                        source_commit=args.source_commit)

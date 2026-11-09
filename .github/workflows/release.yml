@@ -20,9 +20,11 @@ on:
 permissions:
   contents: write
 
-# 连续合并不互相取消，按顺序逐个发版
+# 连续合并不互相取消，按顺序逐个发版。并发组用固定值：按 PR 号隔离时，
+# 两个 Release PR 一先一后合并会并行跑两个 release job，tag 创建与资产
+# 上传可能交错（#62）
 concurrency:
-  group: release-${{ github.event.pull_request.number }}
+  group: release
   cancel-in-progress: false
 
 jobs:

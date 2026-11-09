@@ -407,12 +407,21 @@ def _watch(mygen):
                 cand = _candidates.pop(0)
         if cand is None:
             if _closed[0]:
-                _set_phase('closed')
+                # 只把「还在进行中」的会话标成 closed：失败路径（如 WebView2
+                # 没起来 → _fail → 关窗）已经带着原因置了 failed，别把它
+                # 覆盖成中性的「窗口已关闭」，用户会看不到修复指引（#54）
+                with _lock:
+                    if _state['phase'] in ('opening', 'waiting', 'verifying'):
+                        _state.update(phase='closed', error='')
                 return
             time.sleep(0.4)
             continue
         _set_phase('verifying')
         ok, err = _verify(cand)
+        if mygen != _gen[0]:
+            return                  # 验证是最长约 12 秒的网络请求，回来时
+                                    # 可能已被新一轮会话取代：别替新会话写
+                                    # done、更别关掉新一轮的窗口（#54）
         if ok:
             with _lock:
                 _state.update(phase='done', token=cand, error='')
