@@ -26,9 +26,54 @@ APP_CODE = '4ca99fa6b56cc2ba'
 GRANT_URL = 'https://as.hypergryph.com/user/oauth2/v2/grant'
 CRED_URL = 'https://zonai.skland.com/api/v1/user/auth/generate_cred_by_code'
 API = 'https://zonai.skland.com'
+# UA 钉在某个真实客户端版本上：伪装更新版本号而没有对应的协议行为反而
+# 更扎眼，跟随官方发版整体更新这串即可
 SKLAND_UA = ('Skland/1.0.1 (com.hypergryph.skland; build:100001014; '
              'Android 31; ) Okhttp/4.11.0')
+# 完全落不了盘时的兜底（老行为的值）；正常路径都用 _default_did() 的
+# 每安装一份的随机 dId
 DID = 'de9759a5afaa634f'
+
+_did_cache = [None]
+
+
+def _default_did() -> str:
+    """本安装的设备指纹：首次随机生成 16 位 hex，持久化到 config/_did.json。
+
+    dId 参与签名与 grant/cred 请求体，是服务端设备维度风控的键——所有
+    安装、所有用户上报同一个硬编码 dId，等于把全体登录/同步押在同一个
+    设备指纹上，一旦按 dId 限流就同时失效且无客户端手段缓解（#58）。
+    每安装随机 + 持久化复用，兼顾「同一设备稳定」的语义。文件名带下划线
+    前缀，天然不会被账号目录扫描当成账号。落盘彻底失败才退回内置值。
+    """
+    if _did_cache[0]:
+        return _did_cache[0]
+    did = ''
+    try:
+        import os
+        import secrets
+        from . import settings
+        path = os.path.join(settings.CONFIG_DIR, '_did.json')
+        try:
+            with open(path, encoding='utf-8') as f:
+                saved = json.load(f)
+            v = saved.get('did') if isinstance(saved, dict) else ''
+            if isinstance(v, str) and len(v) == 16:
+                did = v
+        except Exception:
+            pass
+        if not did:
+            did = secrets.token_hex(8)
+            os.makedirs(settings.CONFIG_DIR, exist_ok=True)
+            with open(path + '.tmp', 'w', encoding='utf-8') as f:
+                json.dump({'did': did, 'createdAt': time.strftime('%Y-%m-%d %H:%M:%S')},
+                          f, ensure_ascii=False, indent=2)
+            os.replace(path + '.tmp', path)
+    except Exception:
+        did = DID
+    _did_cache[0] = did
+    return did
+
 
 _RETRY_HOOK = None      # 由调用方注入 log 函数，用于提示重试
 
@@ -86,9 +131,9 @@ def _http(method, url, headers, body=None, timeout=30, retries=3):
 
 
 class Skland:
-    def __init__(self, token: str, did: str = DID):
+    def __init__(self, token: str, did: str = None):
         self.token = token          # 森空岛用户 token（鹰角通行证）
-        self.did = did
+        self.did = did or _default_did()
         self.cred = None            # 32 位凭证
         self.sign_token = None      # 签名密钥
         self.login()
