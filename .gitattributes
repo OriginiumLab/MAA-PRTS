@@ -1,0 +1,5 @@
+# bat 必须 CRLF 检出：cmd 的 call :标签 对行尾敏感，LF 会导致标签错位、
+# call 返回后无声断行；贡献者 core.autocrlf=input/false 检出 LF 时冒烟 A1 必挂。
+# 仓库内统一存 LF、检出按此表转换（text 即入库归一为 LF）。
+*.bat text eol=crlf
+*.ps1 text eol=crlf

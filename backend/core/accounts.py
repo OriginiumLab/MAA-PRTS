@@ -10,7 +10,7 @@ import shutil
 import threading
 
 from . import settings, tasks, updater
-from . import paradox
+from . import atomicio, paradox
 
 ELITE_CN = {0: '精零', 1: '精一', 2: '精二'}
 
@@ -120,29 +120,42 @@ def account_detail(file: str) -> dict:
 
 
 def save_account(file: str, snap: dict) -> None:
-    """把整份账号快照写回磁盘（原子替换）"""
+    """把整份账号快照写回磁盘（原子替换，锁内串行）"""
     settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(snap, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    atomicio.dump_json(path, snap)
+
+
+def update(file: str, mutator) -> dict:
+    """锁内读-改-写：跨函数/跨模块的多步账号更新走这里（#47）
+
+    HTTP 请求线程、后台同步线程会并发写同一批账号文件，先 load 改完再
+    save_account 的两段式在没有锁时会丢后写方；这个入口把「读→mutator→写」
+    整段圈进 atomicio.lock()。返回落盘后的快照。
+    """
+    settings.ensure_dirs()
+    path = os.path.join(_accounts_dir(), os.path.basename(file))
+    with atomicio.lock():
+        snap = _load(path)
+        if not snap:
+            raise FileNotFoundError(file)
+        mutator(snap)
+        atomicio.dump_json(path, snap)
+        return snap
 
 
 def save_maa_meta(file: str, patch: dict) -> dict:
     """把 MAA 配置名等用户字段写回账号 json"""
     settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
-    snap = _load(path)
-    if not snap:
-        raise FileNotFoundError(file)
-    maa = snap.setdefault('maa', {})
-    for k, v in (patch or {}).items():
-        maa[k] = v
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(snap, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    with atomicio.lock():
+        snap = _load(path)
+        if not snap:
+            raise FileNotFoundError(file)
+        maa = snap.setdefault('maa', {})
+        for k, v in (patch or {}).items():
+            maa[k] = v
+        atomicio.dump_json(path, snap)
     return maa
 
 
@@ -150,16 +163,15 @@ def save_pref(file: str, patch: dict) -> dict:
     """把用户偏好字段（如推荐算法 preferAlgo）合并写回账号 json 顶层"""
     settings.ensure_dirs()
     path = os.path.join(_accounts_dir(), os.path.basename(file))
-    snap = _load(path)
-    if not snap:
-        raise FileNotFoundError(file)
-    for k, v in (patch or {}).items():
-        snap[k] = v
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(snap, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-    return {k: snap.get(k) for k in (patch or {})}
+    with atomicio.lock():
+        snap = _load(path)
+        if not snap:
+            raise FileNotFoundError(file)
+        for k, v in (patch or {}).items():
+            snap[k] = v
+        atomicio.dump_json(path, snap)
+        out = {k: snap.get(k) for k in (patch or {})}
+    return out
 
 
 # ---------------------------------------------------------------- token 存储

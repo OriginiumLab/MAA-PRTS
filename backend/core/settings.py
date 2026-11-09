@@ -21,11 +21,13 @@
 """
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
 import sys
 import threading
+import time
 
 FROZEN = bool(getattr(sys, 'frozen', False))
 
@@ -196,11 +198,29 @@ _lock = threading.RLock()
 _cache = None
 
 
+def _backup_broken() -> str:
+    """settings.json 坏了：改名保住原件再继续。
+
+    静默用默认值跑起来、随后被任意一次 save() 原子覆盖写回的话，用户的
+    maaDirs / 黑名单 / lastAccount 就永久丢了且无提示（#56）。改名带时间戳，
+    反复坏也不互相覆盖。返回新名字（失败返回 ''）。
+    """
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    dst = SETTINGS_PATH + '.broken-' + stamp
+    try:
+        os.replace(SETTINGS_PATH, dst)
+        print('[settings] settings.json 解析失败，原文件保留为 %s，先按默认设置运行'
+              % dst, file=sys.stderr)
+        return dst
+    except OSError:
+        return ''
+
+
 def load() -> dict:
     global _cache
     with _lock:
         if _cache is not None:
-            return dict(_cache)
+            return copy.deepcopy(_cache)
         data = dict(DEFAULTS)
         try:
             with io.open(SETTINGS_PATH, encoding='utf-8') as f:
@@ -208,11 +228,17 @@ def load() -> dict:
             if isinstance(saved, dict):
                 data.update({k: v for k, v in saved.items() if k in DEFAULTS})
         except Exception:
-            pass
+            if os.path.isfile(SETTINGS_PATH):
+                _backup_broken()   # 文件在但读不了：保住原件，别让默认值随后覆盖
         if os.environ.get('MAA_DIR'):
             data['maaDir'] = os.environ['MAA_DIR']
+        # 手改的黑名单格式不齐（'456' 不带 maa://、旧版纯名字数组）不该
+        # 等到下一次 save 才被归一化——期间过滤根本不生效（#56 附带）
+        data['charBlacklist'] = _norm_char_blacklist(data.get('charBlacklist'))
+        data['authorBlacklist'] = _norm_author_blacklist(data.get('authorBlacklist'))
+        data['opBlacklist'] = _norm_op_blacklist(data.get('opBlacklist'))
         _cache = data
-        return dict(data)
+        return copy.deepcopy(data)
 
 
 def _norm_dir(v: str) -> str:
@@ -354,7 +380,8 @@ def save(patch: dict) -> dict:
             f.write('\n')
         os.replace(tmp, SETTINGS_PATH)
         _cache = cur
-        return dict(cur)
+        return copy.deepcopy(cur)   # 浅拷贝会让嵌套列表与缓存共享引用，调用方
+                                    # 原地改动就污染全进程缓存（#56 附带）
 
 
 # ---------------------------------------------------------------- 派生路径

@@ -227,17 +227,21 @@ def apply(timeout=TIMEOUT_DOWNLOAD, only=None):
     for kind in keys:
         meta = (man.get('packs') or {}).get(kind) or {}
         raw, errors = None, []
+        # 校验也在镜像循环内：jsDelivr 对 gh 分支内容是长缓存且忽略 ?v=，
+        # 强推后可能持续返回旧字节——sha256 对不上时要换下一个源重试，
+        # 否则该包每次启动都被 skip，「资源已更新」却永远装不上（#50）
         for url in (meta.get('urls') or []):
             try:
                 raw = _get(url, timeout)
+                _verify(kind, raw, meta)
                 break
             except Exception as e:  # noqa: BLE001
                 errors.append('%s -> %s' % (url.split('/')[2], e))
+                raw = None
         if raw is None:
-            skipped.append({'pack': kind, 'reason': '下载失败：' + '；'.join(errors)})
+            skipped.append({'pack': kind, 'reason': '下载/校验失败：' + '；'.join(errors)})
             continue
         try:
-            _verify(kind, raw, meta)
             _install(kind, raw, meta)
             applied.append({'pack': kind, 'version': meta.get('version') or '',
                             'fingerprint': meta.get('fingerprint') or ''})
