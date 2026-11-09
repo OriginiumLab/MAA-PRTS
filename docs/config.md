@@ -13,7 +13,7 @@ config/
 ├── settings.json                全局设置（MAA 路径、上次账号等）
 ├── gamedata.json                资源版本记录（自动生成）
 ├── <昵称> <服务器>.json         ★ 每个角色一份账号配置（练度 + 缺卡 + token 密文）
-├── _index.json / _removed/      账号索引 / 删除备份（自动生成）
+├── _did.json / _removed/        本机随机设备指纹 / 删除账号的备份（自动生成）
 ├── 作业站/                       导出「作业站本地导入」格式（API /api/export 生成，界面暂无入口）
 ├── subprof_cache.json           分支中文名缓存（边同步边学）
 └── tokens.json                  旧版密文 token 库：迁移产物 + 只读兜底，不再写入

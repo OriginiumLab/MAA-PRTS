@@ -804,7 +804,10 @@ _ACTION_SKILL_TYPES = ('Skill', 'Retreat', 'BulletTime', 'SkillUsage')
 
 
 def _fix_oper(op, idx, notes):
-    """修正单个干员条目，返回 False 表示条目本身不可用"""
+    """修正单个干员条目（星级/技能合法性、练度下限），问题就地改并记进 notes。
+
+    恒返回 True：查不到的条目（装置、召唤物）MAA 也会跳过检查，不算不可用。
+    """
     if not isinstance(op, dict) or not op.get('name'):
         return True
 

@@ -20,9 +20,15 @@ def _accounts_dir():
 
 
 def _load(path):
+    """读账号 json；读不了或不是 dict（顶层数组/字符串等）一律返回 None
+
+    config/ 明示可手动放文件，`or {}` 式兜底挡不住「合法 JSON 的其他
+    形态」——数组形的 snap.get 会让 list_accounts 整体崩掉、应用不可用（#57）
+    """
     try:
         with io.open(path, encoding='utf-8') as f:
-            return json.load(f)
+            snap = json.load(f)
+        return snap if isinstance(snap, dict) else None
     except Exception:
         return None
 

@@ -433,43 +433,13 @@ def scan_accounts(accounts_dir):
         if name in NON_ACCOUNT_JSON:
             continue
         p = os.path.join(accounts_dir, name)
-        d = load_json(p) or {}
+        d = load_json(p)
+        if not isinstance(d, dict):    # 数组形等非 dict JSON：跳过（#57）
+            continue
         uid = str(((d.get('account') or {}).get('uid')) or '')
         if uid:
             found[uid] = p
     return found
-
-
-def write_index(accounts_dir):
-    rows = []
-    if os.path.isdir(accounts_dir):
-        for name in sorted(os.listdir(accounts_dir)):
-            if not name.endswith('.json') or name.startswith('_'):
-                continue
-            if name in NON_ACCOUNT_JSON:
-                continue
-            d = load_json(os.path.join(accounts_dir, name)) or {}
-            a, s, sy = d.get('account') or {}, d.get('stats') or {}, d.get('sync') or {}
-            if not a.get('uid'):
-                continue
-            rows.append({
-                'uid': str(a.get('uid')), 'nickName': a.get('nickName'),
-                'alias': a.get('alias') or '', 'channelName': a.get('channelName'),
-                'level': a.get('level'),
-                'maaProfile': ((d.get('maa') or {}).get('profile') or ''),
-                'file': name,
-                'charCount': s.get('charCount'), 'charTotal': s.get('charTotal'),
-                'missingCount': s.get('missingCount'),
-                'sixStarCount': s.get('sixStarCount'), 'sixStarTotal': s.get('sixStarTotal'),
-                'e2Count': s.get('e2Count'), 'mastery3Count': s.get('mastery3Count'),
-                'moduleCount': s.get('moduleCount'),
-                'syncedAt': sy.get('syncedAt'), 'gameTime': sy.get('gameTime'),
-            })
-    rows.sort(key=lambda r: (-(r.get('level') or 0), r.get('nickName') or ''))
-    idx = {'schemaVersion': SCHEMA_VERSION, 'updatedAt': now_iso(),
-           'count': len(rows), 'accounts': rows}
-    dump_json(os.path.join(accounts_dir, '_index.json'), idx)
-    return idx
 
 
 # 同步自有的数据段：整文件覆盖时以新快照为准的键。
@@ -637,7 +607,6 @@ def sync_many(items, accounts_dir, log, with_skins=False, cache_path=None):
             log('  ✗ 失败：%s' % e)
             fail += 1
 
-    write_index(accounts_dir)
     log('')
     log('完成：成功 %d 个角色，失败 %d 个 token' % (ok, fail))
     return {'ok': ok, 'fail': fail}
