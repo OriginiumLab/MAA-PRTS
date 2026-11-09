@@ -8,7 +8,7 @@
 #      一样就结束（不下载、不提交，所以平时这条流水线几乎没有输出）
 #   2. 按 sha 定点下载 gamedata/excel 下 9 个 json（上游仓库 7 GB，绝不 clone）
 #   3. 重新生成 arknights.json 和 paradox.json，再写 pack-manifest.json
-#   4. 条数只增不减才放行
+#   4. 条数只增不减才放行（arknights 各字段 + 悖论条数）
 #   5. 产物推到独立的 pack-data 分支（不碰 main）
 #
 # 为什么不推 main：main 挂着规则集（强制走 PR、需审批、只允许 squash），
@@ -37,7 +37,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PACK_BRANCH: pack-data
+  # 与 tools/sync_pack.py / backend/core/packsync.py 读的 MAA_PRTS_PACK_BRANCH
+  # 同名同值：改这一处，推送目标分支和 manifest 里拼的下载地址一起变。
+  # （此前这里叫 PACK_BRANCH，sync_pack 根本不认——两处默认值碰巧一致才能工作）
+  MAA_PRTS_PACK_BRANCH: pack-data
   PACK_FILES: resources/arknights.json resources/paradox.json resources/pack-manifest.json
 
 jobs:
@@ -70,10 +73,11 @@ jobs:
         shell: bash
         run: |
           set +e
-          git fetch --depth=1 origin "$PACK_BRANCH" 2>/dev/null
+          git fetch --depth=1 origin "$MAA_PRTS_PACK_BRANCH" 2>/dev/null
           if [ $? -ne 0 ]; then
             echo "pack-data 还不存在，本次按首次生成处理"
             echo "fingerprint=" >> "$GITHUB_OUTPUT"
+            echo "para_fingerprint=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           for f in $PACK_FILES; do
@@ -87,8 +91,10 @@ jobs:
             fi
           done
           FP=$(python -c "import json;print(json.load(open('resources/arknights.json',encoding='utf-8')).get('fingerprint') or '')" 2>/dev/null)
-          echo "上次指纹：${FP:-（无）}"
+          PFP=$(python -c "import json;print(json.load(open('resources/paradox.json',encoding='utf-8')).get('fingerprint') or '')" 2>/dev/null)
+          echo "上次指纹：arknights=${FP:-（无）} paradox=${PFP:-（无）}"
           echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
+          echo "para_fingerprint=$PFP" >> "$GITHUB_OUTPUT"
 
       # 只用标准库，不需要装依赖
       - name: Sync pack from upstream
@@ -131,16 +137,20 @@ jobs:
         shell: bash
         env:
           PREV_FP: ${{ steps.prev.outputs.fingerprint }}
+          PREV_PFP: ${{ steps.prev.outputs.para_fingerprint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           VERSION=$(python -c "import json;print(json.load(open('resources/arknights.json',encoding='utf-8'))['version'])")
           FP=$(python -c "import json;print(json.load(open('resources/arknights.json',encoding='utf-8'))['fingerprint'])")
+          PFP=$(python -c "import json;print(json.load(open('resources/paradox.json',encoding='utf-8')).get('fingerprint') or '')")
           SHA=$(python -c "import json;print(json.load(open('resources/pack-manifest.json',encoding='utf-8'))['source']['commit'])")
 
-          if [ -n "$PREV_FP" ] && [ "$PREV_FP" = "$FP" ]; then
-            echo "内容与 pack-data 上的一致（指纹 $FP），本次不推送"
-            echo "### 资源无变化（指纹 \`$FP\`）" >> "$GITHUB_STEP_SUMMARY"
+          # 两个指纹都比：arknights 的指纹不含悖论数据源（handbook 表），
+          # 只比它的话「上游只改了悖论」的更新永远发不出去（#49）
+          if [ -n "$PREV_FP" ] && [ "$PREV_FP" = "$FP" ] && [ "$PREV_PFP" = "$PFP" ]; then
+            echo "内容与 pack-data 上的一致（arknights $FP / paradox $PFP），本次不推送"
+            echo "### 资源无变化（arknights \`$FP\` / paradox \`$PFP\`）" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -165,14 +175,14 @@ jobs:
           EOF
 
           cd "$D"
-          git init -q -b "$PACK_BRANCH"
+          git init -q -b "$MAA_PRTS_PACK_BRANCH"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -q -m "chore(pack): 同步游戏资源 ${VERSION}" \
                          -m "上游提交 ${SHA:0:12}" -m "指纹 ${FP}"
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push -q -f origin "HEAD:refs/heads/${PACK_BRANCH}"
+          git push -q -f origin "HEAD:refs/heads/${MAA_PRTS_PACK_BRANCH}"
 
           echo "### 资源已更新到 ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo "指纹 \`${FP}\` ｜ 上游 \`${SHA:0:12}\`" >> "$GITHUB_STEP_SUMMARY"
