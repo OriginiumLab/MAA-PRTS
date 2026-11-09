@@ -21,7 +21,10 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ICON = os.path.join(HERE, 'resources', 'assets', 'app.ico')
+# 图标生成到 build/ 而不是仓库里的 resources/assets/app.ico：不同 Pillow
+# 版本产出的 ICO 字节可能不同，每次构建重写被 git 跟踪的文件会让工作树
+# 变脏、易被误提交（#62）。仓库里那份只作为源码资产保留。
+ICON = os.path.join(HERE, 'build', 'app.ico')
 
 
 def make_icon():
@@ -82,6 +85,25 @@ def make_icon():
     img.save(ICON, format='ICO', sizes=sizes)
     print('icon generated: %s' % ICON)
     return ICON
+
+
+def _stage_resources(dst):
+    """把运行时真正需要的资源择优复制到 build/work/packres（数据文件 + assets），
+    排除 make_pack.py / __pycache__ 这类构建期产物（#62）"""
+    src = os.path.join(HERE, 'resources')
+    if os.path.isdir(dst):
+        shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(dst, exist_ok=True)
+    for name in os.listdir(src):
+        if name == '__pycache__' or name.endswith('.py'):
+            continue
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, ignore=shutil.ignore_patterns('__pycache__'))
+        else:
+            shutil.copyfile(s, d)
+    return dst
 
 
 def _same_content(a, b):
@@ -167,9 +189,11 @@ def build():
         '--workpath', work_dir,
         '--specpath', work_dir,
         '--windowed',
-        # 指定了 specpath 后，--add-data 的源路径必须用绝对路径
+        # 指定了 specpath 后，--add-data 的源路径必须用绝对路径。
+        # resources 不能整目录进包：make_pack.py 与 __pycache__ 是构建期
+        # 工具产物，打进 exe 纯属白占体积（#62）——先择优复制一份干净的
         '--add-data', os.path.join(HERE, 'frontend') + ';frontend',
-        '--add-data', os.path.join(HERE, 'resources') + ';resources',
+        '--add-data', _stage_resources(os.path.join(work_dir, 'packres')) + ';resources',
         '--hidden-import', 'clr',
         '--hidden-import', 'clr_loader',
         '--hidden-import', 'pythonnet',

@@ -83,6 +83,19 @@ def check_py_compile():
 
 
 # ---------------------------------------------------------------- B. 加密与 token 存储
+def _isolate_data_root():
+    """进程起手就把 MAA_PRTS_DATA_ROOT 指到临时目录（#62）。
+
+    core.settings 在 import 时就执行 _migrate_legacy_*，此时模块级 ROOT 若是
+    真实用户数据目录（%LOCALAPPDATA% 下的 dev 根），迁移会碰真实用户数据——
+    与文件头「不碰真实用户数据」的承诺相悖。必须在任何 `from core import ...`
+    之前设好环境变量，让首次 import 就落在隔离根上（C 组子进程也继承它）。
+    """
+    root = tempfile.mkdtemp(prefix='maaprts-smoke-root-')
+    os.environ['MAA_PRTS_DATA_ROOT'] = root
+    return root
+
+
 def _patch_settings(tmp):
     """把 core.settings 的数据路径指到临时目录。
 
@@ -103,11 +116,17 @@ def _patch_settings(tmp):
 
 
 def _reset_config(tmp):
-    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库"""
+    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库。
+
+    顺手清 settings._cache：不清的话缓存还带着上一个检查保存的设置，
+    当前断言恰好不受影响，属潜伏坑（#62）。"""
     cfg = os.path.join(tmp, 'config')
     if os.path.isdir(cfg):
         shutil.rmtree(cfg)
     os.makedirs(cfg, exist_ok=True)
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import settings
+    settings._cache = None
 
 
 def check_vault_roundtrip():
@@ -1426,6 +1445,7 @@ def main():
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+    _isolate_data_root()   # 必须先于一切 core.* 导入（A 组后面 B/C 都会 import）
     print('MAA-PRTS 冒烟测试  %s' % REPO)
     print('-' * 60)
     r = Report()
