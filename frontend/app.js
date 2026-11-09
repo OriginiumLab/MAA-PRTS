@@ -6,7 +6,7 @@
 const S = {
   settings: {}, accounts: [], current: '', detail: null,
   maa: {}, activities: [],
-  basket: [], result: null, searching: false, appInfo: null,
+  basket: [], result: null, appInfo: null,
   paths: {}, pack: {}, setup: {}, gamedata: {}, onboarded: false,
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
@@ -49,12 +49,13 @@ function esc(s) {
   ));
 }
 
-async function api(path, body) {
+async function api(path, body, { signal } = {}) {
   const opt = body === undefined ? {} : {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   };
+  if (signal) opt.signal = signal;   // 调用方可中止在途请求（搜索被新输入作废时用）
   const r = await fetch(path, opt);
   let j;
   try { j = await r.json(); } catch (e) { throw new Error('服务返回异常（' + r.status + '）'); }
@@ -953,10 +954,26 @@ function renderParadoxPanel(root, d, close) {
 /* ------------------------------------------------------------ 搜索 */
 /* 输入停约 0.5s 自动搜索：每次键入重置计时，清空输入不搜也不弹提示 */
 let searchTimer = 0;
+let searchAbort = null;   // 在途搜索的 AbortController；配合 searchKey 给 doSearch 去重
+let searchKey = '';       // 在途搜索的「账号|关键词」
+
+/* 立刻作废还在飞行的搜索：中止请求（活动检索后端要跑十几秒，等它跑完再搜新的没意义）。
+   被中止的一方走 doSearch catch 的 aborted 分支安静退场，不碰 UI。 */
+function stopSearch() {
+  if (searchAbort) { const a = searchAbort; searchAbort = null; searchKey = ''; a.abort(); }
+}
+
 function queueAutoSearch() {
   clearTimeout(searchTimer);
+  stopSearch();   // 键入即停旧搜索：不等它完成，新一轮防抖接管
   searchTimer = setTimeout(() => {
     if ($('#search-input').value.trim()) doSearch();
+    // 旧搜索被作废后输入又清空了：骨架屏不能一直转下去，落回可解释的空态
+    else if ($('#results').dataset.mode === 'loading') {
+      const box = $('#results');
+      box.dataset.mode = '';
+      box.innerHTML = '<div class="empty-state"><h3>已停止检索</h3><p>输入关卡或活动代号，停顿后自动搜索</p></div>';
+    }
   }, 500);
 }
 
@@ -984,31 +1001,36 @@ async function doSearch() {
   const q = $('#search-input').value.trim();
   if (!q) { toast('先输入关卡或活动', 'warn'); return; }
   if (!S.current) { toast('先选一个账号', 'warn'); openAddAccount(); return; }
-  if (S.searching) return;
-  S.searching = true;
-  const file0 = S.current;      // 发起搜索时的账号：结束时变了要补搜（#59）
+  const key = S.current + '|' + q;
+  if (searchAbort && searchKey === key) return;   // 同账号同关键词已在途，别重复发
+  stopSearch();   // 顶掉仍在飞行的旧搜索：Enter / 切号 / 拉黑重搜都走这里
+  const ac = new AbortController();
+  searchAbort = ac;
+  searchKey = key;
+  const file0 = S.current;      // 发起搜索时的账号：结束时变了要补搜（#59，静默切号不会中止在途搜索）
   const box = $('#results');
   box.dataset.mode = 'loading';
   box.innerHTML = `<div class="result-head"><div class="result-title">正在检索「${esc(q)}」…<span>比对干员与练度中</span></div></div>
     <div class="loading-row"><span class="spinner"></span>正在从作业站拉取作业，活动关卡多时可能要十几秒</div>
     <div class="ops-grid">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
   try {
-    const d = await api('/api/search', { file: S.current, q, pages: 2, limit: 10 });
+    const d = await api('/api/search', { file: S.current, q, pages: 2, limit: 10 }, { signal: ac.signal });
     S.result = d;
     box.dataset.mode = d.mode;
     renderResult(d);
     setNextBtn(d.next);
     box.scrollTop = 0;
   } catch (e) {
+    if (ac.signal.aborted) return;   // 被新输入 / 新搜索作废：安静退场，UI 由后来者接管
     box.dataset.mode = 'error';   // 留个非空标记：之后切号仍会触发重搜
     box.innerHTML = `<div class="empty-state"><h3>没搜到</h3><p>${esc(e.message)}</p></div>`;
     setNextBtn(null);
     toast(e.message, 'err', 4000);
   } finally {
-    S.searching = false;
-    // 搜索进行中输入或账号变了（防抖/切号触发的 doSearch 都会被上面的
-    // S.searching 拦掉）→ 完事后补搜：不然旧账号的比对结果挂在新账号名下
-    if ($('#search-input').value.trim() !== q || S.current !== file0) queueAutoSearch();
+    if (searchAbort === ac) { searchAbort = null; searchKey = ''; }
+    // 正常完成后输入或账号变了 → 防抖补搜：不然旧账号的比对结果挂在新账号名下。
+    // 被中止的不补——中止它的那一方（键入 / 新 doSearch）自会安排后续搜索
+    if (!ac.signal.aborted && ($('#search-input').value.trim() !== q || S.current !== file0)) queueAutoSearch();
   }
 }
 
@@ -1059,16 +1081,15 @@ function diffLabel(dcn, variant) {
   return dcn || '';
 }
 
-function opChips(op, max = 8) {
-  const list = visOpers(op.opers).slice();
-  const chips = list.slice(0, max).map(o => {
+/* 干员 chips 全量铺开（容器 flex-wrap 换行）：折叠成 +N 会把缺的干员藏起来，
+   一眼看不出这份作业到底缺谁 */
+function opChips(op) {
+  return visOpers(op.opers).map(o => {
     let cls = 'own';
     if (!o.owned) cls = 'lack';
     else if (!o.ok) cls = 'train';
     return `<span class="op-chip ${cls}" title="${esc(chipTitle(o))}">${esc(o.name)}</span>`;
-  });
-  if (list.length > max) chips.push(`<span class="op-chip more">+${list.length - max}</span>`);
-  return chips.join('');
+  }).join('');
 }
 
 function chipTitle(o) {
