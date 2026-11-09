@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from . import skland
+from . import atomicio, skland
 from .skland import Skland
 
 SCHEMA_VERSION = 2
@@ -38,14 +38,8 @@ def load_json(path, default=None):
 
 
 def dump_json(path, obj):
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    tmp = path + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-        f.write('\n')
-    os.replace(tmp, path)
+    """原子写 json（委托 atomicio：唯一 tmp 名 + 进程内写锁，#47）"""
+    atomicio.dump_json(path, obj)
 
 
 def iso(ts):
@@ -557,10 +551,13 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
         for line in changes:
             log('    · %s' % line)
 
-        if old_path and os.path.abspath(old_path) != os.path.abspath(path):
-            os.replace(old_path, path)
-            log('    ~ 重命名 %s → %s' % (os.path.basename(old_path), os.path.basename(path)))
-        dump_json(path, snap)
+        # 重命名与落盘圈进同一把锁：避免与请求线程的 save_account/save_pref
+        # 交错——旧名文件刚被 rename 走、对旧名的写又把它复活成重复账号
+        with atomicio.lock():
+            if old_path and os.path.abspath(old_path) != os.path.abspath(path):
+                os.replace(old_path, path)
+                log('    ~ 重命名 %s → %s' % (os.path.basename(old_path), os.path.basename(path)))
+            dump_json(path, snap)
         log('    → %s' % os.path.basename(path))
         existing[uid] = path
         files.append({'file': os.path.basename(path), 'uid': uid, 'nickName': a['nickName']})
