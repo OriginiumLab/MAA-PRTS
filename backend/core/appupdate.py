@@ -56,6 +56,11 @@ APP_REPO = 'OriginiumLab/MAA-PRTS'
 
 RELEASES_HEAD = 'https://github.com/%s/releases/latest' % APP_REPO
 RELEASES_API = 'https://api.github.com/repos/%s/releases/latest' % APP_REPO
+# 「接收预发布版」专用：latest 端点按 GitHub 定义永远不返回预发布，
+# 开了开关只能走列表端点（含预发布，按发布时间倒序）；预发布的详情
+# （changelog/asset）再按 tag 取——latest 端点会拿回另一个（正式版）Release
+RELEASES_LIST = 'https://api.github.com/repos/%s/releases?per_page=10' % APP_REPO
+RELEASES_BY_TAG = 'https://api.github.com/repos/%s/releases/tags/%%s' % APP_REPO
 RELEASES_PAGE = 'https://github.com/%s/releases/tag/%%s' % APP_REPO
 
 # 下载地址依次回退：GitHub 直链 → 两个公共反代
@@ -222,6 +227,34 @@ def _api_latest(timeout=TIMEOUT_API) -> dict:
         return json.loads(r.read().decode('utf-8'))
 
 
+def _api_list(timeout=TIMEOUT_API) -> list:
+    """releases 列表（含预发布，按发布时间倒序）"""
+    req = urllib.request.Request(RELEASES_LIST, headers={
+        'User-Agent': _ua(),
+        'Accept': 'application/vnd.github+json',
+    })
+    with net.open(req, timeout=timeout) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+
+def _api_by_tag(tag: str, timeout=TIMEOUT_API) -> dict:
+    req = urllib.request.Request(RELEASES_BY_TAG % str(tag).strip('/'), headers={
+        'User-Agent': _ua(),
+        'Accept': 'application/vnd.github+json',
+    })
+    with net.open(req, timeout=timeout) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+
+def _list_latest_tag(timeout=TIMEOUT_API) -> str:
+    """列表端点取最新一条可解析的 tag——「接收预发布版」开的检查路径"""
+    for rel in _api_list(timeout) or []:
+        tag = str(rel.get('tag_name') or '')
+        if parse_version(tag):
+            return tag
+    raise RuntimeError('releases 列表里没有可解析的 tag')
+
+
 def _pick_asset(assets):
     """挑 Windows 的 zip：优先架构匹配，其次带 win 的，最后退第一个 zip"""
     zips = [a for a in (assets or [])
@@ -326,12 +359,19 @@ def status(force=False) -> dict:
 
     out = _status_from_state(st, cached=False, throttled=False)
 
+    accept_pre = bool(settings.load().get('acceptPrerelease'))
     try:
-        tag = _head_tag()
+        # 开了「接收预发布版」只能走列表端点：releases/latest 按定义
+        # 永远返回最近的非预发布 Release，开关原本是死功能（#48）
+        tag = _list_latest_tag() if accept_pre else _head_tag()
     except Exception as e:  # noqa: BLE001 - 没网就静默，别打扰用户
         out['ok'] = False
         out['error'] = '连不上 GitHub：%s' % e
         return out
+
+    latest = tag.lstrip('v')
+    has = is_newer(tag, _current())
+    pre = _is_prerelease_tag(tag)
 
     latest = tag.lstrip('v')
     has = is_newer(tag, _current())
@@ -362,9 +402,11 @@ def status(force=False) -> dict:
         out.update(fresh, hasUpdate=False, cached=False, throttled=False)
         return out
 
-    # 有新版：再花一次 API 配额拿 changelog 和校验值
+    # 有新版：再花一次 API 配额拿 changelog 和校验值。
+    # 预发布 tag 不能用 latest 端点拿详情——那会取回最近的正式版，
+    # changelog/sha256 全是另一个 Release 的
     try:
-        rel = _api_latest()
+        rel = _api_by_tag(tag) if pre else _api_latest()
     except Exception as e:  # noqa: BLE001 - 拿不到 JSON 也不能让用户装不了
         # 降级：按命名规则拼地址，照样能下载安装，只是没有官方 sha256。
         # 这类失败多半是 api.github.com 被拦/超时（国内常见），不能拿它
