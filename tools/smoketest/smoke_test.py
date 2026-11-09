@@ -8,7 +8,8 @@
 三组检查，任何一组失败都以非 0 退出码结束：
 
     A. 静态检查
-       - 三个 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位）
+       - 全仓库 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位；
+         代码实际遍历仓库里所有 .bat，不止根目录三个）
        - backend / tools 全部 .py 可编译
     B. 加密与 token 存储（隔离临时目录，monkeypatch 路径）
        - DPAPI 往返、密文篡改必报错
