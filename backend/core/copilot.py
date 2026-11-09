@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+import io
 import json
+import math
+import os
 import re
 import threading
 import time
@@ -28,8 +31,17 @@ MAX_LEVELS = {0: (30, 0, 0), 1: (30, 0, 0), 2: (30, 0, 0), 3: (40, 55, 0),
 
 MODES = ('ready', 'borrow', 'train', 'blocked')
 MODE_CN = {'ready': '可直接抄', 'borrow': '差一人可借', 'train': '需补练度', 'blocked': '打不了'}
-# 干员数低于这个值按萌新号对待：推荐排序里优先单核作业
-NEWBIE_OWNED = 250
+# 推荐排序算法（跟账号存的 preferAlgo 对应；顺序同下拉展示）：
+#   fewer  少人优先：ready/borrow 同级，人数（0~4 同档）→ 干员权重 → 评分 → 浏览量
+#   single 单核优先：阵容只有一个六星的排前面（萌新最容易抄），再评分/浏览/人数
+#   rating 好评量优先：评分 → 浏览量 → 阵容人数（用的人多说明稳定）——默认
+ALGOS = ('fewer', 'single', 'rating')
+DEFAULT_ALGO = 'rating'
+
+# 少人优先的干员权重：六星逐个记在 resources/oper-weights.json（用户手工调），
+# 六星以外的星级固定——数值大=阵容质量高（排序时取负进键）：
+#   五星 -3、四星 -1、三星 +1、一星/二星 +3（低星作业容易凑、要求低）
+_STAR_WEIGHT = {5: -3, 4: -1, 3: 1, 2: 3, 1: 3}
 
 # 作业站 v1 老作业的 opers 没有 requirements，练度要求完全未知——当时的默认
 # 假设就是「练度拉满」。压级号照这种判定会直接被打不了，所以没写练度的条目
@@ -53,6 +65,15 @@ DEFAULT_REQ = {
 #   0/缺失 = 未标注（MAA 按普通处理）、1 = 普通、2 = 突袭、3 = 普通与突袭兼容
 DIFF_NORMAL, DIFF_RAID = 1, 2
 DIFF_CN = {DIFF_NORMAL: '普通', DIFF_RAID: '突袭', DIFF_NORMAL | DIFF_RAID: '通用'}
+
+# 好评率门槛（用户规则）用连续函数代替硬分档：评价量 n（like+dislike）越多，
+# 要求的好评率越高。对数曲线锚在 (5, 65%) 和 (100, 85%) 两点，中间平滑过渡
+# （n=20 处 ≈74.3%，与原分段规则的 75% 档基本重合）；n>100 封顶 85%，评价量
+# 再大也不加码；n<5 没有统计意义，不按好评率筛。
+# 作业站列表接口每条直接带 like/dislike 原始计数；返回的 rating_ratio 是
+# 四舍五入到 1 位小数的点赞率（0.995 也显示 1.0），判不了高门槛档，自己算。
+RATING_LO, RATING_HI = 0.65, 0.85
+RATING_N_MIN, RATING_N_MAX = 5, 100
 
 
 def difficulty_flags(content) -> int:
@@ -225,10 +246,12 @@ def match_operation(content, owned_map):
     missing, training, detail = [], [], []
     rmap = _rarity_by_name()
     six = 0
+    wsum = 0.0
 
     for op in opers:
         name = norm(op.get('name'))
         owned = owned_map.get(name)
+        wsum += op_weight(name)
         ok = bool(owned and req_met(op, owned))
         if not owned:
             missing.append(op.get('name'))
@@ -270,7 +293,9 @@ def match_operation(content, owned_map):
         mode = 'borrow' if total == 13 else 'ready'
     else:
         mode = 'borrow' if (len(training) == 1 and total < 13) else 'train'
-    return mode, missing, training, total, detail, six
+    # 阵容权重均值（少人优先排序用）：只算 opers 里的具名干员，除以具名干员数
+    weight = wsum / len(opers) if opers else 0.0
+    return mode, missing, training, total, detail, six, weight
 
 
 # 六星判定用：名字 → 1~6 星（character_table 的 rarity 是 0 起算，转成 1 起）
@@ -288,6 +313,38 @@ def _rarity_by_name():
                     m[norm(c['name'])] = int(c.get('rarity') or 0) + 1
             _rarity_cache = m
     return _rarity_cache
+
+
+# 六星权重表（resources/oper-weights.json，进程内缓存，文件换了自动重载）
+_weight_lock = threading.Lock()
+_weight_cache = {'data': None, 'mtime': 0}
+
+
+def six_weights() -> dict:
+    path = settings.weights_path()
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    with _weight_lock:
+        c = _weight_cache
+        if c['data'] is None or mtime != c['mtime']:
+            try:
+                with io.open(path, encoding='utf-8') as f:
+                    c['data'] = {norm(k): float(v or 0)
+                                 for k, v in (json.load(f) or {}).items()}
+            except Exception:
+                c['data'] = {}
+            c['mtime'] = mtime
+        return c['data']
+
+
+def op_weight(name) -> float:
+    """单个干员的权重：六星查表，其余按星级固定，认不出的 0（中性）"""
+    r = _rarity_by_name().get(name)
+    if r == 6:
+        return six_weights().get(name, 0)
+    return _STAR_WEIGHT.get(r, 0)
 
 
 # ---------------------------------------------------------------- 账号 → owned
@@ -356,7 +413,29 @@ def _pull(params, pages=2, limit=50):
 
 
 def fetch_ops(stage, pages=2, min_rating=0, force=False):
-    """拉某个关卡的作业。
+    """拉某个关卡的作业（出口滤掉作者 / 作业黑名单）。
+
+    过滤包在 _fetch_ops_raw 外面：缓存里存的是全量，黑名单增删立即生效，
+    不用等 10 分钟缓存过期。
+    """
+    items = _fetch_ops_raw(stage, pages=pages, min_rating=min_rating, force=force)
+    st = settings.load()
+    ban = set()
+    for row in (st.get('authorBlacklist') or []):
+        aid = str((row or {}).get('id') or '').strip() if isinstance(row, dict) else ''
+        if aid:
+            ban.add(aid)
+    if ban:
+        items = [i for i in items
+                 if str((i['meta'].get('uploader_id') or '')).strip() not in ban]
+    ban_ops = set(st.get('opBlacklist') or [])
+    if ban_ops:
+        items = [i for i in items if ('maa://%s' % i['meta'].get('id')) not in ban_ops]
+    return items
+
+
+def _fetch_ops_raw(stage, pages=2, min_rating=0, force=False):
+    """拉某个关卡的作业（原始全量，含黑名单作者）。
 
     `levelKeyword` 只对作业站认识的关卡 id 生效；对 TR-x 这类关卡会退化成
     「返回全站热门」，所以必须用 stage_name 二次校验，再退回 document 搜索。
@@ -389,6 +468,28 @@ def fetch_ops(stage, pages=2, min_rating=0, force=False):
     return items
 
 
+def required_rating(n) -> float:
+    """评价量 n → 所需好评率：对数插值，见 RATING_* 常量注释。
+
+    n<5 返回 0（不筛），n>=100 恒为 RATING_HI。
+    """
+    if n < RATING_N_MIN:
+        return 0.0
+    r = RATING_LO + (RATING_HI - RATING_LO) * \
+        math.log(n / RATING_N_MIN) / math.log(RATING_N_MAX / RATING_N_MIN)
+    return min(RATING_HI, r)
+
+
+def rating_ok(meta) -> bool:
+    """好评率门槛：like/(like+dislike) 达到 required_rating(评价量)。"""
+    lk = int(meta.get('like') or 0)
+    dk = int(meta.get('dislike') or 0)
+    n = lk + dk
+    if not n:
+        return True
+    return lk / n >= required_rating(n)
+
+
 def difficulty_text_for(stage_name, flags):
     """写入日志/列表用的难度名：险地/磨难/简单按作业的 stageId 说，其余按位标志"""
     s = str(stage_name or '')
@@ -401,7 +502,7 @@ def difficulty_text_for(stage_name, flags):
     return difficulty_text(flags)
 
 
-def _item(stage, item, mode, missing, training, total, detail, six=0):
+def _item(stage, item, mode, missing, training, total, detail, six=0, weight=0):
     meta = item['meta']
     content = item['content']
     doc = content.get('doc') or {}
@@ -418,7 +519,9 @@ def _item(stage, item, mode, missing, training, total, detail, six=0):
         'title': doc.get('title') or '(无标题)',
         'details': (doc.get('details') or '')[:400],
         'uploader': meta.get('uploader') or doc.get('uploader') or '',
+        'uploaderId': str(meta.get('uploader_id') or '').strip(),
         'total': total,
+        'weight': round(weight, 4),
         'mode': mode,
         'difficulty': flags,
         'difficultyText': difficulty_text_for(stage.get('stageId'), flags),
@@ -436,36 +539,47 @@ def _item(stage, item, mode, missing, training, total, detail, six=0):
     }
 
 
-def rank_key(row, newbie=False):
-    """推荐排序。
+def rank_key(row, algo=DEFAULT_ALGO):
+    """推荐排序。练度可行（mode）永远第一；之后按账号选的算法（见 ALGOS 注释）"""
+    mode = MODES.index(row['mode'])
+    if algo == 'fewer':
+        # ready/borrow 同级：都能上场打，少一人（助战顶上）不算劣势。
+        # 人数 0~4 折成同档（再分高下没意义），5 人起按实际人数；
+        # 同档内先比阵容权重均值（大者优先，取负进键），再评分、浏览
+        mode = 0 if mode <= 1 else mode
+        t = row['total'] if row['total'] > 4 else 4
+        return (mode, t, -row.get('weight', 0), -row['rating'], -row['views'])
+    if algo == 'single':
+        return (mode, 0 if row.get('singleCore') else 1,
+                -row['rating'], -row['views'], row['total'])
+    return (mode, -row['rating'], -row['views'], row['total'])
 
-    练度可行（mode）永远第一；之后按用户要求：
-    - 萌新号（干员 < 250）优先单核作业（阵容里只有一个六星），
-      萌新凑不齐多核阵容，单核最容易抄；
-    - 再按星级 + 浏览量：用的人多往往比星级更说明稳定。
-    """
-    key = [MODES.index(row['mode'])]
-    if newbie:
-        key.append(0 if row.get('singleCore') else 1)
-    key += [-row['rating'], -row['views'], row['total']]
-    return tuple(key)
 
-
-def _collect_rows(stage, owned_map, pages=2, min_rating=0, newbie=False):
+def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=DEFAULT_ALGO):
     """拉一个关卡的作业并打分（不截断，供普通/突袭两行共用）
 
-    用户规则：缺 ≥2 个干员、或练度不满足 ≥2 人的作业直接 pass（不推荐）；
-    整关全被 pass 时退回不过滤，免得一关作业都不剩。
+    拉取后先按好评率门槛滤一轮（rating_ok，评价量太少的不筛），
+    全不达标时退回不过滤（跟下面的 pass 规则一致，免得一关作业都不剩）；
+    用户规则：0 人作业（仅 TR 关除外）、缺 ≥2 个干员、或练度不满足 ≥2 人
+    的作业直接 pass（不推荐）；整关全被 pass 时同样退回不过滤。
     """
     items = fetch_ops(stage, pages=pages, min_rating=min_rating)
+    rated = [it for it in items if rating_ok(it['meta'])]
+    if rated:
+        items = rated
+    # 0 人作业（opers/groups 全空）只在 TR 关有意义（挂机解），其余关不参与推荐，
+    # 全空时仍由下面的回退兜底
+    allow_zero = str(stage.get('stageId') or '').startswith('tr_')
     rows, dropped = [], []
     for it in items:
-        mode, missing, training, total, detail, six = match_operation(it['content'], owned_map)
-        r = _item(stage, it, mode, missing, training, total, detail, six)
-        (dropped if (len(missing) >= 2 or len(training) >= 2) else rows).append(r)
+        mode, missing, training, total, detail, six, weight = \
+            match_operation(it['content'], owned_map)
+        r = _item(stage, it, mode, missing, training, total, detail, six, weight)
+        (dropped if (total == 0 and not allow_zero
+                     or len(missing) >= 2 or len(training) >= 2) else rows).append(r)
     if not rows and dropped:
         rows = dropped
-    rows.sort(key=lambda r: rank_key(r, newbie))
+    rows.sort(key=lambda r: rank_key(r, algo))
     return rows
 
 
@@ -478,19 +592,6 @@ def _pack_stage(stage, rows, limit=12):
         'best': rows[0] if rows else None,
         'ops': rows[:limit],
     }
-
-
-def match_stage(stage, owned_map, pages=2, min_rating=0, limit=12, variant=None):
-    """variant: None 不区分 / 'normal' 只要普通可用 / 'raid' 只要突袭可用
-
-    宽度 3（普通+突袭通用）的作业两边都算。
-    """
-    rows = _collect_rows(stage, owned_map, pages=pages, min_rating=min_rating)
-    if variant == 'normal':
-        rows = [r for r in rows if r['difficulty'] & DIFF_NORMAL]
-    elif variant == 'raid':
-        rows = [r for r in rows if r['difficulty'] & DIFF_RAID]
-    return _pack_stage(stage, rows, limit=limit)
 
 
 def stage_variants(stage, rows, limit=12):
@@ -554,14 +655,16 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
                'keyword': keyword, 'stages': [stage]}
 
     owned = build_owned(snap)
-    # 萌新号：干员数量少，优先推单核作业（只有一个六星的阵容）
-    newbie = len(owned) < NEWBIE_OWNED
+    # 排序算法跟账号存（用户在搜索框旁的下拉里选）：不再按干员数自动判萌新号
+    algo = snap.get('preferAlgo')
+    if algo not in ALGOS:
+        algo = DEFAULT_ALGO
     stages = res['stages']
     workers = min(8, max(1, len(stages)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         collected = list(ex.map(
             lambda s: (s, _collect_rows(s, owned, pages=pages, min_rating=min_rating,
-                                        newbie=newbie)),
+                                        algo=algo)),
             stages))
 
     # 有突袭版的关卡拆成两行：普通一行、突袭一行，通用作业（difficulty=3）
@@ -580,6 +683,33 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
         # 「下一关」按钮的数据：按置顶行（用户正在看的难度视角）推进
         'next': resources.next_stage(results[0]['stage']) if results else None,
     }
+
+
+def suggest_authors(name, timeout=10):
+    """按名字反查作业站作者：document 全文搜一页 → 聚合名字匹配的作者
+
+    作业站没有公开的「按名搜用户」接口，但作者名几乎都会署在自己作业的
+    标题 / 简介里，document 搜一页（100 条）再按 meta.uploader 过滤聚合
+    就够黑名单选人用了。id 是唯一键，count 是这次搜索结果里的命中份数。
+    """
+    q = str(name or '').strip()
+    if not q:
+        return []
+    try:
+        items = _pull({'document': q}, pages=1, limit=100)
+    except Exception:  # noqa: BLE001 - 没网就当没搜到，前端还有 id 手填兜底
+        items = []
+    low = q.lower()
+    out = {}
+    for it in items:
+        meta = it['meta']
+        up = str(meta.get('uploader') or '')
+        aid = str(meta.get('uploader_id') or '').strip()
+        if not aid or low not in up.lower():
+            continue
+        rec = out.setdefault(aid, {'id': aid, 'name': up, 'count': 0})
+        rec['count'] += 1
+    return sorted(out.values(), key=lambda r: (-r['count'], r['name']))[:12]
 
 
 def operation_detail(copilot_id):

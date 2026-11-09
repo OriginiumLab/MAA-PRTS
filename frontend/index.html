@@ -81,6 +81,11 @@
           <input id="search-input" type="text" autocomplete="off" spellcheck="false"
                  placeholder="输入关卡代号 TL-10，或活动代号 act55side / 活动名 月行水上">
         </div>
+        <select id="algo-select" title="优先作业算法：推荐作业的排序方式，保存在当前账号里">
+          <option value="fewer">少人优先</option>
+          <option value="single">单核优先</option>
+          <option value="rating" selected>好评量优先</option>
+        </select>
         <button class="search-btn" id="btn-next" disabled title="搜索同一系列、同一难度的下一关">下一关</button>
       </div>
       <div class="quick-row" id="quick-row"></div>

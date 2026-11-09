@@ -50,7 +50,8 @@ def bootstrap(_q, _body):
     return {
         'settings': {k: sv[k] for k in ('maaDir', 'maaDirs', 'autoStartMaa',
                                         'autoUpdatePack', 'autoCheckAppUpdate',
-                                        'acceptPrerelease')},
+                                        'acceptPrerelease', 'proxy',
+                                        'charBlacklist', 'authorBlacklist')},
         'accounts': accs,
         'lastAccount': last,
         'maa': status,
@@ -135,6 +136,15 @@ def api_account_maa(_q, body):
         if patch['dir']:
             settings.remember_maa_dir(patch['dir'])
     return {'maa': accounts.save_maa_meta(body['file'], patch)}
+
+
+def api_account_pref(_q, body):
+    """账号级用户偏好写回账号 json。body: {"file": ..., "preferAlgo": rating/fewer/single}"""
+    body = body or {}
+    algo = (body.get('preferAlgo') or '').strip()
+    if algo not in copilot.ALGOS:
+        raise ValueError('未知算法：%s' % (algo or '(空)'))
+    return {'pref': accounts.save_pref(_account_for(body.get('file')), {'preferAlgo': algo})}
 
 
 def api_account_remove(_q, body):
@@ -223,6 +233,29 @@ def api_app_status(q, _body):
     """程序本体有没有新版本（只查不下载；force=1 跳过 6 小时节流）"""
     force = str((q or {}).get('force') or '').lower() in ('1', 'true', 'yes')
     return appupdate.status(force=force)
+
+
+def api_proxy_probe(_q, body):
+    """设置页「保存」后的代理检测：端口开着吗 + 经它摸得到 GitHub 吗
+
+    body: {"proxy": "http://127.0.0.1:7890"}（前端拼好的完整串，未落盘）。
+    探测结果不改变保存行为——代理不可用时 net.open 会自动回退直连。
+    """
+    from . import net
+    p = settings._norm_proxy(str((body or {}).get('proxy') or ''))
+    if not p:
+        raise ValueError('先填代理地址和端口')
+    return net.check(p)
+
+
+def api_chars_suggest(q, _body):
+    """干员联想：拼音首字母（yh→银灰）或名字片段"""
+    return {'items': resources.suggest_chars((q or {}).get('q') or '')}
+
+
+def api_author_suggest(q, _body):
+    """按名字反查作业站作者（document 全文搜 + uploader 聚合）"""
+    return {'items': copilot.suggest_authors((q or {}).get('q') or '')}
 
 
 def api_app_download(_q, _body):
@@ -426,6 +459,7 @@ ROUTES = {
     '/api/accounts': api_accounts,
     '/api/account': api_account,
     '/api/account/maa': api_account_maa,
+    '/api/account/pref': api_account_pref,
     '/api/account/remove': api_account_remove,
     '/api/account/refresh': api_refresh,
     '/api/account/import-maa': api_account_import_maa,
@@ -434,6 +468,9 @@ ROUTES = {
     '/api/activities': api_activities,
     '/api/gamedata': api_gamedata,
     '/api/gamedata/ack': api_gamedata_ack,
+    '/api/proxy/probe': api_proxy_probe,
+    '/api/chars/suggest': api_chars_suggest,
+    '/api/author/suggest': api_author_suggest,
     '/api/pack/status': api_pack_status,
     '/api/pack/update': api_pack_update,
     '/api/app/status': api_app_status,

@@ -10,7 +10,35 @@ const S = {
   paths: {}, pack: {}, setup: {}, gamedata: {}, onboarded: false,
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
+  authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
 };
+
+/* ------------------------------------------------------ 黑名单（干员 / 作者 / 作业）
+   干员黑名单是纯显示层过滤：比对结论（可直接抄 / 差一人 / 需练度）不变，
+   只是屏蔽的干员 / 技能不再出现在搜索卡片与作业详情里。
+   条目 {name, skills}：skills 空 = 整个干员；勾了技能 = 只隐藏带对应技能
+   的要求（作业 chips、详情行有技能号，按它对位）。「缺 X / 练度不足 X」
+   徽标只跟干员走（缺人是缺这个人，与技能无关），只有整个干员被屏蔽才隐藏。
+   作者 / 作业黑名单都在后端过滤（fetch_ops 出口按 uploader_id / maa://id 滤），
+   软件级、不跟账号走，这里不参与。作业黑名单条目直接存 MAA 代码（maa://12345）。 */
+const charBL = () => {
+  const m = new Map();
+  (S.settings.charBlacklist || []).forEach(row => {
+    if (typeof row === 'string') m.set(row, []);          // 脏数据兜底
+    else if (row && row.name) m.set(row.name, row.skills || []);
+  });
+  return m;
+};
+const operHidden = o => {
+  const sk = charBL().get(o.name);
+  return sk !== undefined && (!sk.length || sk.includes(Number(o.skill) || 1));
+};
+const nameHidden = n => {
+  const sk = charBL().get(n);
+  return sk !== undefined && !sk.length;
+};
+const visOpers = arr => (arr || []).filter(o => !operHidden(o));
+const visNames = arr => (arr || []).filter(n => !nameHidden(n));
 
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -252,6 +280,11 @@ function renderHero() {
   const d = S.detail;
   const importBtn = $('#btn-import-maa');
   if (importBtn) importBtn.hidden = !d;   // 有选中账号才给「从 MAA 更新干员信息」入口
+  const algoSel = $('#algo-select');
+  if (algoSel) {
+    algoSel.disabled = !d;                        // 算法下拉跟账号走，没账号不可用
+    if (d) algoSel.value = d.preferAlgo || 'rating';
+  }
   if (!d) return;
   const a = d.account || {}, st = d.stats || {};
   const name = a.nickName || '未知账号';
@@ -986,7 +1019,7 @@ function diffLabel(dcn, variant) {
 }
 
 function opChips(op, max = 8) {
-  const list = (op.opers || []).slice();
+  const list = visOpers(op.opers).slice();
   const chips = list.slice(0, max).map(o => {
     let cls = 'own';
     if (!o.owned) cls = 'lack';
@@ -1041,8 +1074,8 @@ function opCard(op, opts = {}) {
         <span class="badge ${mode}">${MODE_CN[mode]}</span>
         ${difficultyTag(op, op.stageCode)}
         <span class="badge plain">${op.total} 人</span>
-        ${op.missing && op.missing.length ? `<span class="badge blocked">缺 ${esc(op.missing.join('、'))}</span>` : ''}
-        ${op.training && op.training.length ? `<span class="badge train">练度不足 ${esc(op.training.slice(0, 2).join('、'))}</span>` : ''}
+        ${(() => { const miss = visNames(op.missing); return miss.length ? `<span class="badge blocked">缺 ${esc(miss.join('、'))}</span>` : ''; })()}
+        ${(() => { const train = visNames(op.training); return train.length ? `<span class="badge train">练度不足 ${esc(train.slice(0, 2).join('、'))}</span>` : ''; })()}
       </div>
       <div class="opers">${opChips(op)}</div>
       <div class="op-foot">
@@ -1073,6 +1106,12 @@ function bindOpCards(root, ops, variant) {
 }
 
 function renderResult(d) {
+  // 顺手学作者 id → 昵称：作者黑名单弹窗显示名字靠这个缓存
+  (d.stages || []).forEach(s => {
+    [s.best].concat(s.ops || []).forEach(op => {
+      if (op && op.uploaderId && op.uploader) S.authorNames[op.uploaderId] = op.uploader;
+    });
+  });
   const box = $('#results');
   if (!d.stages || !d.stages.length) {
     box.innerHTML = '<div class="empty-state"><h3>没有结果</h3><p>换个关卡代号试试，例如 TL-10 或 act55side</p></div>';
@@ -1251,12 +1290,19 @@ function renderResult(d) {
 
 /* ------------------------------------------------------------ 作业详情 */
 async function showOpDetail(op, variant) {
+  // 作业黑名单条目就是 MAA 代码，直接比对；作者黑名单按作业站数字 id 屏蔽，
+  // 老作业没有 uploader_id 就不给拉黑作者入口
+  const opBL = S.settings.opBlacklist || [];
+  const opBanned = opBL.includes(op.maaCode);
+  const banned = op.uploaderId && (S.settings.authorBlacklist || []).some(a => String(a.id) === op.uploaderId);
   const m = modal(`
     <h3>${esc(op.title)}</h3>
     <div class="sub">作业 #${op.id} · ${esc(op.stageCode || '')} ${esc(op.stageName || '')} · ${esc(op.difficultyText || '普通')} · ${op.total} 人 · 评分 ${op.rating}</div>
     <div style="display:flex;gap:8px;margin-bottom:14px">
       <button class="btn-plain" id="copy-code">复制 ${esc(op.maaCode)}</button>
       <button class="btn-solid" id="add-op">加入作业集</button>
+      <button class="btn-plain" id="ban-op"${opBanned ? ' disabled title="已在黑名单里，可在设置 → 作业黑名单移除"' : ''}>${opBanned ? '已拉黑作业' : '拉黑作业'}</button>
+      ${op.uploaderId ? `<button class="btn-plain" id="ban-author"${banned ? ' disabled title="已在黑名单里，可在设置 → 作者黑名单移除"' : ''}>${banned ? '已拉黑作者' : '拉黑作者'}</button>` : ''}
     </div>
     <label class="field"><span>干员与要求</span></label>
     <div id="op-detail-body" style="font-size:12px;color:var(--text-2);line-height:1.9">
@@ -1266,11 +1312,42 @@ async function showOpDetail(op, variant) {
     onMount(el, close) {
       $('#copy-code', el).addEventListener('click', () => copyText(op.maaCode, 'MAA 代码已复制'));
       $('#add-op', el).addEventListener('click', () => { addToBasket(op, variant || ''); close(); });
+      /* 两个拉黑共用一套动作：不关弹窗（可以把作业和作者一起拉），按钮原地
+         翻成「已拉黑」态；过滤在后端，改完重搜一次当前结果让它立即生效 */
+      const banFlow = async (btn, key, entry, doneText, tip) => {
+        const next = (S.settings[key] || []).concat([entry]);
+        const old = btn.textContent;
+        btn.disabled = true;   // 请求在途防重复点
+        try {
+          const d = await api('/api/settings', { [key]: next });
+          S.settings = d.settings;
+          btn.textContent = doneText;
+          btn.title = tip;
+          toast(`${doneText}，可在设置里移除`, 'ok');
+          if (S.result && $('#search-input').value.trim()) doSearch();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = old;
+          toast('保存失败：' + e.message, 'err');
+        }
+      };
+      $('#ban-op', el).addEventListener('click', () => {
+        if ((S.settings.opBlacklist || []).includes(op.maaCode)) return;
+        banFlow($('#ban-op', el), 'opBlacklist', op.maaCode, '已拉黑作业', '已在黑名单里，可在设置 → 作业黑名单移除');
+      });
+      const banBtn = $('#ban-author', el);
+      if (banBtn) banBtn.addEventListener('click', () => {
+        const id = op.uploaderId;
+        if (!id || !(S.settings.authorBlacklist || []).every(a => String(a.id) !== id)) return;
+        if (op.uploader) S.authorNames[id] = op.uploader;   // 顺手学 id → 昵称，黑名单弹窗显示用
+        banFlow(banBtn, 'authorBlacklist', { id, name: op.uploader || '' }, '已拉黑作者', '已在黑名单里，可在设置 → 作者黑名单移除');
+      });
       // 带上 file：MAA 导入的账号没有技能/模组数据，详情里不展示这类要求
       const opUrl = '/api/op?id=' + op.id + (S.current ? '&file=' + encodeURIComponent(S.current) : '');
       api(opUrl).then(d => {
         const body = d.content || {};
-        const rows = (d.opers || []).map(o => {
+        const shown = visOpers(d.opers);
+        const rows = shown.map(o => {
           const req = o.requirements || {};
           const bits = [];
           if (req.elite != null) bits.push('精' + req.elite);
@@ -1283,7 +1360,7 @@ async function showOpDetail(op, variant) {
             <span style="color:var(--text-3);font-size:11.5px">${esc(bits.join(' · ') || '无特殊要求')}</span>
           </div>`;
         }).join('');
-        const skillless = (d.opers || []).some(o => o.skillKnown === false);
+        const skillless = shown.some(o => o.skillKnown === false);
         $('#op-detail-body', el).innerHTML =
           (rows || '<div style="color:var(--text-3)">无干员信息</div>') +
           (skillless
@@ -1625,7 +1702,7 @@ function openAccountWizard(mode) {
               : '多个账号可以共用同一个 MAA；要分开养号就给这个账号单独配一个。'}</p>
             <div class="onb-box">
               <div class="onb-box-head"><span>已保存的 MAA</span></div>
-              <div id="aa-saved">${
+              <div id="aa-saved" class="onb-list">${
                 saved.length ? '' : '<span class="onb-hint">还没有保存过的 MAA 路径。</span>'
               }</div>
             </div>
@@ -1634,7 +1711,7 @@ function openAccountWizard(mode) {
                 <span>正在运行的 MAA（新发现）</span>
                 <button class="btn-plain mini" id="aa-procs-refresh">刷新</button>
               </div>
-              <div id="aa-procs"><span class="onb-hint">检测中…</span></div>
+              <div id="aa-procs" class="onb-list"><span class="onb-hint">检测中…</span></div>
             </div>
             <div class="onb-manual">
               <h4>自行选择 MAA 路径</h4>
@@ -2072,6 +2149,11 @@ async function pickFolder(inputEl) {
 
 function openSettings() {
   const s = S.settings;
+  // 代理拆成 地址+端口 两框回填；没配过给地址预填本机默认，端口空=直连
+  const pv = String(s.proxy || '').trim();
+  const pm = pv.match(/^(.*?):(\d+)$/);
+  const proxyHost = pm ? pm[1] : 'http://127.0.0.1';
+  const proxyPort = pm ? pm[2] : '';
   const p = S.paths || {};
   const pk = S.pack || {};
   const gd = S.gamedata || {};
@@ -2103,6 +2185,12 @@ function openSettings() {
       <span>启动后检查程序新版本（6 小时最多一次，只提醒，装不装由你定）</span>
     </label>
 
+    <div class="bl-entry-row">
+      <button class="btn-plain" id="set-bl-char">干员黑名单</button>
+      <button class="btn-plain" id="set-bl-op">作业黑名单</button>
+      <button class="btn-plain" id="set-bl-author">作者黑名单</button>
+    </div>
+
     <div class="path-list">
       <div class="path-item"><span>账号数据</span><code>${esc(p.accounts || '')}</code>${openBtn('accounts', '打开')}</div>
       <div class="path-item"><span>配置与日志</span><code>${esc(p.config || '')}</code>${openBtn('config', '打开')}</div>
@@ -2113,6 +2201,12 @@ function openSettings() {
         <button class="btn-plain mini" id="set-app-check">${
           S.appUpdate && S.appUpdate.ok && S.appUpdate.hasUpdate ? '查看新版本' : '检查更新'}</button></div>
     </div>
+
+    <label class="field" style="margin-top:14px"><span>网络代理（连不上 GitHub 时才需要；只用于上面两项检查 / 下载更新，端口留空 = 直连）</span>
+      <div class="path-row">
+        <input type="text" id="set-proxy-host" value="${esc(proxyHost)}" placeholder="http://127.0.0.1">
+        <input type="text" id="set-proxy-port" value="${esc(proxyPort)}" placeholder="7890" inputmode="numeric" style="flex:0 0 92px">
+      </div></label>
 
     <div class="modal-foot">
       <button class="btn-plain" data-close>取消</button>
@@ -2190,22 +2284,427 @@ function openSettings() {
           btn.disabled = false;
         }
       });
+      $('#set-bl-char', el).addEventListener('click', () => openBlacklist('char'));
+      $('#set-bl-author', el).addEventListener('click', () => openBlacklist('author'));
+      $('#set-bl-op', el).addEventListener('click', openOpBlacklist);
       $('#btn-save-set', el).addEventListener('click', async () => {
+        const host = $('#set-proxy-host', el).value.trim();
+        const port = $('#set-proxy-port', el).value.trim();
+        if (port && !/^\d{1,5}$/.test(port)) {
+          toast('端口只能是数字（如 7890）', 'warn');
+          $('#set-proxy-port', el).focus();
+          return;
+        }
+        if (port && host.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').includes(':')) {
+          toast('地址里不用带端口，端口填右边那一格', 'warn');
+          $('#set-proxy-host', el).focus();
+          return;
+        }
+        // 两个都填了才启用代理；只填地址没填端口 = 直连
+        const proxy = port ? ((host || 'http://127.0.0.1') + ':' + port) : '';
         try {
           const d = await api('/api/settings', {
             maaDir: $('#set-maa', el).value.trim(),
             autoStartMaa: $('#set-autostart', el).checked,
             autoUpdatePack: $('#set-autopack', el).checked,
             autoCheckAppUpdate: $('#set-autocheck', el).checked,
+            proxy,
           });
           S.settings = d.settings;
           S.maa = d.maa;
           renderMaaState();
           fillBasketProfiles();
           close();
-          toast('设置已保存');
+          if (proxy) {
+            // 保存后探测一次真可用性；不可用也已保存——更新链路会自动直连回退
+            try {
+              const r = await api('/api/proxy/probe', { proxy });
+              toast(r.ok ? `代理可用（${r.tcpMs}ms 连上）`
+                : `代理不可用：${r.error}。已保存，更新时自动直连`,
+                r.ok ? 'ok' : 'warn', 5200);
+            } catch (e) { toast('代理已保存，但检测失败：' + e.message, 'warn', 5200); }
+          } else {
+            toast('设置已保存');
+          }
         } catch (e) { toast('保存失败：' + e.message, 'err'); }
       });
+    }
+  });
+}
+
+/* ------------------------------------------------------------ 黑名单管理（设置 → 二级弹窗）
+   条目统一按 {id, name} 处理：干员 id=name=干员名，另带 skills（勾选的
+   技能号，空 = 屏蔽整个干员）；作者 id 是作业站数字 id（唯一键）、name
+   只为显示。
+   新增走搜索下拉：干员支持拼音首字母（lyyh→凛御银灰，/api/chars/suggest），
+   从候选选中后按星级给技能勾选（6星三个 / 4·5星两个 / 3星一个 / 1·2星无），
+   不勾=整个干员；作者输名字反查（/api/author/suggest），输纯数字直接当 id。
+   增删改即时保存；干员黑名单变了立即回刷当前搜索结果（纯显示过滤），
+   作者黑名单变了在关闭时重搜一次（过滤在后端）。 */
+function openBlacklist(kind) {
+  const isChar = kind === 'char';
+  const key = isChar ? 'charBlacklist' : 'authorBlacklist';
+  const items = () => {
+    if (isChar) return (S.settings.charBlacklist || []).map(row => (
+      typeof row === 'string' ? { id: row, name: row, skills: [] }
+        : { id: row.name, name: row.name, skills: row.skills || [] }));
+    return (S.settings.authorBlacklist || []).map(
+      a => ({ id: a.id, name: a.name || S.authorNames[a.id] || '' }));
+  };
+  let editing = -1;
+  let dirty = false;
+  let selectedChar = null;      // 从候选选中的 {name, rarity}；null = 手输原文
+  const skillsSel = new Set();  // 新增区勾选的技能号
+  let editSkills = new Set();   // 编辑行勾选的技能号
+  const SKILL_CN = { 1: '一技能', 2: '二技能', 3: '三技能' };
+  // 星级 → 可选技能（与后端 _fix_oper 同一套规则：6星 1-3、4/5星 1-2、3星 1）
+  const skillChoices = rarity => {
+    const r = Number(rarity);
+    if (r >= 5) return [1, 2, 3];
+    if (r >= 3) return [1, 2];
+    if (r === 2) return [1];
+    return [];
+  };
+  const skillsLabel = (sel, choices) => {
+    if (!sel || !sel.size) return '无';
+    if (choices && choices.length && sel.size === choices.length) return '全部';
+    return [...sel].sort().map(s => SKILL_CN[s] || s).join('、');
+  };
+  modal(`
+    <h3>${isChar ? '干员黑名单' : '作者黑名单'}</h3>
+    <div class="sub">${isChar
+      ? '加入后，搜索结果与作业详情里不再显示（比对结论不变）；勾了技能就只屏蔽对应技能的要求，不勾 = 整个干员。'
+      : '按作业站作者屏蔽：该作者的作业不再出现在搜索结果里。'}</div>
+    <div class="bl-add-wrap">
+      <div class="path-row" style="margin-bottom:12px">
+        <input type="text" id="bl-add" placeholder="${isChar
+          ? '拼音首字母或名字，如：lyyh / 凛御银灰'
+          : '作者名字搜索，或直接输数字 id'}" autocomplete="off">
+        ${isChar ? `
+        <div class="bl-skill-pick" id="bl-skill-pick">
+          <button class="btn-plain mini" id="bl-skill-btn" disabled>技能：全部</button>
+          <div class="bl-skill-drop" id="bl-skill-drop" hidden></div>
+        </div>` : ''}
+        <button class="btn-plain mini" id="bl-add-btn" style="flex:0 0 auto">添加</button>
+      </div>
+      <div class="bl-drop" id="bl-drop" hidden></div>
+    </div>
+    <div class="bl-list" id="bl-list"></div>
+    <div class="modal-foot"><button class="btn-plain" id="bl-close">关闭</button></div>
+  `, {
+    onMount(el, close) {
+      const render = () => {
+        const list = items();
+        const box = $('#bl-list', el);
+        if (!list.length) {
+          box.innerHTML = `<div class="onb-hint">${isChar
+            ? '还没有屏蔽任何干员。' : '还没有屏蔽任何作者。'}</div>`;
+          return;
+        }
+        box.innerHTML = list.map((it, i) => i === editing ? `
+          <div class="bl-item edit">
+            <input type="text" class="bl-eid" value="${esc(it.id)}" placeholder="${isChar ? '干员名' : '数字 id'}">
+            ${isChar ? `
+            <span class="bl-skill-inline" title="勾选 = 要屏蔽的技能；全勾 = 整个干员">
+              ${[1, 2, 3].map(s => `<button type="button" class="sk-toggle${editSkills.has(s) ? ' on' : ''}" data-sk="${s}">${'一二三'[s - 1]}</button>`).join('')}
+            </span>` : ''}
+            ${isChar ? '' : `<input type="text" class="bl-ename" value="${esc(it.name)}" placeholder="名字（可选）">`}
+            <span class="bl-ops">
+              <button class="btn-plain mini" data-act="ok">确定</button>
+              <button class="btn-plain mini" data-act="cancel">取消</button>
+            </span>
+          </div>` : `
+          <div class="bl-item" data-i="${i}">
+            <span class="bl-name" title="${esc(it.name || it.id)}">${esc(it.name || it.id)}${isChar ? '' : ` <small>#${esc(it.id)}</small>`}</span>
+            ${isChar ? `<span class="bl-sk-view" title="亮起的是被屏蔽的技能">${[1, 2, 3].map(s => `<i class="${!(it.skills || []).length || (it.skills || []).includes(s) ? 'on' : ''}">${'一二三'[s - 1]}</i>`).join('')}</span>` : ''}
+            <span class="bl-ops">
+              <button class="btn-plain mini" data-act="edit">编辑</button>
+              <button class="btn-plain mini" data-act="del">删除</button>
+            </span>
+          </div>`).join('');
+        $$('.bl-item[data-i]', box).forEach(row => {
+          row.addEventListener('click', e => {
+            const btn = e.target.closest('[data-act]');
+            if (!btn) return;
+            const i = Number(row.dataset.i);
+            const list2 = items();
+            if (btn.dataset.act === 'del') {
+              list2.splice(i, 1);
+              editing = -1;
+              persist(list2);
+            } else {
+              // skills 空 = 整个干员 → 迁移成全勾，进编辑就是可反选的状态
+              const sk = list2[i].skills || [];
+              editSkills = sk.length ? new Set(sk) : new Set([1, 2, 3]);
+              editing = i;
+              render();
+            }
+          });
+        });
+        const okBtn = $('[data-act="ok"]', box);
+        if (okBtn) {
+          // 编辑行的技能 toggle（内联小按钮，避免浮层被滚动容器裁掉）
+          $$('.sk-toggle', box).forEach(b => {
+            b.addEventListener('click', () => {
+              const s = Number(b.dataset.sk);
+              if (editSkills.has(s)) editSkills.delete(s); else editSkills.add(s);
+              b.classList.toggle('on', editSkills.has(s));
+            });
+          });
+          okBtn.addEventListener('click', () => {
+            const id = $('.bl-eid', box).value.trim();
+            const name = isChar ? id : ($('.bl-ename', box).value.trim() || S.authorNames[id] || '');
+            if (isChar ? !id : !/^\d+$/.test(id)) {
+              toast(isChar ? '干员名不能为空' : '作者 id 只能是数字', 'warn');
+              return;
+            }
+            const list2 = items();
+            if (list2.some((x, j) => x.id === id && j !== editing)) {
+              toast('这个条目已经在列表里了', 'warn');
+              return;
+            }
+            if (isChar && !editSkills.size) {
+              toast('至少保留一个要屏蔽的技能，或全勾（整个干员）', 'warn');
+              return;
+            }
+            list2[editing] = isChar
+              ? { id, name: id, skills: editSkills.size >= 3 ? [] : [...editSkills].sort() }
+              : { id, name };
+            editing = -1;
+            persist(list2);
+          });
+          $('[data-act="cancel"]', box).addEventListener('click', () => { editing = -1; render(); });
+        }
+      };
+      const persist = async next => {
+        try {
+          const d = await api('/api/settings', {
+            [key]: isChar ? next.map(x => ({ name: x.id, skills: x.skills || [] })) : next,
+          });
+          S.settings = d.settings;
+          dirty = true;
+          render();
+          if (isChar && S.result) renderResult(S.result);
+        } catch (e) { toast('保存失败：' + e.message, 'err'); }
+      };
+      /* 新增 = 搜索下拉：输入时联想（干员本地首字母 / 作者作业站反查），
+         点候选或回车选中；没有候选时干员按原文加、作者只认纯数字 id */
+      let dropItems = [];
+      const renderDrop = list => {
+        dropItems = list || [];
+        const drop = $('#bl-drop', el);
+        if (!dropItems.length) { drop.hidden = true; drop.innerHTML = ''; return; }
+        drop.hidden = false;
+        drop.innerHTML = dropItems.map((it, i) => isChar
+          ? `<div class="bl-drop-item" data-i="${i}"><span>${esc(it.name)}</span><small class="stars">${'★'.repeat(Math.min((it.rarity || 0) + 1, 6))}</small></div>`
+          : `<div class="bl-drop-item" data-i="${i}"><span>${esc(it.name)}</span><small>#${esc(it.id)}</small></div>`
+        ).join('');
+        $$('.bl-drop-item', drop).forEach(row => {
+          // mousedown 抢在 input 失焦之前把候选吃掉
+          row.addEventListener('mousedown', e => {
+            e.preventDefault();
+            pick(dropItems[Number(row.dataset.i)]);
+          });
+        });
+      };
+      /* 新增区技能下拉：选中的干员决定可选技能（按星级），多选勾 */
+      const skillBtn = $('#bl-skill-btn', el);
+      const skillDrop = $('#bl-skill-drop', el);
+      const refreshSkillPick = () => {
+        if (!isChar || !skillBtn) return;
+        const choices = selectedChar ? skillChoices(selectedChar.rarity) : [];
+        [...skillsSel].forEach(s => { if (!choices.includes(s)) skillsSel.delete(s); });
+        skillBtn.disabled = !choices.length;
+        skillBtn.textContent = '技能：' + skillsLabel(skillsSel, choices);
+        skillDrop.innerHTML = choices.length
+          ? choices.map(s => `<label class="bl-skill-opt"><input type="checkbox" value="${s}" ${
+              skillsSel.has(s) ? 'checked' : ''}> ${SKILL_CN[s]}</label>`).join('')
+          : `<div class="bl-skill-empty">${selectedChar ? '这个干员没有技能（1 / 2 星）' : '先从候选里选一个干员'}</div>`;
+        $$('input[type=checkbox]', skillDrop).forEach(cb => cb.addEventListener('change', () => {
+          const s = Number(cb.value);
+          if (cb.checked) skillsSel.add(s); else skillsSel.delete(s);
+          skillBtn.textContent = '技能：' + skillsLabel(skillsSel, choices);
+        }));
+      };
+      if (skillBtn) {
+        skillBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (!skillBtn.disabled) skillDrop.hidden = !skillDrop.hidden;
+        });
+        skillDrop.addEventListener('click', e => e.stopPropagation());
+        refreshSkillPick();
+      }
+      const pick = it => {
+        if (!it) return;
+        const id = isChar ? it.name : String(it.id);
+        if (items().some(x => x.id === id)) { toast('这个条目已经在列表里了', 'warn'); return; }
+        if (isChar) {
+          // 选中进入「待添加」：名字填回输入框；技能默认全勾（=屏蔽整个
+          // 干员），用户去反选掉不想屏蔽的技能
+          selectedChar = { name: it.name, rarity: it.rarity };
+          skillsSel.clear();
+          skillChoices(it.rarity).forEach(s => skillsSel.add(s));
+          $('#bl-add', el).value = it.name;
+          refreshSkillPick();
+          renderDrop([]);
+          $('#bl-add', el).focus();
+          return;
+        }
+        S.authorNames[id] = it.name || S.authorNames[id] || '';
+        persist(items().concat([{ id, name: it.name || '' }]));
+        $('#bl-add', el).value = '';
+        renderDrop([]);
+        toast(`已添加 @${it.name || id}`, 'ok');
+        $('#bl-add', el).focus();
+      };
+      let suggestTimer = null;
+      let suggestSeq = 0;   // 防竞态：连续输入时旧请求晚回也不能覆盖新结果
+      $('#bl-add', el).addEventListener('input', () => {
+        clearTimeout(suggestTimer);
+        const q = $('#bl-add', el).value.trim();
+        // 输入一变就先清掉旧候选，异步结果没回来前不能让人点到上一个词的干员
+        renderDrop([]);
+        // 选中的干员又被手动改动 → 技能选择失效，重置
+        if (isChar && selectedChar && q !== selectedChar.name) {
+          selectedChar = null;
+          skillsSel.clear();
+          refreshSkillPick();
+        }
+        if (!q || (!isChar && /^\d+$/.test(q))) return;
+        const my = ++suggestSeq;
+        suggestTimer = setTimeout(async () => {
+          try {
+            const r = await api((isChar ? '/api/chars/suggest?q=' : '/api/author/suggest?q=') + encodeURIComponent(q));
+            if (my !== suggestSeq) return;
+            renderDrop(r.items || []);
+          } catch (e) { if (my === suggestSeq) renderDrop([]); }
+        }, isChar ? 200 : 350);
+      });
+      let addBusy = false;
+      const add = async () => {
+        const q = $('#bl-add', el).value.trim();
+        if (!q) { toast(isChar ? '先输入干员名' : '先输入作者名字或数字 id', 'warn'); return; }
+        if (dropItems.length) { pick(dropItems[0]); return; }
+        if (items().some(x => x.id === q)) { toast('这个条目已经在列表里了', 'warn'); return; }
+        if (isChar) {
+          // 勾选 = 要屏蔽的技能：默认全勾（整个干员），反选掉的不屏蔽。
+          // 全勾存 []（=整个干员，与旧数据同构）；全不勾等于啥都不屏蔽，拦下
+          const choices = selectedChar ? skillChoices(selectedChar.rarity) : [];
+          if (choices.length && !skillsSel.size) {
+            toast('至少保留一个要屏蔽的技能，或全勾（整个干员）', 'warn');
+            return;
+          }
+          const skills = choices.length && skillsSel.size === choices.length
+            ? [] : [...skillsSel].sort();
+          persist(items().concat([{ id: q, name: q, skills }]));
+          $('#bl-add', el).value = '';
+          selectedChar = null;
+          skillsSel.clear();
+          refreshSkillPick();
+        } else if (/^\d+$/.test(q)) {
+          persist(items().concat([{ id: q, name: S.authorNames[q] || '' }]));
+          $('#bl-add', el).value = '';
+          toast(`已添加 作者 #${q}`, 'ok');
+        } else if (!addBusy) {
+          // 名字搜索在途时不能抢答「没找到」：等这一轮搜完再报结果。
+          // 按钮转「找人…」防重复点击，也告诉用户在等什么
+          addBusy = true;
+          const btn = $('#bl-add-btn', el);
+          const old = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '找人…';
+          try {
+            const r = await api('/api/author/suggest?q=' + encodeURIComponent(q));
+            const found = (r.items || [])[0];
+            if (found) pick(found);
+            else toast('没搜到这个作者；确认名字，或直接输入数字 id', 'warn');
+          } catch (e) {
+            toast('搜索失败：' + e.message, 'err');
+          } finally {
+            addBusy = false;
+            btn.disabled = false;
+            btn.textContent = old;
+          }
+        }
+      };
+      $('#bl-add-btn', el).addEventListener('click', add);
+      $('#bl-add', el).addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+      // 点下拉以外的地方收起候选与技能勾选
+      el.addEventListener('click', e => {
+        if (!e.target.closest('.bl-add-wrap')) renderDrop([]);
+        if (skillDrop) skillDrop.hidden = true;
+      });
+      $('#bl-close', el).addEventListener('click', () => {
+        close();
+        // 作者黑名单的过滤在后端：改过就重搜一次当前结果让它立即生效
+        if (!isChar && dirty && S.result && $('#search-input').value.trim()) doSearch();
+      });
+      render();
+    }
+  });
+}
+
+/* ------------------------------------------------------------ 作业黑名单（设置 → 二级弹窗）
+   条目就是 MAA 代码（maa://12345），软件级、不跟账号走；过滤在后端
+   （fetch_ops 出口按代码滤），与作者黑名单一样改完关闭时重搜一次。 */
+function openOpBlacklist() {
+  let dirty = false;
+  modal(`
+    <h3>作业黑名单</h3>
+    <div class="sub">拉黑的作业不再出现在搜索结果里。条目按 MAA 代码存，软件级、不跟账号走。</div>
+    <div class="path-row" style="margin-bottom:12px">
+      <input type="text" id="obl-add" placeholder="MAA 代码，如 maa://12345（或直接输数字）" autocomplete="off">
+      <button class="btn-plain mini" id="obl-add-btn" style="flex:0 0 auto">添加</button>
+    </div>
+    <div class="bl-list" id="obl-list"></div>
+    <div class="modal-foot"><button class="btn-plain" id="obl-close">关闭</button></div>
+  `, {
+    onMount(el, close) {
+      const render = () => {
+        const list = S.settings.opBlacklist || [];
+        const box = $('#obl-list', el);
+        box.innerHTML = list.length ? list.map((code, i) => `
+          <div class="bl-item" data-i="${i}">
+            <span class="bl-name"><code>${esc(code)}</code></span>
+            <span class="bl-ops">
+              <button class="btn-plain mini" data-act="del">删除</button>
+            </span>
+          </div>`).join('')
+          : '<div class="onb-hint">还没有拉黑任何作业。作业详情里点「拉黑作业」，或在这里粘贴 MAA 代码。</div>';
+        $$('.bl-item[data-i]', box).forEach(row => {
+          row.addEventListener('click', e => {
+            if (!e.target.closest('[data-act="del"]')) return;
+            persist((S.settings.opBlacklist || []).filter((_, j) => j !== Number(row.dataset.i)));
+          });
+        });
+      };
+      const persist = async next => {
+        try {
+          const d = await api('/api/settings', { opBlacklist: next });
+          S.settings = d.settings;
+          dirty = true;
+          render();
+        } catch (e) { toast('保存失败：' + e.message, 'err'); }
+      };
+      const add = () => {
+        const inp = $('#obl-add', el);
+        let q = inp.value.trim();
+        if (!q) { toast('先输入 MAA 代码', 'warn'); return; }
+        if (/^\d+$/.test(q)) q = 'maa://' + q;   // 只输数字也当作业 id，补全成代码
+        const list = S.settings.opBlacklist || [];
+        if (list.includes(q)) { toast('这个作业已经在列表里了', 'warn'); return; }
+        if (!/^maa:\/\/\d+$/.test(q)) { toast('格式要像 maa://12345', 'warn'); return; }
+        persist(list.concat([q]));
+        inp.value = '';
+      };
+      $('#obl-add-btn', el).addEventListener('click', add);
+      $('#obl-add', el).addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+      $('#obl-close', el).addEventListener('click', () => {
+        close();
+        // 过滤在后端：改过就重搜一次当前结果让它立即生效
+        if (dirty && S.result && $('#search-input').value.trim()) doSearch();
+      });
+      render();
     }
   });
 }
@@ -2220,6 +2719,16 @@ function bindGlobal() {
   });
   $('#search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('#search-input').addEventListener('input', queueAutoSearch);
+  // 「优先作业算法」：跟账号存，切换后立刻按新算法重排当前结果
+  $('#algo-select').addEventListener('change', async e => {
+    if (!S.current) return;
+    try {
+      await api('/api/account/pref', { file: S.current, preferAlgo: e.target.value });
+      if (S.result && $('#search-input').value.trim()) doSearch();
+    } catch (err) {
+      toast('保存算法偏好失败：' + err.message, 'err');
+    }
+  });
   bindAccountOrder($('#account-list'));
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);

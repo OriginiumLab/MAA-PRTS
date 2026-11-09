@@ -278,35 +278,35 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .hero {
   display: flex; align-items: center; justify-content: space-between;
   gap: 20px;
-  padding: 16px 20px;
+  padding: 7px 16px;              /* 压到跟搜索框一个高度 */
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: linear-gradient(110deg, rgba(30, 36, 50, 0.68), rgba(18, 22, 32, 0.55));
   box-shadow: var(--shadow);
   flex: 0 0 auto;
 }
-.hero-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.hero-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .hero-avatar {
-  width: 46px; height: 46px; border-radius: 14px;
+  width: 34px; height: 34px; border-radius: 10px;
   display: grid; place-items: center;
   background: linear-gradient(145deg, rgba(94, 234, 212, 0.9), rgba(139, 147, 255, 0.9));
-  color: #05100f; font-weight: 800; font-size: 18px;
+  color: #05100f; font-weight: 800; font-size: 14px;
   flex: 0 0 auto;
 }
-.hero-name { font-size: 19px; font-weight: 700; letter-spacing: .2px; }
-.hero-sub { font-size: 12.5px; color: var(--text-2); margin-top: 3px; }
+.hero-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+.hero-sub { font-size: 11px; color: var(--text-2); margin-top: 1px; }
 .hero-stats { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .stat {
-  min-width: 74px;
-  padding: 7px 12px;
+  min-width: 64px;
+  padding: 4px 10px;
   border-radius: 11px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--line);
   text-align: center;
 }
-.stat b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
-.stat span { font-size: 10.5px; color: var(--text-3); letter-spacing: .6px; }
+.stat b { display: block; font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
+.stat span { font-size: 10px; color: var(--text-3); letter-spacing: .6px; }
 .stat.mint b { color: var(--mint); }
 .stat.amber b { color: var(--amber); }
 .stat.rose b { color: var(--rose); }
@@ -356,6 +356,22 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   box-shadow: none;
   cursor: default;
 }
+/* 「优先作业算法」下拉：尺寸与「下一关」按钮同款，宽度对齐 */
+#algo-select {
+  flex: 0 0 auto; align-self: center;
+  width: 132px; height: 40px;
+  padding: 0 10px;
+  border-radius: 11px;
+  border: 1px solid var(--line-strong);
+  background: rgba(13, 16, 24, 0.85);
+  color: var(--text);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: .15s ease;
+}
+#algo-select:hover:not(:disabled) { border-color: rgba(94, 234, 212, 0.45); }
+#algo-select:focus { outline: none; border-color: rgba(94, 234, 212, 0.55); }
+#algo-select:disabled { opacity: .5; cursor: default; }
 
 .quick-row {
   display: flex; align-items: center; gap: 7px;
@@ -952,9 +968,91 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   border: 1px solid var(--line-strong); color: var(--text-2); font-size: 12.5px;
 }
 .btn-plain:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.btn-plain:disabled { opacity: .4; cursor: not-allowed; }
+.btn-plain:disabled:hover { color: var(--text-2); background: none; }
 .btn-plain.mini { height: 38px; padding: 0 12px; font-size: 12px; flex: 0 0 auto; }
 .path-row { display: flex; gap: 8px; align-items: stretch; }
 .path-row input[type=text] { flex: 1 1 auto; min-width: 0; }
+/* 黑名单：设置弹窗里的两个入口按钮 */
+.bl-entry-row { display: flex; gap: 8px; margin: 2px 0 16px; }
+.bl-entry-row .btn-plain { flex: 1 1 0; }
+/* 黑名单二级弹窗：顶部新增、下面条目列表（自己滚） */
+.bl-list {
+  max-height: 320px; overflow-y: auto;
+  border: 1px dashed var(--line-strong); border-radius: 12px;
+  padding: 6px 10px;
+}
+.bl-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 4px; border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+}
+.bl-item:last-child { border-bottom: none; }
+.bl-item.edit { gap: 8px; }
+.bl-item.edit input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: rgba(8, 10, 16, 0.9);
+  color: var(--text); font-size: 12.5px;
+}
+.bl-name { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-name small { color: var(--text-3); font-size: 11px; margin-left: 4px; }
+.bl-ops { display: flex; gap: 6px; flex: 0 0 auto; }
+.bl-ops .btn-plain.mini { height: 28px; padding: 0 10px; font-size: 11.5px; }
+/* 黑名单新增：搜索候选下拉（浮在条目列表上方） */
+.bl-add-wrap { position: relative; }
+.bl-drop {
+  position: absolute; top: calc(100% - 4px); left: 0; right: 0; z-index: 30;
+  max-height: 264px; overflow-y: auto;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: #10141d; box-shadow: 0 18px 40px -18px #000;
+}
+.bl-drop-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; font-size: 13px; cursor: pointer;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+}
+.bl-drop-item:last-child { border-bottom: none; }
+.bl-drop-item:hover { background: rgba(94, 234, 212, 0.07); }
+.bl-drop-item small { color: var(--text-3); font-size: 11px; }
+.bl-drop-item small.stars { color: var(--amber); letter-spacing: 1.5px; }
+/* 干员黑名单：技能多选下拉（按星级给选项） */
+.bl-skill-pick { position: relative; flex: 0 0 auto; }
+.bl-skill-drop {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 31;
+  min-width: 128px; padding: 6px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: #10141d; box-shadow: 0 18px 40px -18px #000;
+}
+.bl-skill-opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; font-size: 12.5px; cursor: pointer;
+  border-radius: 7px;
+}
+.bl-skill-opt:hover { background: rgba(94, 234, 212, 0.07); }
+.bl-skill-empty { padding: 8px 10px; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+/* 编辑行的内联技能 toggle（浮层会被滚动容器裁掉，改行内小按钮） */
+/* 条目里的三格技能状态：亮起 = 被屏蔽（skills 空 = 整个干员 → 全亮）；
+   margin-left:auto 把它推到条目右侧、编辑/删除按钮左边 */
+.bl-sk-view { display: inline-flex; gap: 3px; margin-left: auto; flex: 0 0 auto; }
+.bl-sk-view i {
+  font-style: normal; font-size: 10.5px; line-height: 1;
+  padding: 4px 5px; border-radius: 5px;
+  border: 1px solid var(--line-strong); color: var(--text-3);
+}
+.bl-sk-view i.on {
+  border-color: rgba(94, 234, 212, 0.45); color: var(--mint);
+  background: rgba(94, 234, 212, 0.1);
+}
+.bl-skill-inline { display: flex; gap: 4px; flex: 0 0 auto; }
+.sk-toggle {
+  height: 28px; padding: 0 9px; border-radius: 7px;
+  border: 1px solid var(--line-strong); color: var(--text-3);
+  font-size: 11.5px; background: transparent; cursor: pointer;
+}
+.sk-toggle.on {
+  border-color: rgba(94, 234, 212, 0.45); color: var(--mint);
+  background: rgba(94, 234, 212, 0.08);
+}
 .app-meta {
   margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line);
   font-size: 11px; color: var(--text-3); line-height: 1.7;
@@ -1116,7 +1214,9 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .onb-card {
   width: min(900px, 94vw);
   max-height: 92vh;
-  overflow: auto;
+  /* 卡片自己不滚：标题与底部按钮钉住，只有中间步骤区滚 */
+  display: flex; flex-direction: column;
+  overflow: hidden;
   padding: 32px 36px 26px;
   border-radius: 22px;
   border: 1px solid var(--line-strong);
@@ -1126,7 +1226,7 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   box-shadow: 0 40px 90px -30px #000;
   animation: pop .22s cubic-bezier(.2, .9, .3, 1.15);
 }
-.onb-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 24px; }
+.onb-head { flex: 0 0 auto; display: flex; gap: 16px; align-items: flex-start; margin-bottom: 24px; }
 .onb-head .brand-mark { width: 46px; height: 46px; border-radius: 13px; }
 .onb-head .brand-mark svg { width: 25px; height: 25px; }
 .onb-head h2 { font-size: 23px; font-weight: 650; letter-spacing: -.4px; margin-bottom: 6px; }
@@ -1178,6 +1278,7 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   background: rgba(255, 255, 255, 0.025);
   color: var(--text-2);
   line-height: 1.95;
+  max-height: 240px; overflow-y: auto;   /* 教程很长，展开后自己滚 */
 }
 .token-guide b { display: block; font-size: 12.5px; color: var(--text); margin-bottom: 3px; }
 .token-guide ol { margin: 0 0 6px 18px; }
@@ -1200,6 +1301,7 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .link-btn:hover { color: #8ff5e4; }
 .token-help-row { display: flex; gap: 14px; margin: -6px 0 2px; }
 .onb-foot {
+  flex: 0 0 auto;
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line);
   flex-wrap: wrap;
@@ -1208,6 +1310,13 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .onb-note code { font-family: var(--mono); color: var(--text-2); }
 .onb-btns { display: flex; gap: 10px; }
 .onb-page[hidden] { display: none; }
+/* 当前显示的步骤页＝中间滚动区：子列表限高后一般滚不到底，留作兜底 */
+.onb-page:not([hidden]) {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+}
+/* MAA 列表（已保存的 / 新发现的）自己滚：条目再多也不顶开卡片 */
+.onb-list { max-height: 168px; overflow-y: auto; }
 
 /* 两页向导：运行中 MAA 列表 */
 .onb-box {

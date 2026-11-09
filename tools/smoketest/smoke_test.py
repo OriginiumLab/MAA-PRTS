@@ -579,7 +579,7 @@ def check_maa_import_level_only():
     assert 'requirements' not in v1['opers'][0], '展示副本不能污染原始 content'
 
     # 搜索用的 detail 也要如实反映（前端据此显示「只比等级」提示）
-    mode, missing, training, _total, detail, _six = copilot.match_operation(content, maa)
+    mode, missing, training, _total, detail, _six, _w = copilot.match_operation(content, maa)
     assert mode == 'ready' and not training, (mode, training)
     assert detail[0]['skillKnown'] is False
     assert 'skill_level' not in detail[0]['req'], detail[0]['req']
@@ -819,7 +819,7 @@ def check_copilot_v1_default_req():
         copilot.norm(by_stars[6]): own(by_stars[6], 6, 1, 60),
         copilot.norm(by_stars[5]): own(by_stars[5], 5, 0, 40),
     }
-    mode, missing, training, total, detail, _six = copilot.match_operation(content, owned_map)
+    mode, missing, training, total, detail, _six, _w = copilot.match_operation(content, owned_map)
     assert not missing, '两个干员都拥有，不该判缺人'
     assert mode == 'train', '压级号打 v1 作业应判需补练度，实际 %r' % mode
     assert training == [by_stars[6], by_stars[5]], training
@@ -828,7 +828,7 @@ def check_copilot_v1_default_req():
     # 满练号（精二60 + 专三 / 精一60 + 技能7）打同一份 v1 作业：应为 ready
     owned_map[copilot.norm(by_stars[6])] = own(by_stars[6], 6, 2, 60, mastery=(3, 3, 3))
     owned_map[copilot.norm(by_stars[5])] = own(by_stars[5], 5, 1, 60, main=7)
-    mode, missing, training, total, detail, _six = copilot.match_operation(content, owned_map)
+    mode, missing, training, total, detail, _six, _w = copilot.match_operation(content, owned_map)
     assert mode == 'ready' and not training, '满练号打 v1 作业不该被误伤'
 
     # 详情弹窗用的 detail_opers：requirements 也要补上默认
@@ -922,8 +922,14 @@ def check_boot_smoke():
     tmp = tempfile.mkdtemp(prefix='maaprts-smoke-')
     try:
         _copy_project(tmp)
+        # 源码模式数据根默认落 LOCALAPPDATA，冒烟必须指回临时目录：
+        # 既隔离真实数据，也顺带验证副本根零新增（数据目录不许再落 cwd）。
+        # data/ 先建好再拍快照，别让数据根本身算作「新增」
+        data_root = os.path.join(tmp, 'data')
+        os.makedirs(data_root, exist_ok=True)
         before = set(os.listdir(tmp))
-        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        env = dict(os.environ, PYTHONIOENCODING='utf-8',
+                   MAA_PRTS_DATA_ROOT=data_root)
         proc = subprocess.Popen(
             [sys.executable, '-u', 'backend/main.py', '--no-window'],
             cwd=tmp, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -947,9 +953,9 @@ def check_boot_smoke():
             assert (paths.get('tokens') or '').endswith('tokens.json'), \
                 'token 文件路径不对：%s' % paths.get('tokens')
 
-            applog = os.path.join(tmp, 'debug', 'app.log')
-            assert os.path.isfile(applog), '没有生成 debug/app.log'
-            assert not os.path.isdir(os.path.join(tmp, 'config', 'skland')), \
+            applog = os.path.join(data_root, 'debug', 'app.log')
+            assert os.path.isfile(applog), '没有生成 <数据根>/debug/app.log'
+            assert not os.path.isdir(os.path.join(data_root, 'config', 'skland')), \
                 'config/skland 不应被预创建（新布局无此目录）'
         finally:
             proc.terminate()
@@ -958,9 +964,9 @@ def check_boot_smoke():
             except subprocess.TimeoutExpired:
                 proc.kill()
 
-        # 运行前后对比：副本根目录只允许新增 config/ 与 debug/
+        # 运行前后对比：副本根一个新目录都不许有——数据走 MAA_PRTS_DATA_ROOT
         new = set(os.listdir(tmp)) - before
-        assert new <= {'config', 'debug'}, '运行后根目录出现预期外的新增：%s' % sorted(new)
+        assert not new, '运行后仓库根出现新增（数据没走数据根？）：%s' % sorted(new)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1380,6 +1386,40 @@ def check_mainline_difficulty_variants():
         resources.TR_AFTER.pop('act55side_tr01', None)
 
 
+# ---------------------------------------------------------------- B23 作业黑名单
+def check_op_blacklist(tmp):
+    """作业黑名单：条目按 MAA 代码存（maa://12345），归一化容错（裸数字补全、
+    去重、非法丢弃）；fetch_ops 出口按代码滤，与作者黑名单同一出口"""
+    from core import copilot, settings
+
+    _reset_config(tmp)
+
+    saved = settings.save({'opBlacklist': ['maa://1', '456', 456, 'x', 'maa://abc', '']})
+    assert saved['opBlacklist'] == ['maa://1', 'maa://456'], saved['opBlacklist']
+    settings.save({'opBlacklist': []})      # 归一化段存的条目别带进下面的过滤段
+
+    # fetch_ops 出口过滤：patch 掉网络层，只验证过滤逻辑
+    fake = [
+        {'meta': {'id': 1, 'uploader_id': '10'}},
+        {'meta': {'id': 2, 'uploader_id': '20'}},
+        {'meta': {'id': 3, 'uploader_id': '30'}},
+    ]
+    orig = copilot._fetch_ops_raw
+    copilot._fetch_ops_raw = lambda stage, pages=2, min_rating=0, force=False: list(fake)
+    try:
+        stage = {'stageId': 's', 'code': 'c'}
+        got = [i['meta']['id'] for i in copilot.fetch_ops(stage)]
+        assert got == [1, 2, 3], got
+        settings.save({'opBlacklist': ['maa://2']})
+        got = [i['meta']['id'] for i in copilot.fetch_ops(stage)]
+        assert got == [1, 3], got                          # 作业黑名单按代码滤
+        settings.save({'authorBlacklist': [{'id': '30', 'name': ''}]})
+        got = [i['meta']['id'] for i in copilot.fetch_ops(stage)]
+        assert got == [1], got                            # 作者黑名单同一出口
+    finally:
+        copilot._fetch_ops_raw = orig
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -1418,6 +1458,7 @@ def main():
         r.check('B20 资源包生成幂等（版本/指纹）', check_pack_idempotent)
         r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
         r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
+        r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
