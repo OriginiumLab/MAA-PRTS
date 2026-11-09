@@ -298,21 +298,25 @@ def match_operation(content, owned_map):
     return mode, missing, training, total, detail, six, weight
 
 
-# 六星判定用：名字 → 1~6 星（character_table 的 rarity 是 0 起算，转成 1 起）
-_rarity_cache = None
+# 六星判定用：名字 → 1~6 星（character_table 的 rarity 是 0 起算，转成 1 起）。
+# 按资源包 (version, fingerprint) 键控（同 _char_index）：热更新出新六星后
+# 不能还按旧表把新干员当「认不出」（#50）
+_RARITY = {'key': None, 'map': None}
 _rarity_lock = threading.Lock()
 
 
 def _rarity_by_name():
-    global _rarity_cache
+    pack = resources.pack()
+    key = (pack.get('version'), pack.get('fingerprint'))
     with _rarity_lock:
-        if _rarity_cache is None:
+        if _RARITY['map'] is None or _RARITY['key'] != key:
             m = {}
             for c in (resources.char_table() or {}).values():
                 if isinstance(c, dict) and c.get('name'):
                     m[norm(c['name'])] = int(c.get('rarity') or 0) + 1
-            _rarity_cache = m
-    return _rarity_cache
+            _RARITY['map'] = m
+            _RARITY['key'] = key
+        return _RARITY['map']
 
 
 # 六星权重表（resources/oper-weights.json，进程内缓存，文件换了自动重载）
