@@ -678,7 +678,6 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .op-chip.own { color: #b6f3e5; border-color: rgba(94, 234, 212, 0.20); background: rgba(94, 234, 212, 0.07); }
 .op-chip.lack { color: #ff9aa6; border-color: rgba(255, 122, 138, 0.24); background: rgba(255, 122, 138, 0.07); }
 .op-chip.train { color: #f7c775; border-color: rgba(245, 185, 85, 0.24); background: rgba(245, 185, 85, 0.07); }
-.op-chip.more { color: var(--text-3); }
 
 .op-foot {
   display: flex; align-items: center; justify-content: space-between;
