@@ -513,3 +513,6 @@ def clear_cache():
     with _lock:
         _cache.clear()
         _pack_cache[0] = None
+        # 首字母表派生自干员名：不一起清的话热更新新增的干员拼音搜索
+        # 失效到进程重启为止（#50）
+        _char_initials_cache[0] = None
