@@ -48,10 +48,10 @@ def bootstrap(_q, _body):
     acts = resources.activity_list(18)
     sv = _settings_view(st, accs)
     return {
-        'settings': {k: sv[k] for k in ('maaDir', 'maaDirs', 'autoStartMaa',
-                                        'autoUpdatePack', 'autoCheckAppUpdate',
-                                        'acceptPrerelease', 'proxy',
-                                        'charBlacklist', 'authorBlacklist')},
+        # 全量 settings 视图（均非敏感字段）：不再维护键清单白名单——
+        # 清单漏一个键（如 opBlacklist），前端以这份子集为基底整键保存
+        # 就会把磁盘上已有的黑名单覆盖清空（#45）
+        'settings': sv,
         'accounts': accs,
         'lastAccount': last,
         'maa': status,

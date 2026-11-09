@@ -62,6 +62,28 @@ async function api(path, body) {
   return j.data;
 }
 
+/* 设置保存统一走这里（#45）：
+   - 串行排队：后端是整键替换，两个在途保存以陈旧基底各发各的会互相覆盖
+     （快速连续拉黑丢前一条就是这类），排队 + 先把 patch 乐观并进 S.settings，
+     后一个保存就能以前一个的结果为基底；
+   - 成功用服务端返回的全量视图刷新 S.settings；失败先拉一次全量恢复现场
+     （乐观值可能已经写进 UI），再把错误抛给调用方。 */
+let _saveSettingsQ = Promise.resolve();
+function saveSettings(patch) {
+  const run = async () => {
+    Object.assign(S.settings, patch);
+    try {
+      const d = await api('/api/settings', patch);
+      S.settings = d.settings;
+    } catch (e) {
+      try { S.settings = (await api('/api/settings', {})).settings; } catch (_) { }
+      throw e;
+    }
+  };
+  _saveSettingsQ = _saveSettingsQ.then(run, run);
+  return _saveSettingsQ;
+}
+
 /* ------------------------------------------------------------ 提示 */
 function toast(msg, type = 'ok', ms = 2600) {
   const el = document.createElement('div');
@@ -214,7 +236,7 @@ function bindAccountOrder(box) {
     // 还按旧序重建，界面看起来像「拖完又弹回去」
     S.accounts = files.map(f => S.accounts.find(a => a.file === f)).filter(Boolean);
     try {
-      S.settings = (await api('/api/settings', { accountOrder: files })).settings;
+      await saveSettings({ accountOrder: files });
     } catch (e) { /* 保存失败不回滚视觉顺序，刷新后会还原 */ }
   };
 
@@ -264,8 +286,9 @@ async function selectAccount(file, silent) {
     S.detail = d;
     renderHero();
     updateParadoxChip();
-    await api('/api/settings', { lastAccount: file });
-    S.settings.lastAccount = file;
+    // 保存 lastAccount 顺带用响应里的全量 settings 刷新 S.settings——
+    // 修复启动后第一次拉黑以「无 opBlacklist 的陈旧基底」整键覆盖的窗口期（#45）
+    await saveSettings({ lastAccount: file });
     refreshMaaStatus();          // 状态卡与配置下拉切到这个账号绑定的 MAA
     if (!silent) {
       const r = $('#results');
@@ -1319,8 +1342,7 @@ async function showOpDetail(op, variant) {
         const old = btn.textContent;
         btn.disabled = true;   // 请求在途防重复点
         try {
-          const d = await api('/api/settings', { [key]: next });
-          S.settings = d.settings;
+          await saveSettings({ [key]: next });
           btn.textContent = doneText;
           btn.title = tip;
           toast(`${doneText}，可在设置里移除`, 'ok');
@@ -2680,8 +2702,7 @@ function openOpBlacklist() {
       };
       const persist = async next => {
         try {
-          const d = await api('/api/settings', { opBlacklist: next });
-          S.settings = d.settings;
+          await saveSettings({ opBlacklist: next });
           dirty = true;
           render();
         } catch (e) { toast('保存失败：' + e.message, 'err'); }
