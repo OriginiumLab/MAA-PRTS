@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 
@@ -1623,6 +1624,133 @@ def check_gacha_stats(tmp):
     assert len(gacha.load_cache('旧 终末地.json').get('records') or []) == 1
 
 
+# ---------------------------------------------------------------- B25 森空岛签到
+def check_signin(_tmp):
+    """森空岛签到（不联网，全用假客户端）：
+
+    - 两套口径：方舟 POST {uid, gameId:1}；终末地 POST + header
+      sk-game-role: 3_<roleId>_<serverId>（拿 uid 打方舟接口会 403）
+    - 今天签过（方舟 records 里有今天的 ts / 终末地 hasToday）就不发签到请求
+    - 签到撞 HTTP 403 = 今天已签到，算 already 不算失败
+    - 没 token / 解不开 token / 终末地缺 roleId 一律跳过；坏 token 只登录一次
+    - 同一角色被两个账号文件指向时只签一次
+    """
+    import types
+    import urllib.error
+
+    from core import accounts, api, signin
+
+    now = time.time()
+    rows = [
+        {'file': 'a 官服.json', 'nickName': 'A', 'game': 'arknights', 'uid': '1', 'hasToken': True},
+        {'file': 'b 官服.json', 'nickName': 'B', 'game': 'arknights', 'uid': '2', 'hasToken': True},
+        {'file': 'c 终末地.json', 'nickName': 'C', 'game': 'endfield', 'uid': '9',
+         'roleId': '1715413040', 'serverId': '1', 'hasToken': True},
+        {'file': 'a-dup 官服.json', 'nickName': 'A2', 'game': 'arknights', 'uid': '1', 'hasToken': True},
+        {'file': 'no-token.json', 'nickName': 'N', 'game': 'arknights', 'uid': '3', 'hasToken': False},
+        {'file': 'bad 官服.json', 'nickName': 'X', 'game': 'arknights', 'uid': '4', 'hasToken': True},
+        {'file': 'bad2 官服.json', 'nickName': 'Y', 'game': 'arknights', 'uid': '5', 'hasToken': True},
+        {'file': 'd 官服.json', 'nickName': 'D', 'game': 'arknights', 'uid': '6', 'hasToken': True},
+        {'file': 'e 终末地.json', 'nickName': 'E', 'game': 'endfield', 'uid': '10', 'hasToken': True},
+        {'file': 'f 终末地.json', 'nickName': 'F', 'game': 'endfield', 'uid': '11',
+         'roleId': '222', 'serverId': '2', 'hasToken': True},
+    ]
+    tokens = {'a 官服.json': 'T1', 'b 官服.json': 'T2', 'c 终末地.json': 'T3',
+              'a-dup 官服.json': 'T1', 'no-token.json': '', 'bad 官服.json': 'BAD',
+              'bad2 官服.json': 'BAD', 'd 官服.json': 'T403', 'e 终末地.json': 'T4',
+              'f 终末地.json': 'T5'}
+
+    class FakeSk:
+        """假的森空岛客户端：记录请求，按 token 决定「今天签没签」"""
+
+        made = []
+        inst = {}
+
+        def __init__(self, token, log=None):
+            if token == 'BAD':
+                raise RuntimeError('token 无效')
+            FakeSk.made.append(token)
+            FakeSk.inst[token] = self
+            self.token = token
+            self.posts = []
+
+        def api_get(self, path, **kw):
+            if path.startswith(signin.EF_PATH):
+                assert kw.get('headers', {}).get('sk-game-role'), '终末地必须带 sk-game-role'
+                return {'code': 0, 'data': {'hasToday': self.token != 'T5'}}
+            return {'code': 0, 'data': {
+                'records': ([{'ts': str(int(now))}] if self.token == 'T2' else [])}}
+
+        def api_post(self, path, body=None, headers=None, **kw):
+            self.posts.append((path, body, headers))
+            if self.token == 'T403':
+                raise urllib.error.HTTPError('u', 403, 'Forbidden', None, None)
+            if path == signin.EF_PATH:
+                return {'code': 0, 'data': {
+                    'awardIds': [{'id': 'x'}],
+                    'resourceInfoMap': {'x': {'name': '折金票', 'count': 2000}}}}
+            return {'code': 0, 'data': {
+                'awards': [{'resource': {'name': '合成玉'}, 'count': 300}]}}
+
+    # 0) 纯函数：日期判定与终末地身份头
+    assert signin._is_today(now) is True, '今天的时间戳应该判成今天'
+    assert signin._is_today(now - 3 * 86400) is False, '三天前不是今天'
+    assert signin._is_today('') is False and signin._is_today('x') is False
+    h = signin._ef_headers({'roleId': '1', 'serverId': '2'})
+    assert h['sk-game-role'] == '3_1_2', h          # gameId_roleId_serverId
+    assert '/api/signin/run' in api.ROUTES, '签到接口没挂上 ROUTES'
+
+    orig_rows, orig_tok = accounts.list_accounts, accounts.token_for
+    orig_sk, orig_time = signin.skland.Skland, signin.time
+    try:
+        accounts.list_accounts = lambda: [dict(r) for r in rows]
+        accounts.token_for = lambda f: tokens.get(f, '')
+        signin.skland.Skland = FakeSk
+        signin.time = types.SimpleNamespace(sleep=lambda s: None)   # 别真睡 0.4 秒 × 10
+
+        res = signin.run('', log=lambda s: None)
+        c = res['counts']
+        assert c == {'ok': 2, 'already': 3, 'fail': 2, 'skip': 3}, c
+        assert len(res['items']) == len(rows), len(res['items'])
+
+        # 每个 token 只登录一次（a-dup 直接跳过，没有多登录一次 T1）
+        assert FakeSk.made == ['T1', 'T2', 'T3', 'T403', 'T4', 'T5'], FakeSk.made
+
+        # 方舟：POST {uid, gameId:1}
+        path, body, _h = FakeSk.inst['T1'].posts[-1]
+        assert path == signin.ARK_PATH and body == {'uid': '1', 'gameId': 1}, (path, body)
+
+        # 终末地：body 为空，身份在头上
+        path, body, hdr = FakeSk.inst['T5'].posts[-1]
+        assert path == signin.EF_PATH and body is None, (path, body)
+        assert hdr['sk-game-role'] == '3_222_2', hdr
+        assert hdr['Origin'] == 'https://game.skland.com/', hdr
+
+        # 今天签过的号不发签到请求
+        assert FakeSk.inst['T2'].posts == [], FakeSk.inst['T2'].posts
+
+        # 403 记成「已签到」而不是失败
+        states = {i['file']: i['state'] for i in res['items']}
+        assert states['d 官服.json'] == 'already', states
+        assert states['e 终末地.json'] == 'skip', states     # 缺 roleId
+        assert states['no-token.json'] == 'skip' and states['a-dup 官服.json'] == 'skip', states
+        assert states['bad 官服.json'] == 'fail', states
+
+        # 单号签到：只打这一个号
+        one = signin.run('a 官服.json', log=lambda s: None)
+        assert one['counts'] == {'ok': 1, 'already': 0, 'fail': 0, 'skip': 0}, one['counts']
+
+        # 不存在的账号要报错，而不是悄悄当全局签
+        try:
+            signin.run('不存在.json', log=lambda s: None)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('不存在的账号应该报错')
+    finally:
+        accounts.list_accounts, accounts.token_for = orig_rows, orig_tok
+        signin.skland.Skland, signin.time = orig_sk, orig_time
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -1664,6 +1792,7 @@ def main():
         r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
         r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
         r.check('B24 抽卡统计（星级归一/保底/池合并/终末地翻页/武器口径/跨游戏隔离）', lambda: check_gacha_stats(tmp))
+        r.check('B25 森空岛签到（两套口径/已签到判定/403/跳过/去重）', lambda: check_signin(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

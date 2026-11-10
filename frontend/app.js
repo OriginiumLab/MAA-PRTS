@@ -11,7 +11,8 @@ const S = {
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
-  module: 'copilot', // 当前模块：copilot / gacha（配置修改、签到还没做）
+  module: 'copilot', // 当前模块：copilot / gacha / signin（配置修改按需求去掉了）
+  signBusy: '',      // 正在跑哪一块签到：''/all/one——同一 token 并发签到会被风控，只能一个一个来
   gacha: null,       // /api/gacha 的最近一次响应（当前账号那份）
   gachaOf: {},       // file → 已加载过的抽卡视图：切账号/切菜单回来直接复用，不再转圈
   lastOfGame: { arknights: '', endfield: '' },  // 每栏上次看的是哪个号（切回这一栏时还原）
@@ -187,7 +188,7 @@ async function boot() {
     // ?mod=gacha 直接打开抽卡统计（做快捷方式用，和 ?q=TL-10 一样）
     // 其余情况模块显隐由 selectAccount → applyModuleAvailability 决定，别重复渲染
     const mod0 = new URLSearchParams(location.search).get('mod');
-    if (mod0 === 'gacha') setModule('gacha');
+    if (mod0 === 'gacha' || mod0 === 'signin') setModule(mod0);
     startPing();
     // 资源包后台自动更新：晚几秒，别和首屏渲染抢网络
     setTimeout(packAutoSync, 2500);
@@ -1763,11 +1764,13 @@ async function applyToMaa() {
   }
 }
 
-function pollTask(tid, root) {
+/* root 里放日志的容器：默认 #task-log；签到面板两块日志各有各的 id，
+   所以允许传 sel 指定（否则只能给两块日志复制一套轮询逻辑） */
+function pollTask(tid, root, sel) {
   return new Promise((resolve, reject) => {
     let since = 0;
     let done = false;
-    const box = root ? $('#task-log', root) : null;
+    const box = root ? $(sel || '#task-log', root) : null;
     const tick = async () => {
       if (done) return;
       try {
@@ -2916,8 +2919,12 @@ function currentGame() {
 
 function applyModuleAvailability() {
   const ef = currentGame() === 'endfield';
-  const ct = $('.modtab[data-mod="copilot"]');
-  if (ct) ct.hidden = ef;
+  // 终末地账号只留抽卡统计：作业获取、森空岛签到两枚 tab 都不显示
+  // （签到本身支持终末地，全局签到照样会签，只是不给终末地账号开这块界面）
+  ['copilot', 'signin'].forEach(m => {
+    const b = $('.modtab[data-mod="' + m + '"]');
+    if (b) b.hidden = ef;
+  });
   if (ef && S.module !== 'gacha') {
     S.gachaByGame = true;              // 终末地没有作业获取，只能看抽卡统计（记一笔是被账号逼的）
     setModule('gacha', true);
@@ -2928,25 +2935,91 @@ function applyModuleAvailability() {
     // 已经停在抽卡统计：换号就得重画（终末地之间互切也走这里，
     // 之前只判断了 !ef，结果终末地换号后还挂着上一个号的数据）
     renderGacha();
+  } else if (S.module === 'signin') {
+    renderSignin();                    // 签到面板上的「当前账号」跟着换
   }
 }
 
 function setModule(mod, byGame) {
   if (!byGame) S.gachaByGame = false;   // 用户自己点的模块，之后别被账号切走
-  if (mod === 'copilot' && currentGame() === 'endfield') mod = 'gacha';
+  if (mod !== 'gacha' && currentGame() === 'endfield') mod = 'gacha';
   S.module = mod;
   $$('.modtab').forEach(b => {
     const on = b.dataset.mod === mod && !b.disabled;
     b.classList.toggle('active', on);
     b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
-  const cp = $('#mod-copilot'), gg = $('#mod-gacha');
+  const cp = $('#mod-copilot'), gg = $('#mod-gacha'), sg = $('#mod-signin');
   if (cp) cp.hidden = mod !== 'copilot';
   if (gg) gg.hidden = mod !== 'gacha';
-  // 抽卡统计用不到右栏作业集：收掉第三列，主区拿满宽度
+  if (sg) sg.hidden = mod !== 'signin';
+  // 抽卡统计/签到都用不到右栏作业集：收掉第三列，主区拿满宽度
   $('#app').classList.toggle('no-basket', mod !== 'copilot');
   if (mod !== 'copilot') toggleBasket(false);
   if (mod === 'gacha') renderGacha();
+  if (mod === 'signin') renderSignin();
+}
+
+/* ------------------------------------------------------------ 森空岛签到 */
+function renderSignin() {
+  const acc = currentAccount();
+  const gname = a => (gameOf(a) === 'endfield' ? '终末地' : '明日方舟');
+  const sub = $('#sign-sub');
+  if (sub) sub.textContent = acc ? `${acc.nickName} · ${gname(acc)}` : '未选择账号';
+
+  const one = $('#sign-one-name');
+  if (one) {
+    one.textContent = acc
+      ? `${acc.nickName}（${gname(acc)}${acc.channelName ? ' · ' + acc.channelName : ''}）`
+      : '未选择账号';
+    one.title = (acc && !acc.hasToken) ? 'MAA 导入的账号没有森空岛 token，签不了' : '';
+  }
+
+  const withTok = S.accounts.filter(a => a.hasToken);
+  const note = $('#sign-all-note');
+  if (note) {
+    note.textContent = S.accounts.length
+      ? `所有账号 · 明日方舟 + 终末地（${withTok.length}/${S.accounts.length} 个有 token）`
+      : '还没有账号';
+  }
+
+  const bAll = $('#btn-sign-all'), bOne = $('#btn-sign-one');
+  if (bAll) bAll.disabled = !withTok.length || !!S.signBusy;
+  if (bOne) bOne.disabled = !acc || !acc.hasToken || !!S.signBusy;
+  const tip = $('#sign-tip');
+  if (tip) tip.textContent = S.signBusy ? '正在签到…' : '';
+}
+
+/* scope: 'all' 全部账号 / 'one' 当前账号。两块日志各写自己那块，互不覆盖 */
+async function signinRun(scope) {
+  if (S.signBusy) return;
+  const boxSel = scope === 'all' ? '#sign-log-all' : '#sign-log-one';
+  const box = $(boxSel);
+  if (!box) return;
+  if (scope === 'one' && !S.current) {
+    toast('先在左侧选一个账号', 'err');
+    return;
+  }
+  S.signBusy = scope;
+  box.innerHTML = '';
+  renderSignin();
+  try {
+    const { taskId } = await api('/api/signin/run', { file: scope === 'one' ? S.current : '' });
+    const res = (await pollTask(taskId, document, boxSel)) || {};
+    const c = res.counts || {};
+    const line = `成功 ${c.ok || 0} · 已签到 ${c.already || 0} · 失败 ${c.fail || 0}`;
+    toast('签到完成：' + line, c.fail ? 'err' : 'ok', 4200);
+  } catch (e) {
+    const d = document.createElement('div');
+    d.className = 'err';
+    d.textContent = '✗ ' + e.message;
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    toast('签到失败：' + e.message, 'err', 5000);
+  } finally {
+    S.signBusy = '';
+    renderSignin();
+  }
 }
 
 /* ------------------------------------------------------------ 抽卡统计 */
@@ -3218,6 +3291,10 @@ function bindGlobal() {
     setModule(b.dataset.mod);
   }));
   $('#btn-gacha-sync').addEventListener('click', gachaSync);
+
+  $('#btn-sign-all').addEventListener('click', () => signinRun('all'));
+
+  $('#btn-sign-one').addEventListener('click', () => signinRun('one'));
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);
   $('#btn-settings').addEventListener('click', openSettings);

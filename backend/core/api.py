@@ -8,7 +8,7 @@ import traceback
 import urllib.parse
 
 from . import (accounts, appupdate, copilot, gacha, maa, operbox, packsync,
-               paradox, resources, settings, sklogin, tasks, version)
+               paradox, resources, settings, signin, sklogin, tasks, version)
 
 WEB = settings.static_dir()
 
@@ -434,6 +434,17 @@ def api_gacha_sync(_q, body):
     return {'taskId': gacha.start_sync(file, token, meta)}
 
 
+def api_signin_run(_q, body):
+    """森空岛签到（后台任务，日志在前端面板里轮询）
+
+    body: {"file": "<账号文件>"} —— 空 / 不传 = 全部账号（明日方舟 + 终末地）
+    """
+    file = ((body or {}).get('file') or '').strip()
+    if file:
+        file = _account_for(file)
+    return {'taskId': signin.start(file)}
+
+
 def api_paradox_mark(_q, body):
     """记下这些悖论已经排进过 MAA，下次默认不勾"""
     body = body or {}
@@ -528,4 +539,5 @@ ROUTES = {
     '/api/paradox/mark': api_paradox_mark,
     '/api/gacha': api_gacha,
     '/api/gacha/sync': api_gacha_sync,
+    '/api/signin/run': api_signin_run,
 }

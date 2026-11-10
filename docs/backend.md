@@ -22,6 +22,7 @@
 | `core/operbox.py` | MAA 干员识别数据（`data/OperBoxData.json`）解析 → 账号练度导入 |
 | `core/skland.py` | 森空岛鉴权链：token → grant → cred → 签名请求 → 绑定/角色数据 |
 | `core/gacha.py` | 抽卡记录（明日方舟 / 终末地）：通行证 grant → 角色 token → 记录分页 → 本地增量缓存与统计 |
+| `core/signin.py` | 森空岛每日签到（明日方舟 / 终末地）：两套接口口径，先查状态再签，全局 / 单号两种跑法 |
 | `core/copilot.py` | 作业站接口 + 干员要求匹配算法 |
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
@@ -96,6 +97,7 @@ main()
 | GET | `/api/task?id=&since=` | 后台任务状态与增量日志（`since` 是日志游标） |
 | GET | `/api/gacha?file=` | 抽卡统计视图：读本地缓存算汇总（总抽数/星级/出率/保底），**不发网络请求** |
 | POST | `/api/gacha/sync` | 从森空岛拉抽卡记录并并入缓存（增量，按 `分类｜池｜干员｜时间戳｜pos` 去重）。返回 `taskId` |
+| POST | `/api/signin/run` | 森空岛签到：`{file}` 为空 = 全部账号（方舟 + 终末地），传账号文件 = 只签这一个。返回 `taskId`（日志在前端面板里刷） |
 | POST | `/api/export` | 导出「作业站本地导入」格式到 `config/作业站/`。**预留，无界面入口**（导出的只有干员练度，不含 token） |
 
 所有响应统一为 `{"ok": true, "data": ...}` 或 `{"ok": false, "error": "..."}`。
@@ -297,6 +299,44 @@ MAA 运行时会周期性回写配置文件，所以必须先关进程再改，�
 卡池按**最近一次抽卡时间倒序**排——正在抽/刚抽完的池子永远在最上面（角色池、
 武器池同一口径），同一分钟再按抽数多的在前，没有时间的池子垫底
 （`lastMs` 只用于排序，返回给前端前已 pop 掉）。
+
+## 森空岛签到（`signin.py`）
+
+和抽卡一样走 `core/skland.py` 的鉴权链（token → grant → cred → 签名），
+但**两个游戏的签到接口不是同一个**：
+
+```
+明日方舟  GET  /api/v1/game/attendance?uid=<uid>&gameId=1     查今天签没签
+          POST /api/v1/game/attendance  {"uid": "...", "gameId": 1}
+
+终末地    GET  /api/v1/game/endfield/attendance                 查 hasToday
+          POST /api/v1/game/endfield/attendance   （没有请求体）
+                 header  sk-game-role: 3_<roleId>_<serverId>   ← 身份全在头里
+```
+
+踩过的坑：
+
+- 终末地**不吃 uid**：拿 uid 去打 `/api/v1/game/attendance` 一律 **HTTP 403**，
+  必须换成 `/game/endfield/attendance` + `sk-game-role`（`gameId_roleId_serverId`，
+  gameId 就是 binding_list 里给的 3）；签名串里的 body 段是空的
+- 今天签过之后再 POST 返回的是 **HTTP 403**，不是 `code=10001` 这类业务错误。
+  所以先查状态（方舟看 `records[].ts` 有没有今天的日期、终末地看 `data.hasToday`）
+  再决定签不签；真撞上 403 记成「今天已签到」，别当失败吓人
+- 签到链的 403 不重试（`retries=1`）：重试只是多喂几次风控
+- 日期按**上海时区**比，不是「24 小时内」——早上 5 点签完，前一天签的还在窗口里
+- 一个 token 可能绑多个角色（官服 + B 服、方舟 + 终末地），按账号文件逐个签，
+  同一 `(游戏, uid)` 只签一次；同一个 token 只登录一次（坏的 token 也只撞一次）
+
+两种跑法（`run(file)`）：
+
+| 入口 | 范围 | 日志 |
+|---|---|---|
+| 全局签到 | 账号列表里所有账号，方舟 + 终末地一起签 | 每个号一行，最后一行汇总「成功 / 已签到 / 失败 / 跳过」 |
+| 单号签到 | 只签当前选中的这个账号（用它自己的 token） | 同一格式，只有这一个号 |
+
+跳过的三种情况：MAA 导入的账号没有 token、token 跨机器解不开、终末地账号缺 `roleId`/`serverId`
+（老版本建的终末地账号没有这两个字段，重新同步一次账号即可）。
+签到结果不落盘（只活在任务的日志里）——这是每天本来就该点一次的操作，不存历史反而省得纠结。
 
 ## 依赖
 

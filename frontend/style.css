@@ -370,13 +370,15 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 
 /* ============================================================ 模块菜单
    搜作业 / 抽卡统计 / 配置修改 / 签到 —— 放在账号卡与搜索框之间 */
+/* 模块菜单：比首版收一圈——它只是切换器的配角，别抢主区的视觉重量 */
 .modtabs {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 14px;
-  padding: 4px;
-  border-radius: 13px;
+  align-self: flex-start;          /* 不被 .main 的列宽拉满，按内容宽度排 */
+  gap: 2px;
+  margin-top: 10px;
+  padding: 3px;
+  border-radius: 11px;
   border: 1px solid var(--line);
   background: rgba(13, 16, 24, 0.55);
   flex: 0 0 auto;
@@ -387,16 +389,16 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .modtab {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 14px;
-  border-radius: 10px;
-  font-size: 12.5px;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--text-2);
   white-space: nowrap;
   transition: .16s ease;
 }
-.modtab svg { width: 15px; height: 15px; opacity: .8; flex: 0 0 auto; }
+.modtab svg { width: 13px; height: 13px; opacity: .8; flex: 0 0 auto; }
 .modtab:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 .modtab.active {
   color: #04120f;
@@ -408,10 +410,10 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .modtab[hidden] { display: none; }   /* 终末地账号：作业获取整个 tab 不显示 */
 .modtab.soon::after {
   content: "待做";
-  margin-left: 2px;
-  padding: 1px 5px;
-  border-radius: 5px;
-  font-size: 9.5px;
+  margin-left: 1px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 9px;
   font-weight: 500;
   letter-spacing: .3px;
   color: var(--text-3);
@@ -669,6 +671,55 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .gacha-log .err { color: var(--rose); }
 .gacha-log .ok { color: var(--mint); }
 
+/* ============================================================ 森空岛签到 */
+.sign-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+  padding: 2px 2px 12px;
+  flex: 0 0 auto;
+}
+.sign-title { font-size: 16px; font-weight: 650; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sign-title span { font-size: 12.5px; font-weight: 400; color: var(--text-3); }
+.sign-tools { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.sign-tip { font-size: 11.5px; color: var(--mint); white-space: nowrap; }
+.sign-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 2px 28px; }
+/* 两块并排：全局（左，宽一点） / 单号（右）；窄屏自动上下叠 */
+.sign-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 14px;
+  align-items: stretch;   /* 两块等高：左边说明多两行，右边的日志自己撑上去 */
+}
+@media (max-width: 980px) {
+  .sign-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.sign-card {
+  display: flex; flex-direction: column;
+  min-height: 0;
+  padding: 16px 17px 15px;
+  border-radius: 15px;
+  border: 1px solid var(--line);
+  background: linear-gradient(160deg, rgba(26, 31, 44, 0.78), rgba(15, 19, 27, 0.88));
+}
+.sign-card-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sign-card-head b { font-size: 14px; font-weight: 650; flex: 0 0 auto; }
+.sign-card-head span {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 11.5px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sign-desc { margin: 8px 0 0; font-size: 11.5px; line-height: 1.75; color: var(--text-3); }
+.sign-desc b { color: var(--text-2); font-weight: 600; }
+.sign-actions { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
+.primary-btn.sm { height: 34px; padding: 0 18px; border-radius: 9px; font-size: 12.5px; }
+/* 日志撑满卡片剩下的高度：全局签到一次十几行，别签完只看得到最后两行。
+   选择器带 .log-box 是为了压过后面那条 .log-box{max-height:240px}（同权重比源序） */
+.log-box.sign-log { flex: 1 1 auto; margin-top: 12px; height: auto; min-height: 258px; max-height: none; }
+.sign-log .sign-idle { color: var(--text-3); }
+
+@media (max-width: 1400px) {
+  .app.no-basket { grid-template-columns: 252px minmax(0, 1fr); }
+}
 @media (max-width: 1400px) {
   .app.no-basket { grid-template-columns: 252px minmax(0, 1fr); }
 }

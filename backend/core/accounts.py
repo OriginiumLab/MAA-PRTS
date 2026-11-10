@@ -56,6 +56,7 @@ def list_accounts():
             'alias': a.get('alias') or '',
             'channelName': a.get('channelName') or '',
             'roleId': a.get('roleId') or '',
+            'serverId': a.get('serverId') or '',   # 终末地签到要 gameId_roleId_serverId 三件套
             'level': a.get('level'),
             # 有没有可用的森空岛 token：抽卡统计/签到都要它，MAA 导入的账号没有
             'hasToken': bool((snap.get('skd') or {}).get('data')),
