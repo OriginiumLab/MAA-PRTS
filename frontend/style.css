@@ -468,6 +468,13 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .gacha-card.gold b { color: var(--star); }
 .gacha-card.mint b { color: var(--mint); }
 
+/* 终末地：官方记录接口只给最近一段，卡片下面直接说明，免得以为统计漏了 */
+.gacha-window {
+  margin: 9px 2px 0;
+  font-size: 11.5px; line-height: 1.7;
+  color: var(--text-3);
+}
+
 .gacha-sec { margin-top: 18px; }
 .gacha-sec-head {
   display: flex; align-items: baseline; gap: 8px;
@@ -538,6 +545,20 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   background: rgba(94, 234, 212, 0.12);
   border: 1px solid rgba(94, 234, 212, 0.24);
 }
+/* 终末地：武器申领的记录挂个小标签，和角色寻访区分开 */
+.gacha-tag {
+  flex: 0 0 auto;
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 9.5px; font-style: normal; font-weight: 600; line-height: 15px;
+  letter-spacing: .2px;
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.14);
+  vertical-align: 1px;
+}
+.six-name { display: flex; align-items: center; gap: 1px; flex: 0 0 150px; }
 .six-at { flex: 0 0 104px; text-align: right; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
 /* 最近记录表 */

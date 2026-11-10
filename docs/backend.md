@@ -251,19 +251,42 @@ MAA 运行时会周期性回写配置文件，所以必须先关进程再改，�
           → gacha/history?uid=&category=&size=&pos=&gachaTs=
           请求头 X-Role-Token + Cookie，两样都要
 
-终末地：  ef-webview.hypergryph.com/api/record/char?token=&lang=zh-cn&server_id=1&pool_type=
-          五类角色池枚举写死；武器申领（/api/record/weapon）暂未纳入统计
+终末地：  ef-webview.hypergryph.com/api/record/char?token=&lang=zh-cn&server_id=1&pool_type=&seq_id=
+          record/weapon?token=&lang=zh-cn&server_id=1&seq_id=      武器申领（不吃 pool_type）
 ```
 
 踩过的坑：
 
 - `gachaTs` 是 **13 位毫秒字符串**，分页游标要 `gachaTs` + `pos` 一起带；
   `hasMore=false` 才是到底
-- `size` 只认 1~100，传 500 不报错、直接返回空列表（静默截断）
-- 明日方舟 `rarity` 0 基（3 = 四星）；终末地没有实测样本，按「<6 视为 0 基」归一
+- 明日方舟 `size` 只认 1~100，传 500 不报错、直接返回空列表（静默截断）
+- 明日方舟 `rarity` 0 基（3 = 四星）；**终末地是 1 基**（3=三星 … 6=六星），
+  实测分布只出现 4/5/6，套明日方舟那套 +1 会把六星顶成七星——两套归一分开写
 - 终末地必须用绑定的 **uid** 调 `u8_token_by_uid`，传 `roleId` 报 109「角色不存在」
 - 记录只保留最近一段窗口，所以缓存要**只增不减**：每次按
   `分类｜池｜干员｜时间戳｜pos` 合并，旧记录留在本地
+
+### 终末地分页（2026-11 实测）
+
+- **必须传 `seq_id`**：不带游标时接口永远只返回最新 5 条，`hasMore` 还是 `true`；
+  `size` / `limit` / `pageSize` / `page` / `cursor` 全部被忽略，每页固定 5 条
+- `seq_id` 的语义是「取 seqId **小于**它的最近 5 条」，所以要拿上一页最后一条的
+  `seqId` 当下一页游标一路往前翻
+- 角色池枚举只认 5 个（Standard / Special / Beginner / Joint / Rerun），
+  其它值一律 `40000 Invalid pool_type`；庆典池之类的记录归在其中某一类里
+- 武器申领走 `/api/record/weapon`，**不吃 `pool_type`**（传什么都返回同一批），
+  记录序列空间与角色独立（`seqId` 各自计数），字段是 `weaponId` / `weaponName`
+- 非抽卡记录要过滤：`kind` 除 `draw` 之外还有 `gift_intel_book` 这种赠礼，
+  `rarity` 为空，混进统计会把出率算歪
+- 接口只保留最近窗口（实测老号：角色 400+ 抽、武器 160 抽），更早的拿不到。
+  增量同步用本地已存的最大 `seqId` 当断点（`stop_below`），没新抽卡时 6 个请求就回来
+
+### 统计口径
+
+- 明日方舟：全部记录一套口径
+- 终末地：**角色寻访与武器申领分开算**（角色六星约 1.9%、武器约 5%，混在一起
+  两头都不对），`char*` / `weapon*` 两组字段，`total` 仍是两者之和
+- 终末地记录没有 `pos` 字段，拿 `seqId` 当去重键里的「次序」（存进 `pos`）
 
 缓存落在 `config/gacha/<账号文件名>.json`（不碰账号 json）。统计口径：
 保底按**池子 id** 连续计数、出六星清零；展示按**池名**合并——「标准寻访」

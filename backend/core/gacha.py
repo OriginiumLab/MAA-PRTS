@@ -45,13 +45,15 @@ ARK_LOGIN_URL = 'https://ak.hypergryph.com/user/api/role/login'
 ARK_CATE_URL = 'https://ak.hypergryph.com/user/api/inquiry/gacha/cate'
 ARK_HIST_URL = 'https://ak.hypergryph.com/user/api/inquiry/gacha/history'
 EF_RECORD_URL = 'https://ef-webview.hypergryph.com/api/record/char'
+EF_WEAPON_URL = 'https://ef-webview.hypergryph.com/api/record/weapon'
 
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
 ARK_REFERER = {'Referer': 'https://ak.hypergryph.com/'}
 
-# 终末地角色池类型（枚举值由服务端校验，写错会 "Invalid pool_type"）
+# 终末地角色池类型（枚举值由服务端校验，写错会 40000 "Invalid pool_type"；
+# 实测只有这 5 个是合法值，庆典池等分类的抽卡都归在其中一类里）
 EF_CHAR_POOLS = (
     ('E_CharacterGachaPoolType_Standard', '常驻寻访'),
     ('E_CharacterGachaPoolType_Special', '限定寻访'),
@@ -59,8 +61,11 @@ EF_CHAR_POOLS = (
     ('E_CharacterGachaPoolType_Joint', '联合寻访'),
     ('E_CharacterGachaPoolType_Rerun', '复刻寻访'),
 )
+EF_WEAPON_CATEGORY = 'weapon'
 
-PAGE_SIZE = 100     # 上限；>100 服务端静默返回空列表
+PAGE_SIZE = 100     # 明日方舟上限；>100 服务端静默返回空列表
+
+CACHE_VERSION = 2   # v1 的终末地缓存只取了每池第一页、星级还错位，读到直接丢弃重建
 
 CN_RARITY = {6: '六星', 5: '五星', 4: '四星', 3: '三星', 2: '二星', 1: '一星'}
 
@@ -229,47 +234,115 @@ def _ark_norm(r: dict, category: str) -> dict:
 
 
 # ---------------------------------------------------------------- 终末地
-def ef_history(u8: str, log=None) -> list:
-    """终末地角色寻访记录：池类型是固定枚举，逐类拉（没有记录就是空列表）"""
-    out = []
-    for pool_type, label in EF_CHAR_POOLS:
-        q = urllib.parse.urlencode({'token': u8, 'lang': 'zh-cn',
-                                    'server_id': '1', 'pool_type': pool_type})
+def _ef_drain(url: str, params: dict, category: str, label: str, log=None,
+              stop_below: int = 0) -> list:
+    """终末地记录翻页：服务端每页固定 5 条，游标是上一页最后一条的 seqId
+
+    2026-11 实测：不传 `seq_id` 时永远只返回最新 5 条（hasMore=true 也没用），
+    `size` / `limit` / `pageSize` / `page` 全部被忽略；`seq_id` 表示「取 seqId
+    小于它的最近 5 条」。所以只能一页页往前翻，翻到 hasMore=false。
+
+    `stop_below` 是本地缓存里这一部分已有的最大 seqId：翻到它就停，增量同步
+    只发「新增那几页」的请求（不传则翻完整窗口）。
+    """
+    out, cursor, pages, t0 = [], None, 0, time.time()
+    while True:
+        q = dict(params)
+        if cursor is not None:
+            q['seq_id'] = cursor
         try:
-            d = _get_json(EF_RECORD_URL + '?' + q)
+            d = _get_json(url + '?' + urllib.parse.urlencode(q))
         except urllib.error.HTTPError:
-            continue                       # 该池类型不被接受：跳过，不拖垮整体
+            if log:
+                log('    %s：接口拒绝（HTTP）' % label)
+            break
         if d.get('code') != 0:
             if log:
                 log('    %s：%s' % (label, d.get('msg') or d.get('code')))
-            continue
-        rows = (d.get('data') or {}).get('list') or []
+            break
+        data = d.get('data') or {}
+        rows = data.get('list') or []
         for r in rows:
-            out.append(_ef_norm(r, pool_type, label))
-        if log and rows:
-            log('    %s：%d 条' % (label, len(rows)))
+            n = _ef_norm(r, category)
+            if n:
+                out.append(n)
+        pages += 1
+        cursor = rows[-1].get('seqId') if rows else None
+        if log and pages % 20 == 0:
+            log('    %s：已翻 %d 页…' % (label, pages))
+        if not rows or not data.get('hasMore') or not cursor or pages > 400:
+            break
+        if stop_below and str(cursor).isdigit() and int(cursor) <= stop_below:
+            break                      # 已接上本地缓存，更老的不必再拉
+    if log:
+        log('    %s：%d 条（%d 页，%.1f 秒）' % (label, len(out), pages, time.time() - t0))
     return out
 
 
-def _ef_norm(r: dict, pool_type: str, label: str) -> dict:
-    """终末地记录字段没有实测样本（本机号该游戏无抽卡），按常见命名兜底取值"""
-    ts = r.get('gachaTs') or r.get('ts') or r.get('time') or r.get('createTime') or ''
+def ef_history(u8: str, log=None, known: dict = None) -> list:
+    """终末地抽卡记录：角色寻访（5 个池类型）+ 武器申领
+
+    接口只保留最近一段窗口（实测角色约 400+ 抽、武器约 160 抽），更早的
+    拿不到——不是本地截断，是服务端本身就这么返回。本地缓存只增不减，
+    所以窗口滑走的旧记录不会丢。
+    """
+    known = known or {}
+    char_stop = int(known.get('char') or 0)
+    wp_stop = int(known.get('weapon') or 0)
+    out = []
+    for pool_type, label in EF_CHAR_POOLS:
+        out.extend(_ef_drain(EF_RECORD_URL,
+                             {'token': u8, 'lang': 'zh-cn', 'server_id': '1',
+                              'pool_type': pool_type},
+                             pool_type, label, log=log, stop_below=char_stop))
+    out.extend(_ef_drain(EF_WEAPON_URL,
+                         {'token': u8, 'lang': 'zh-cn', 'server_id': '1'},
+                         EF_WEAPON_CATEGORY, '武器申领', log=log, stop_below=wp_stop))
+    return out
+
+
+def _ef_norm(r: dict, category: str) -> dict:
+    """终末地记录 → 统一结构
+
+    实测字段（2026-11，角色）：
+        kind / poolId / poolName / nameText / charId / charName / rarity /
+        isFree / isNew / gachaTs / seqId
+    武器多两个 weaponId / weaponName / weaponType，poolId 长这样：
+    `weaponbox_1_6_1`（官方还有写成 `weponbox` 的池，拼写不一致，展示按池名合并）
+    """
+    kind = (r.get('kind') or 'draw').lower()
+    if kind != 'draw':
+        return {}                      # 赠礼（gift_intel_book）之类的非抽卡记录
+    seq = str(r.get('seqId') or '')
     return {
-        'category': pool_type,
-        'poolId': str(r.get('poolId') or r.get('poolType') or pool_type),
-        'poolName': ' '.join((r.get('poolName') or label).split()),
-        'charId': str(r.get('charId') or r.get('itemId') or r.get('id') or ''),
-        'charName': r.get('charName') or r.get('itemName') or r.get('name') or '?',
-        'rarity': _norm_rarity(r.get('rarity') or r.get('star')),
+        'category': category,
+        'kind': 'weapon' if category == EF_WEAPON_CATEGORY else 'char',
+        'poolId': str(r.get('poolId') or ''),
+        'poolName': ' '.join((r.get('poolName') or '未知寻访').split()),
+        'charId': str(r.get('charId') or r.get('weaponId') or ''),
+        'charName': (r.get('charName') or r.get('weaponName')
+                     or r.get('nameText') or '?'),
+        'rarity': _norm_ef_rarity(r.get('rarity')),
         'isNew': bool(r.get('isNew')),
-        'gachaTs': str(ts),
-        'pos': int(r.get('pos') or 0),
+        'isFree': bool(r.get('isFree')),
+        'gachaTs': str(r.get('gachaTs') or ''),
+        # 终末地没有 pos 字段，拿 seqId 当「同一秒内的次序」兼去重键
+        'pos': int(seq) if seq.isdigit() else 0,
     }
 
 
+def _norm_ef_rarity(v) -> int:
+    """终末地星级是 1 基（3=三星 … 6=六星），实测分布 4/5/6 —— 原样返回，
+    不能套明日方舟那套 +1（会把六星顶成七星、四星变五星）"""
+    try:
+        n = int(v or 0)
+    except Exception:
+        return 0
+    return n if 1 <= n <= 6 else 0
+
+
 def _norm_rarity(v) -> int:
-    """星级归一到 1~6：明日方舟 0 基（5 = 六星），终末地口径未知，
-    按「<6 视为 0 基」统一，6 原样保留"""
+    """明日方舟星级是 0 基（5 = 六星），统一 +1 到 1~6"""
     try:
         n = int(v or 0)
     except Exception:
@@ -290,9 +363,15 @@ def load_cache(file: str) -> dict:
     try:
         with open(cache_path(file), encoding='utf-8') as f:
             d = json.load(f)
-        return d if isinstance(d, dict) else {}
     except Exception:
         return {}
+    if not isinstance(d, dict):
+        return {}
+    # v1 的终末地缓存只取了每池第一页（5 条）、星级还错了一位，留着会污染统计：
+    # 读到就当没有，下次同步会整段重拉（明日方舟的 v1 缓存结构没问题，照用）
+    if str(d.get('game')) == 'endfield' and int(d.get('version') or 1) < CACHE_VERSION:
+        return {}
+    return d
 
 
 def _rec_key(r: dict) -> str:
@@ -305,7 +384,7 @@ def save_cache(file: str, meta: dict, records: list) -> None:
     path = cache_path(file)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     atomicio.dump_json(path, {
-        'version': 1,
+        'version': CACHE_VERSION,
         'updatedAt': _now(),
         'game': meta.get('game') or 'arknights',
         'uid': str(meta.get('uid') or ''),
@@ -339,12 +418,12 @@ def _lock_for(file: str):
         return _locks.setdefault(os.path.basename(file), threading.Lock())
 
 
-def fetch(token: str, game: str, uid: str, log=print) -> list:
-    """拉全部记录（不做缓存合并）"""
+def fetch(token: str, game: str, uid: str, log=print, known: dict = None) -> list:
+    """拉记录（不做缓存合并）。`known` 是本地已有记录的最大 seqId，用于增量"""
     grant = grant_token(token)
     u8 = role_token(grant, uid)
     if (game or 'arknights') == 'endfield':
-        return ef_history(u8, log=log)
+        return ef_history(u8, log=log, known=known)
     cookie = _ark_login(u8)
     cats = ark_categories(u8, cookie, uid)
     log('    寻访分类 %d 个：%s' % (len(cats), '、'.join(c['name'] for c in cats)))
@@ -362,7 +441,15 @@ def sync(file: str, token: str, meta: dict, log=print) -> dict:
         for r in old.get('records') or []:
             merged[_rec_key(r)] = r
         before = len(merged)
-        fresh = fetch(token, meta.get('game') or 'arknights', str(meta.get('uid') or ''), log=log)
+        # 终末地翻页成本高（每页固定 5 条）：拿本地已有的最大 seqId 做断点，
+        # 只有新抽卡才会真的翻页，重复同步基本是一两个请求就回来
+        known = {}
+        if (meta.get('game') or '') == 'endfield':
+            for r in merged.values():
+                k = 'weapon' if (r.get('kind') or 'char') == 'weapon' else 'char'
+                known[k] = max(known.get(k, 0), int(r.get('pos') or 0))
+        fresh = fetch(token, meta.get('game') or 'arknights', str(meta.get('uid') or ''),
+                      log=log, known=known)
         for r in fresh:
             merged[_rec_key(r)] = r
         records = sorted(merged.values(),
@@ -399,38 +486,27 @@ def start_sync(file: str, token: str, meta: dict) -> str:
 
 
 # ---------------------------------------------------------------- 统计
-def summarize(records: list) -> dict:
-    """把记录汇总成界面要的数字。口径说明：
+def _tally(rs: list) -> dict:
+    """单一口径的汇总：星级分布、六星记录、保底、距上次六星
 
     保底按 **池子（poolId）连续计数**：同池每抽 +1，出六星清零。抽卡记录本身
     只有最近一段窗口，窗口之前的历史拿不到，所以最早那几次六星的「垫抽数」
     是从窗口内开始算的下限，不是真实值——界面上有脚注说明。
     """
-    rs = sorted(records or [],
-                key=lambda r: (int(r.get('gachaTs') or 0), r.get('pos') or 0))
     by_rarity = {str(i): 0 for i in range(1, 7)}
-    counters, six, pools = {}, [], {}
+    counters, six = {}, []
     for r in rs:
         rar = int(r.get('rarity') or 0)
         if 1 <= rar <= 6:
             by_rarity[str(rar)] += 1
         pid = r.get('poolId') or r.get('category') or ''
-        pname = r.get('poolName') or '未知寻访'
-        # 保底按池子 id 计数（新一期同名牌会重置），展示按池名合并——
-        # 「标准寻访」在记录里会拆成好几期，按 id 分开展示等于同一名字刷屏
         counters[pid] = counters.get(pid, 0) + 1
-        p = pools.setdefault(pname, {
-            'poolId': pid, 'poolName': pname,
-            'count': 0, 'six': 0, 'lastTs': '',
-        })
-        p['count'] += 1
-        p['lastTs'] = _at(r.get('gachaTs')) or p['lastTs']
         if rar >= 6:
-            p['six'] += 1
             six.append({
                 'charName': r.get('charName') or '?',
                 'charId': r.get('charId') or '',
-                'poolName': pname,
+                'kind': r.get('kind') or 'char',
+                'poolName': r.get('poolName') or '未知寻访',
                 'poolId': pid,
                 'at': _at(r.get('gachaTs')),
                 'pity': counters[pid],
@@ -439,37 +515,87 @@ def summarize(records: list) -> dict:
             counters[pid] = 0
 
     total = len(rs)
-    six_count = by_rarity['6']
-    last_gap = 0
+    gap = 0
     for r in reversed(rs):
         if int(r.get('rarity') or 0) >= 6:
             break
-        last_gap += 1
+        gap += 1
+    six_count = by_rarity['6']
+    return {
+        'total': total,
+        'byRarity': by_rarity,
+        'sixCount': six_count,
+        'rate6': round(six_count / total, 4) if total else 0,
+        'avgPity': round(sum(s['pity'] for s in six) / len(six), 1) if six else 0,
+        'lastGap': gap,
+        'six': six,
+    }
+
+
+def summarize(records: list) -> dict:
+    """把记录汇总成界面要的数字
+
+    终末地的「武器申领」和角色寻访是两套保底与概率（实测角色 6 星约 1.9%、
+    武器约 5%），混在一起算出率会两头不讨好，所以两套口径都算：
+    `char*` 是角色寻访（明日方舟就是全部记录），`weapon*` 是武器申领。
+    `total` / `sixCount` / `rate6` 仍是全部记录，用于「按卡池」「最近记录」。
+    """
+    rs = sorted(records or [],
+                key=lambda r: (int(r.get('gachaTs') or 0), r.get('pos') or 0))
+    full = _tally(rs)
+    chars = [r for r in rs if (r.get('kind') or 'char') != 'weapon']
+    char = _tally(chars) if len(chars) != len(rs) else full
+    weapon = _tally([r for r in rs if (r.get('kind') or 'char') == 'weapon'])
+
+    # 按池名合并展示：明日方舟的「标准寻访」会拆成好几期，终末地武器池
+    # poolId 还有 `weponbox` / `weaponbox` 两种拼法，按 id 分等于同名刷屏
+    pools = {}
+    for r in rs:
+        pname = r.get('poolName') or '未知寻访'
+        p = pools.setdefault(pname, {
+            'poolId': r.get('poolId') or '', 'poolName': pname,
+            'count': 0, 'six': 0, 'lastTs': '',
+            'kind': r.get('kind') or 'char',
+        })
+        p['count'] += 1
+        p['lastTs'] = _at(r.get('gachaTs')) or p['lastTs']
+        if int(r.get('rarity') or 0) >= 6:
+            p['six'] += 1
 
     recent = []
     for r in reversed(rs[-200:]):
         recent.append({
             'charName': r.get('charName') or '?',
             'rarity': int(r.get('rarity') or 0),
+            'kind': r.get('kind') or 'char',
             'poolName': r.get('poolName') or '未知寻访',
             'at': _at(r.get('gachaTs')),
             'isNew': bool(r.get('isNew')),
         })
 
     return {
-        'total': total,
-        'byRarity': by_rarity,
-        'sixCount': six_count,
-        'fiveCount': by_rarity['5'],
-        'rate6': round(six_count / total, 4) if total else 0,
-        'avgPity': round(sum(s['pity'] for s in six) / len(six), 1) if six else 0,
-        'lastSixGap': last_gap,
+        'total': full['total'],
+        'byRarity': full['byRarity'],
+        'sixCount': full['sixCount'],
+        'fiveCount': full['byRarity']['5'],
+        'rate6': full['rate6'],
+        'avgPity': full['avgPity'],
+        'lastSixGap': full['lastGap'],
+        'charTotal': char['total'],
+        'charSix': char['sixCount'],
+        'charFive': char['byRarity']['5'],
+        'charRate6': char['rate6'],
+        'charAvgPity': char['avgPity'],
+        'charLastGap': char['lastGap'],
+        'weaponTotal': weapon['total'],
+        'weaponSix': weapon['sixCount'],
+        'weaponRate6': weapon['rate6'],
         'firstAt': _at(rs[0].get('gachaTs')) if rs else '',
         'lastAt': _at(rs[-1].get('gachaTs')) if rs else '',
-        'sixStars': list(reversed(six)),
+        'sixStars': list(reversed(full['six'])),
         'pools': sorted(pools.values(), key=lambda p: (-p['count'], p['poolName'])),
         'records': recent,
-        'hasSix': bool(six),
+        'hasSix': bool(full['six']),
     }
 
 

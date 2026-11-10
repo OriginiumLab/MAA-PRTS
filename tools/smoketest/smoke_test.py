@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1530,6 +1531,72 @@ def check_gacha_stats(tmp):
     # 6) 路由已注册（前端抽卡统计的入口）
     assert '/api/gacha' in api.ROUTES and '/api/gacha/sync' in api.ROUTES
 
+    # 7) 终末地星级是 1 基（4/5/6），不能套明日方舟那套 +1；非抽卡记录要丢掉
+    assert gacha._norm_ef_rarity(4) == 4 and gacha._norm_ef_rarity(6) == 6
+    assert gacha._norm_ef_rarity(None) == 0 and gacha._norm_ef_rarity(9) == 0
+    assert gacha._ef_norm({'kind': 'gift_intel_book', 'seqId': '9'}, 'C') == {}
+    w = gacha._ef_norm({'kind': 'draw', 'poolId': 'weaponbox_1_6_1', 'poolName': '篆玉申领',
+                        'weaponId': 'wpn_1', 'weaponName': '呼啸守卫', 'rarity': 6,
+                        'gachaTs': '1792038254646', 'seqId': '740'},
+                       gacha.EF_WEAPON_CATEGORY)
+    assert w['kind'] == 'weapon' and w['charName'] == '呼啸守卫' and w['charId'] == 'wpn_1', w
+    assert w['rarity'] == 6 and w['pos'] == 740, w
+
+    # 8) 终末地翻页：服务端只认 seq_id 游标（size/limit 全被忽略、每页固定 5 条），
+    #    不传游标就永远只拿到最新一页；stop_below 接上本地缓存要立刻停
+    calls = []
+
+    def _fake_get(url, headers=None, timeout=25):
+        q = dict(urllib.parse.parse_qsl(url.split('?', 1)[1]))
+        calls.append(q)
+        end = int(q.get('seq_id') or 21)
+        rows = [{'kind': 'draw', 'seqId': str(i), 'rarity': 4, 'poolId': 'p',
+                 'poolName': '池', 'gachaTs': str(1700000000000 + i)}
+                for i in range(end - 1, max(0, end - 6), -1)]
+        return {'code': 0, 'data': {'list': rows, 'hasMore': len(rows) >= 5}}
+
+    _orig_get = gacha._get_json
+    gacha._get_json = _fake_get
+    try:
+        full = gacha._ef_drain('http://x', {'token': 't'}, 'C', '测试')
+        assert len(full) == 20, len(full)              # seq 21..1 一路翻到底
+        assert calls[0].get('seq_id') is None, calls[0]
+        assert 'size' not in calls[0] and 'page' not in calls[0], calls[0]
+        assert len(calls) == 5, len(calls)
+        calls.clear()
+        part = gacha._ef_drain('http://x', {'token': 't'}, 'C', '测试', stop_below=17)
+        assert len(part) == 5 and len(calls) == 1, (len(part), len(calls))
+    finally:
+        gacha._get_json = _orig_get
+
+    # 9) 终末地两套口径：角色寻访与武器申领分开算（保底/出率不能混），总数是两者之和
+    ef_recs = [
+        {'category': 'c', 'kind': 'char', 'poolId': 'c1', 'poolName': '限定寻访',
+         'charName': '角色甲', 'rarity': 6, 'gachaTs': str(base + 1000), 'pos': 11},
+        {'category': 'c', 'kind': 'char', 'poolId': 'c1', 'poolName': '限定寻访',
+         'charName': '角色乙', 'rarity': 4, 'gachaTs': str(base + 2000), 'pos': 12},
+        {'category': 'w', 'kind': 'weapon', 'poolId': 'w1', 'poolName': '篆玉申领',
+         'charName': '武器甲', 'rarity': 6, 'gachaTs': str(base + 3000), 'pos': 21},
+    ]
+    s2 = gacha.summarize(ef_recs)
+    assert s2['total'] == 3 and s2['charTotal'] == 2 and s2['weaponTotal'] == 1, s2
+    assert s2['sixCount'] == 2 and s2['charSix'] == 1 and s2['weaponSix'] == 1, s2
+    assert s2['charRate6'] == 0.5 and s2['weaponRate6'] == 1.0, s2
+    assert {p['poolName']: p['kind'] for p in s2['pools']} == {
+        '限定寻访': 'char', '篆玉申领': 'weapon'}, s2['pools']
+
+    # 10) 旧版终末地缓存（version 1，只取了每池第一页且星级错位）直接作废重建
+    ef_path = gacha.cache_path('旧 终末地.json')
+    os.makedirs(os.path.dirname(ef_path), exist_ok=True)
+    with open(ef_path, 'w', encoding='utf-8') as f:
+        json.dump({'version': 1, 'game': 'endfield', 'uid': '9',
+                   'records': [_grec(base, 'P', '限定寻访', 5)]}, f)
+    assert gacha.load_cache('旧 终末地.json') == {}, 'v1 终末地缓存必须丢弃'
+    with open(ef_path, 'w', encoding='utf-8') as f:
+        json.dump({'version': 2, 'game': 'endfield', 'uid': '9',
+                   'records': [_grec(base, 'P', '限定寻访', 5)]}, f)
+    assert len(gacha.load_cache('旧 终末地.json').get('records') or []) == 1
+
 
 # ---------------------------------------------------------------- 入口
 def main():
@@ -1571,7 +1638,7 @@ def main():
         r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
         r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
         r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
-        r.check('B24 抽卡统计（星级归一/保底/池合并/跨游戏隔离）', lambda: check_gacha_stats(tmp))
+        r.check('B24 抽卡统计（星级归一/保底/池合并/终末地翻页/武器口径/跨游戏隔离）', lambda: check_gacha_stats(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

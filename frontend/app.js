@@ -3020,7 +3020,7 @@ function paintGacha(d) {
   const sixRows = (s.sixStars || []).slice(0, 40).map(x => `
     <div class="six-row">
       <span class="six-star">★★★★★★</span>
-      <span class="six-name">${esc(x.charName)}</span>
+      <span class="six-name">${esc(x.charName)}${x.kind === 'weapon' ? '<i class="gacha-tag">武器</i>' : ''}</span>
       <span class="six-pool" title="${esc(x.poolName)}">${esc(x.poolName)}</span>
       ${x.isNew ? '<span class="six-new">new</span>' : ''}
       <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
@@ -3029,30 +3029,44 @@ function paintGacha(d) {
 
   const poolRows = (s.pools || []).slice(0, 8).map(p => `
     <div class="six-row">
-      <span class="six-name" style="color:var(--text)">${esc(p.poolName)}</span>
+      <span class="six-name" style="color:var(--text)">${esc(p.poolName)}${p.kind === 'weapon' ? '<i class="gacha-tag">武器</i>' : ''}</span>
       <span class="six-pool">最近 ${esc(p.lastTs)}</span>
       <span class="six-pity">${p.count} 抽 · 六星 <b>${p.six}</b></span>
     </div>`).join('');
 
   const recRows = (s.records || []).slice(0, 60).map(r => `
     <tr>
-      <td class="c-name r${r.rarity}">${esc(r.charName)}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
+      <td class="c-name r${r.rarity}">${esc(r.charName)}${r.kind === 'weapon' ? '<i class="gacha-tag">武器</i>' : ''}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
       <td class="c-dim">${'★'.repeat(Math.max(1, Math.min(6, r.rarity || 1)))}</td>
       <td class="c-dim">${esc(r.poolName)}</td>
       <td>${esc(r.at)}</td>
     </tr>`).join('');
 
+  // 终末地的武器申领和角色寻访是两套保底与概率（实测角色约 1.9%、武器约 5%），
+  // 混在一起算出率会两头都不对，所以有武器记录时拆成两张卡片分开报
+  const ef = d.game === 'endfield';
+  const withWeapon = ef && (s.weaponTotal || 0) > 0;
+  const cards = withWeapon
+    ? `<div class="gacha-card"><b>${s.charTotal}</b><span>角色寻访（抽）</span></div>
+       <div class="gacha-card gold"><b>${s.charSix}</b><span>角色六星</span></div>
+       <div class="gacha-card mint"><b>${fmtPct(s.charRate6)}</b><span>六星出率</span></div>
+       <div class="gacha-card"><b>${s.charAvgPity || '—'}</b><span>平均出六星（抽）</span></div>
+       <div class="gacha-card"><b>${s.charLastGap}</b><span>距上次六星（抽）</span></div>
+       <div class="gacha-card"><b>${s.weaponTotal}</b><span>武器申领（抽）</span></div>
+       <div class="gacha-card gold"><b>${s.weaponSix}</b><span>武器六星</span></div>`
+    : `<div class="gacha-card"><b>${s.total}</b><span>总抽卡</span></div>
+       <div class="gacha-card gold"><b>${s.sixCount}</b><span>六星</span></div>
+       <div class="gacha-card mint"><b>${fmtPct(s.rate6)}</b><span>六星出率</span></div>
+       <div class="gacha-card"><b>${s.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
+       <div class="gacha-card"><b>${s.lastSixGap}</b><span>距上次六星（抽）</span></div>`;
+
   body.innerHTML = `
-    <div class="gacha-cards">
-      <div class="gacha-card"><b>${s.total}</b><span>总抽卡</span></div>
-      <div class="gacha-card gold"><b>${s.sixCount}</b><span>六星</span></div>
-      <div class="gacha-card mint"><b>${fmtPct(s.rate6)}</b><span>六星出率</span></div>
-      <div class="gacha-card"><b>${s.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
-      <div class="gacha-card"><b>${s.lastSixGap}</b><span>距上次六星（抽）</span></div>
-    </div>
+    <div class="gacha-cards">${cards}</div>
+    ${ef ? `<div class="gacha-window">官方记录接口只保留最近一段：角色 ${s.charTotal} 抽 · 武器 ${s.weaponTotal} 抽。
+      更早的记录接口不返回，所以这里比实际总抽数少（不是统计漏了）。</div>` : ''}
 
     <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>星级分布</b><span>${esc(s.firstAt)} — ${esc(s.lastAt)}</span></div>
+      <div class="gacha-sec-head"><b>星级分布</b><span>${withWeapon ? '角色 + 武器（全部记录）· ' : ''}${esc(s.firstAt)} — ${esc(s.lastAt)}</span></div>
       <div class="rar-bars">${bars}</div>
     </div>
 
@@ -3069,7 +3083,7 @@ function paintGacha(d) {
     <div class="gacha-sec">
       <div class="gacha-sec-head"><b>最近记录</b><span>最新在前${s.total > 60 ? `，只列最近 60 条（共 ${s.total} 条）` : ''}</span></div>
       <table class="rec-table">
-        <thead><tr><th>干员</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
+        <thead><tr><th>${ef ? '角色/武器' : '干员'}</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
         <tbody>${recRows}</tbody>
       </table>
     </div>
@@ -3077,7 +3091,10 @@ function paintGacha(d) {
     <div class="gacha-note">
       ! 保底按卡池连续计数（同池每抽 +1，出六星清零）；抽卡记录只保留最近一段窗口，
       最早几次六星的「第几抽」只是窗口内的下限，不是真实垫抽数。
-      ${d.game === 'endfield' ? '终末地只统计角色寻访，武器申领未纳入。' : ''}
+      ${ef && withWeapon
+        ? `终末地的记录接口同样只给最近一段：角色寻访 ${s.charTotal} 抽、武器申领 ${s.weaponTotal} 抽，更早的拉不到。
+           上面卡片的出率 / 平均 / 距上次只按角色寻访算（武器是另一套保底）。`
+        : (ef ? '终末地只统计角色寻访，武器申领未纳入。' : '')}
     </div>
   `;
 }
