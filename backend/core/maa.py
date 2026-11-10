@@ -288,6 +288,23 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
     if not profile or profile not in configs:
         raise ValueError('配置「%s」不存在，可选：%s' % (profile, ', '.join(configs)))
 
+    # 取齐所有作业再关 MAA（#53 的原则推进一步）：加入作业集时大多已预下载好
+    # （copilot.prepare），还在途的等它做完，没预到的现场下载。放在关进程之前，
+    # 下载卡住或失败时用户的 MAA 不白关；MAA 关闭到重启之间只剩写文件写配置。
+    fetched = {}   # copilotId → (content, flags, stage_name)，普通/突袭两行共用一份不重复取
+    for idx, it in enumerate(items, 1):
+        cid = int(it['copilotId'])
+        if cid in fetched:
+            continue
+        content, flags, sname, notes, pre = copilot.fetch_prepared(cid)
+        log('[%d/%d] %s #%s %s' % (idx, len(items),
+            '取预下载的作业' if pre else '下载作业', cid, it.get('title') or ''))
+        for n in notes:
+            log('    修正：%s' % n)
+        fetched[cid] = (content, flags, sname)
+    if fetched:
+        log('作业已就绪 %d 份' % len(fetched))
+
     want = os.path.normcase(os.path.normpath(d))
     rows = list_running()
     mine = next((r for r in rows if _dir_of(r) == want), None)
@@ -330,29 +347,23 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
 
     old = list(cop.get('TaskList') or []) if mode == 'append' else []
     new_entries, files = [], []
-    # copilotId → (文件名, flags, stage_name)，同一份作业被普通/突袭两行各加一次时不重复下载
-    cache = {}
+    # copilotId → (文件名, flags, stage_name)：同一份作业被普通/突袭两行各加一次时只落一次盘
+    fname_cache = {}
 
     for idx, it in enumerate(items, 1):
         cid = int(it['copilotId'])
         stage_code = it.get('stageCode') or str(cid)
-        if cid in cache:
-            fname, flags, sname = cache[cid]
-            log('[%d/%d] 复用已下载的作业 #%s %s' % (idx, len(items), cid, it.get('title') or ''))
+        if cid in fname_cache:
+            fname, flags, sname = fname_cache[cid]
+            log('[%d/%d] 复用已就绪的作业 #%s %s' % (idx, len(items), cid, it.get('title') or ''))
         else:
-            log('[%d/%d] 下载作业 #%s %s' % (idx, len(items), cid, it.get('title') or ''))
-            content = copilot.download_content(cid)
-            content, notes = copilot.normalize_for_maa(content)
-            for n in notes:
-                log('    修正：%s' % n)
-            flags = copilot.difficulty_flags(content)
-            sname = content.get('stage_name') or ''
+            content, flags, sname = fetched[cid]
             fname = '%s_%s.json' % (_safe(stage_code), cid)
             os.makedirs(_copilot_dir(d), exist_ok=True)
             fpath = os.path.join(_copilot_dir(d), fname)
             with io.open(fpath, 'w', encoding='utf-8') as f:
                 json.dump(content, f, ensure_ascii=False, indent=2)
-            cache[cid] = (fname, flags, sname)
+            fname_cache[cid] = (fname, flags, sname)
         if fname not in files:
             files.append(fname)
 
