@@ -13,7 +13,14 @@ const S = {
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
   module: 'copilot', // 当前模块：copilot / gacha（配置修改、签到还没做）
   gacha: null,       // /api/gacha 的最近一次响应
+  sideGame: 'arknights',   // 左侧账号列表当前看哪一栏：arknights / endfield
+  gachaByGame: false,      // 抽卡统计是因为选中终末地账号才打开的（切回方舟时自动回作业获取）
 };
+
+/* 账号属于哪个游戏（老账号没有 game 字段，一律当明日方舟） */
+function gameOf(a) {
+  return (a && a.game === 'endfield') ? 'endfield' : 'arknights';
+}
 
 /* ------------------------------------------------------ 黑名单（干员 / 作者 / 作业）
    干员黑名单是纯显示层过滤：比对结论（可直接抄 / 差一人 / 需练度）不变，
@@ -165,6 +172,8 @@ async function boot() {
     S.gamedata = d.gamedata || {};
     S.setup = d.setup || {};
     S.current = d.lastAccount || (d.accounts[0] && d.accounts[0].file) || '';
+    // 左侧默认停在当前账号那一栏（上次用的是终末地就停在终末地）
+    S.sideGame = gameOf(d.accounts.find(a => a.file === S.current) || d.accounts[0]);
     $('#basket-autostart').checked = S.settings.autoStartMaa !== false;   // 设置里的默认开关真正生效
     renderAccounts();
     renderUpdate();
@@ -207,13 +216,51 @@ function startPing() {
 }
 
 /* ------------------------------------------------------------ 账号 */
+/* 侧栏顶部两个分组标签（明日方舟 / 终末地）：数量实时跟着 S.accounts 走。
+   某一组没有账号时标签照样在（点了给空态提示），不然会让人以为账号丢了。 */
+function renderGameSwitch() {
+  const box = $('#game-switch');
+  if (!box) return;
+  const n = { arknights: 0, endfield: 0 };
+  S.accounts.forEach(a => { n[gameOf(a)] += 1; });
+  $$('.gswitch', box).forEach(b => {
+    const g = b.dataset.game, on = g === S.sideGame;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    const c = $('.gcount', b);
+    if (c) c.textContent = n[g];
+  });
+}
+
+/* 切换分组：当前选中的账号不在这一组时，顺手选这组的第一个，
+   否则左边是终末地、右边主区还挂着方舟账号，看着对不上。 */
+function setSideGame(g) {
+  if (g !== 'arknights' && g !== 'endfield') return;
+  const changed = S.sideGame !== g;
+  S.sideGame = g;
+  const cur = currentAccount();
+  if (changed && S.current && gameOf(cur) !== g) {
+    const first = S.accounts.find(a => gameOf(a) === g);
+    if (first) { selectAccount(first.file); return; }   // selectAccount 里会重建列表
+  }
+  renderAccounts();
+}
+
 function renderAccounts() {
   const box = $('#account-list');
+  renderGameSwitch();
   if (!S.accounts.length) {
     box.innerHTML = '<div style="padding:14px 10px;font-size:12px;color:var(--text-3);line-height:1.8">还没有账号<br>点下面的按钮用森空岛 token 添加</div>';
     return;
   }
-  box.innerHTML = S.accounts.map(a => {
+  const list = S.accounts.filter(a => gameOf(a) === S.sideGame);
+  if (!list.length) {
+    box.innerHTML = S.sideGame === 'endfield'
+      ? '<div style="padding:14px 10px;font-size:12px;color:var(--text-3);line-height:1.8">这一栏还没有终末地账号<br>用森空岛 token 同步账号时，token 绑定了终末地角色就会自动生成</div>'
+      : '<div style="padding:14px 10px;font-size:12px;color:var(--text-3);line-height:1.8">这一栏还没有明日方舟账号<br>点下面的按钮用森空岛 token 添加</div>';
+    return;
+  }
+  box.innerHTML = list.map(a => {
     const st = a.stats || {};
     const ef = a.game === 'endfield';                 // 终末地：没有练度数据，副标题换口径
     const cls = ef ? 'ef' : (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
@@ -242,12 +289,18 @@ function bindAccountOrder(box) {
   let dragEl = null;
 
   const saveOrder = async () => {
-    const files = $$('.acct', box).map(b => b.dataset.file);
+    // 列表里只有当前分组（明日方舟或终末地）。把这一组的新序填回原位，
+    // 另一组的位置保持不动——否则拖一次就把另一组的排序整体冲掉了
+    const moved = $$('.acct', box).map(b => b.dataset.file);
+    const pick = new Set(moved);
+    let k = 0;
+    const order = S.accounts.map(a => (pick.has(a.file) ? moved[k++] : a.file));
+    const byFile = new Map(S.accounts.map(a => [a.file, a]));
     // 内存数组同步成新序——否则下一次 renderAccounts（点选别的账号就会触发）
     // 还按旧序重建，界面看起来像「拖完又弹回去」
-    S.accounts = files.map(f => S.accounts.find(a => a.file === f)).filter(Boolean);
+    S.accounts = order.map(f => byFile.get(f)).filter(Boolean);
     try {
-      await saveSettings({ accountOrder: files });
+      await saveSettings({ accountOrder: order });
     } catch (e) { /* 保存失败不回滚视觉顺序，刷新后会还原 */ }
   };
 
@@ -292,6 +345,9 @@ async function selectAccount(file, silent) {
   const prev = S.current;
   const changed = S.current && S.current !== file;
   S.current = file;
+  // 选中的账号在哪一栏，左侧就切到哪一栏（新加/刚同步出来的账号可能属于另一组）
+  const acc0 = S.accounts.find(a => a.file === file);
+  if (acc0) S.sideGame = gameOf(acc0);
   renderAccounts();
   if (changed && S.basket.length) {
     S.basket = [];
@@ -2850,11 +2906,19 @@ function applyModuleAvailability() {
   const ef = currentGame() === 'endfield';
   const ct = $('.modtab[data-mod="copilot"]');
   if (ct) ct.hidden = ef;
-  if (ef && S.module !== 'gacha') setModule('gacha');
-  else if (!ef && S.module === 'gacha') renderGacha();
+  if (ef && S.module !== 'gacha') {
+    S.gachaByGame = true;              // 终末地没有作业获取，只能看抽卡统计（记一笔是被账号逼的）
+    setModule('gacha', true);
+  } else if (!ef && S.gachaByGame) {
+    S.gachaByGame = false;             // 从终末地切回方舟：别把人留在抽卡统计里，回作业获取
+    setModule('copilot', true);
+  } else if (!ef && S.module === 'gacha') {
+    renderGacha();
+  }
 }
 
-function setModule(mod) {
+function setModule(mod, byGame) {
+  if (!byGame) S.gachaByGame = false;   // 用户自己点的模块，之后别被账号切走
   if (mod === 'copilot' && currentGame() === 'endfield') mod = 'gacha';
   S.module = mod;
   $$('.modtab').forEach(b => {
@@ -3067,6 +3131,10 @@ function bindGlobal() {
     }
   });
   bindAccountOrder($('#account-list'));
+  $('#game-switch').addEventListener('click', e => {
+    const b = e.target.closest('.gswitch');
+    if (b) setSideGame(b.dataset.game);
+  });
   $$('.modtab').forEach(b => b.addEventListener('click', () => {
     if (b.disabled) return;
     setModule(b.dataset.mod);

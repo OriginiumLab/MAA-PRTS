@@ -96,10 +96,53 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .brand-text span { font-size: 11px; color: var(--text-3); letter-spacing: 1.4px; }
 
 .side-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 8px 8px;
-  font-size: 11px; letter-spacing: 1.5px; color: var(--text-3); text-transform: uppercase;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 2px 10px;
 }
+
+/* 分组切换（明日方舟 / 终末地）：两枚小标签，各带账号数。
+   数量为 0 也留着，点了给空态说明，免得以为账号丢了。 */
+.game-switch {
+  flex: 1; min-width: 0;
+  display: flex; gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.035);
+}
+.gswitch {
+  flex: 1; min-width: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 26px; padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .2px;
+  color: var(--text-3);
+  transition: .15s ease;
+}
+.gswitch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gswitch .gcount {
+  flex: 0 0 auto;
+  min-width: 15px; padding: 0 3px;
+  border-radius: 5px;
+  font-size: 10px; font-weight: 600; line-height: 14px;
+  text-align: center;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.07);
+}
+.gswitch:hover { color: var(--text-2); background: rgba(255, 255, 255, 0.05); }
+.gswitch.active {
+  color: #071410;
+  background: linear-gradient(140deg, var(--mint), #4fd7c8);
+  box-shadow: 0 6px 16px -10px rgba(94, 234, 212, 0.9);
+}
+.gswitch.active .gcount { color: #071410; background: rgba(4, 20, 16, 0.16); }
+/* 终末地那枚用紫青渐变，和终末地账号的头像同一套颜色 */
+.gswitch[data-game="endfield"].active {
+  color: #0b1020;
+  background: linear-gradient(140deg, #a78bfa, #38bdf8);
+  box-shadow: 0 6px 16px -10px rgba(167, 139, 250, 0.9);
+}
+.gswitch[data-game="endfield"].active .gcount { color: #0b1020; background: rgba(11, 16, 32, 0.16); }
 
 .icon-btn {
   width: 32px; height: 32px; border-radius: 9px;
@@ -1399,6 +1442,9 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   .main { padding: 14px 12px 0; }
   .brand { padding: 0 4px 14px; }
   .brand-mark { width: 34px; height: 34px; border-radius: 10px; }
+  /* 侧栏只剩 182px：分组标签收紧一点，别把「明日方舟」挤成省略号 */
+  .gswitch { font-size: 11px; gap: 3px; padding: 0 4px; }
+  .gswitch .gcount { min-width: 13px; padding: 0 2px; font-size: 9.5px; }
 }
 
 /* ============================================================

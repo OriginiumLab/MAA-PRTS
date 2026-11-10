@@ -24,7 +24,14 @@
     </div>
 
     <div class="side-head">
-      <span>账号</span>
+      <div class="game-switch" id="game-switch" role="tablist" aria-label="账号分组">
+        <button class="gswitch active" data-game="arknights" role="tab" aria-selected="true">
+          <span>明日方舟</span><b class="gcount">0</b>
+        </button>
+        <button class="gswitch" data-game="endfield" role="tab" aria-selected="false">
+          <span>终末地</span><b class="gcount">0</b>
+        </button>
+      </div>
       <button class="icon-btn small" id="btn-refresh-all" title="同步全部账号（tokens.txt）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
           <path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>
