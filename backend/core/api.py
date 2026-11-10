@@ -7,8 +7,8 @@ import os
 import traceback
 import urllib.parse
 
-from . import (accounts, appupdate, copilot, maa, operbox, packsync, paradox,
-               resources, settings, sklogin, tasks, version)
+from . import (accounts, appupdate, copilot, gacha, maa, operbox, packsync,
+               paradox, resources, settings, sklogin, tasks, version)
 
 WEB = settings.static_dir()
 
@@ -405,6 +405,35 @@ def api_paradox_pick(_q, body):
     return res
 
 
+def _gacha_ctx(file):
+    """抽卡要用到的三样东西：账号快照、游戏/uid 元信息、解密后的 token"""
+    snap = accounts.get_account(file)
+    a = snap.get('account') or {}
+    meta = {
+        'game': a.get('game') or 'arknights',
+        'uid': str(a.get('uid') or ''),
+        'nickName': a.get('nickName') or os.path.splitext(file)[0],
+    }
+    return snap, meta, accounts.token_for(file)
+
+
+def api_gacha(q, _body):
+    """抽卡统计视图（只读缓存，不发网络请求）"""
+    file = _account_for(q.get('file'))
+    _snap, meta, token = _gacha_ctx(file)
+    return gacha.view(file, token, meta)
+
+
+def api_gacha_sync(_q, body):
+    """同步抽卡记录（后台任务，前端轮询 /api/task）"""
+    file = _account_for((body or {}).get('file'))
+    _snap, meta, token = _gacha_ctx(file)
+    if not token:
+        raise ValueError('该账号没有森空岛 token（MAA 导入的账号读不到抽卡记录），'
+                         '请用「添加账号 → 森空岛 token」重新同步一次')
+    return {'taskId': gacha.start_sync(file, token, meta)}
+
+
 def api_paradox_mark(_q, body):
     """记下这些悖论已经排进过 MAA，下次默认不勾"""
     body = body or {}
@@ -497,4 +526,6 @@ ROUTES = {
     '/api/paradox/plan': api_paradox_plan,
     '/api/paradox/pick': api_paradox_pick,
     '/api/paradox/mark': api_paradox_mark,
+    '/api/gacha': api_gacha,
+    '/api/gacha/sync': api_gacha_sync,
 }

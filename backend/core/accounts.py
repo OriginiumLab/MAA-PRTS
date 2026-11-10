@@ -51,10 +51,14 @@ def list_accounts():
         out.append({
             'file': name,
             'uid': str(a.get('uid')),
+            'game': a.get('game') or 'arknights',   # 终末地账号没有练度段，界面要分开渲染
             'nickName': a.get('nickName') or name,
             'alias': a.get('alias') or '',
             'channelName': a.get('channelName') or '',
+            'roleId': a.get('roleId') or '',
             'level': a.get('level'),
+            # 有没有可用的森空岛 token：抽卡统计/签到都要它，MAA 导入的账号没有
+            'hasToken': bool((snap.get('skd') or {}).get('data')),
             'secretary': a.get('secretary') or {},
             'maaProfile': (snap.get('maa') or {}).get('profile') or '',
             'maaDir': (snap.get('maa') or {}).get('dir') or '',
@@ -114,6 +118,8 @@ def account_detail(file: str) -> dict:
     return {
         'file': file,
         'account': a,
+        'game': a.get('game') or 'arknights',
+        'hasToken': bool((snap.get('skd') or {}).get('data')),
         'stats': s,
         'preferAlgo': snap.get('preferAlgo') or 'rating',
         'missing': snap.get('missing') or [],
@@ -302,6 +308,25 @@ def load_tokens() -> list:
             warns.append('%s 不是有效的加密 token 文件，已忽略' % os.path.basename(path))
     TOKENS_WARNINGS = warns
     return items
+
+
+def token_for(file: str) -> str:
+    """取该账号文件里保存的森空岛 token（明文）；没有/解不开返回 ''
+
+    抽卡统计、签到这类「按账号发请求」的功能要它。密文是本机 DPAPI 加密的，
+    换电脑后解不开是常态，调用方按「没有 token」处理并提示重新粘贴。
+    """
+    try:
+        snap = get_account(file)
+    except Exception:
+        return ''
+    skd = snap.get('skd') or {}
+    if not isinstance(skd, dict) or not skd.get('data'):
+        return ''
+    try:
+        return vault.unprotect(base64.b64decode(skd.get('data'))).decode('utf-8')
+    except Exception:
+        return ''
 
 
 # 启动自检把读不开的条目原因存这里，main 起来后写进 app.log

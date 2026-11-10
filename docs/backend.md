@@ -21,6 +21,7 @@
 | `core/updater.py` | token → 账号配置的完整构建（练度、缺卡、统计、增量对比） |
 | `core/operbox.py` | MAA 干员识别数据（`data/OperBoxData.json`）解析 → 账号练度导入 |
 | `core/skland.py` | 森空岛鉴权链：token → grant → cred → 签名请求 → 绑定/角色数据 |
+| `core/gacha.py` | 抽卡记录（明日方舟 / 终末地）：通行证 grant → 角色 token → 记录分页 → 本地增量缓存与统计 |
 | `core/copilot.py` | 作业站接口 + 干员要求匹配算法 |
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
@@ -93,6 +94,8 @@ main()
 | POST | `/api/maa/clear` | 清空某配置的 `Copilot.TaskList`。**预留，无界面入口** |
 | GET | `/api/maa/tasklist?profile=` | 读 MAA 某配置当前的 `TaskList`。**预留，无界面入口** |
 | GET | `/api/task?id=&since=` | 后台任务状态与增量日志（`since` 是日志游标） |
+| GET | `/api/gacha?file=` | 抽卡统计视图：读本地缓存算汇总（总抽数/星级/出率/保底），**不发网络请求** |
+| POST | `/api/gacha/sync` | 从森空岛拉抽卡记录并并入缓存（增量，按 `分类｜池｜干员｜时间戳｜pos` 去重）。返回 `taskId` |
 | POST | `/api/export` | 导出「作业站本地导入」格式到 `config/作业站/`。**预留，无界面入口**（导出的只有干员练度，不含 token） |
 
 所有响应统一为 `{"ok": true, "data": ...}` 或 `{"ok": false, "error": "..."}`。
@@ -231,6 +234,40 @@ taskkill MAA.exe
 MAA 自己和用户手写的 `.bak` / `.bak-auto` / `.bak-before-xxx` 一律不碰。
 
 MAA 运行时会周期性回写配置文件，所以必须先关进程再改，否则改动会被覆盖。
+
+## 抽卡记录（`gacha.py`）
+
+两条游戏共用同一套通行证，只有「角色 token 之后的最后一段」不一样：
+
+```
+森空岛 token
+  └─ grant  POST as.hypergryph.com/user/oauth2/v2/grant
+            {appCode: be36d44aa36bfb5b, token, type: 1}   ← 两游戏共用，写 endfield 会 400
+      ├─ binding_list?token=<grant>&appCode=arknights|endfield   → 角色 uid
+      └─ u8_token_by_uid {uid, token: grant}                     → 角色 token（u8）
+
+明日方舟：role/login → Set-Cookie ak-user-center
+          → gacha/cate?uid=            分类是动态的，只能查（限定/标准/中坚…）
+          → gacha/history?uid=&category=&size=&pos=&gachaTs=
+          请求头 X-Role-Token + Cookie，两样都要
+
+终末地：  ef-webview.hypergryph.com/api/record/char?token=&lang=zh-cn&server_id=1&pool_type=
+          五类角色池枚举写死；武器申领（/api/record/weapon）暂未纳入统计
+```
+
+踩过的坑：
+
+- `gachaTs` 是 **13 位毫秒字符串**，分页游标要 `gachaTs` + `pos` 一起带；
+  `hasMore=false` 才是到底
+- `size` 只认 1~100，传 500 不报错、直接返回空列表（静默截断）
+- 明日方舟 `rarity` 0 基（3 = 四星）；终末地没有实测样本，按「<6 视为 0 基」归一
+- 终末地必须用绑定的 **uid** 调 `u8_token_by_uid`，传 `roleId` 报 109「角色不存在」
+- 记录只保留最近一段窗口，所以缓存要**只增不减**：每次按
+  `分类｜池｜干员｜时间戳｜pos` 合并，旧记录留在本地
+
+缓存落在 `config/gacha/<账号文件名>.json`（不碰账号 json）。统计口径：
+保底按**池子 id** 连续计数、出六星清零；展示按**池名**合并——「标准寻访」
+在记录里会拆成好几期，按 id 分开列等于同一名字刷屏。
 
 ## 依赖
 

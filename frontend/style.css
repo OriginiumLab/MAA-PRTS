@@ -181,11 +181,24 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 }
 .avatar.r6 { background: linear-gradient(150deg, #ffd479, #ff9a5c); }
 .avatar.r5 { background: linear-gradient(150deg, #e9d5a1, #c9a86a); color: #1a1305; }
+/* 终末地账号：紫青渐变，和明日方舟账号一眼分开 */
+.avatar.ef { background: linear-gradient(150deg, #a78bfa, #38bdf8); color: #0b1020; }
 
 .acct-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .acct-name {
   font-size: 13.5px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px;
+}
+.acct-tag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 9.5px; font-style: normal; font-weight: 600;
+  letter-spacing: .3px; line-height: 15px;
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.14);
+  border: 1px solid rgba(167, 139, 250, 0.3);
 }
 .acct-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
 .acct-sub b { color: var(--text-2); font-weight: 500; }
@@ -294,6 +307,7 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   flex: 0 0 auto;
 }
 .hero-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+.hero-avatar.ef { background: linear-gradient(145deg, #a78bfa, #38bdf8); color: #0b1020; }
 .hero-sub { font-size: 11px; color: var(--text-2); margin-top: 1px; }
 .hero-stats { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
@@ -310,6 +324,236 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .stat.mint b { color: var(--mint); }
 .stat.amber b { color: var(--amber); }
 .stat.rose b { color: var(--rose); }
+
+/* ============================================================ 模块菜单
+   搜作业 / 抽卡统计 / 配置修改 / 签到 —— 放在账号卡与搜索框之间 */
+.modtabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 4px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: rgba(13, 16, 24, 0.55);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.modtabs::-webkit-scrollbar { display: none; }
+.modtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: .16s ease;
+}
+.modtab svg { width: 15px; height: 15px; opacity: .8; flex: 0 0 auto; }
+.modtab:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.modtab.active {
+  color: #04120f;
+  background: linear-gradient(135deg, var(--mint), #43d9c4);
+  box-shadow: 0 8px 20px -12px rgba(94, 234, 212, 0.9);
+}
+.modtab.active svg { opacity: 1; }
+.modtab:disabled { color: var(--text-3); cursor: default; }
+.modtab[hidden] { display: none; }   /* 终末地账号：作业获取整个 tab 不显示 */
+.modtab.soon::after {
+  content: "待做";
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: .3px;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 模块容器：.main 是 flex 列，切模块只显隐，不重建 DOM（搜索状态与结果都还在） */
+.module {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.module[hidden] { display: none; }
+
+/* 抽卡统计不需要右栏作业集：收掉第三列，主区拿满宽度 */
+.app.no-basket { grid-template-columns: 272px minmax(0, 1fr); }
+.app.no-basket .basket,
+.app.no-basket .basket-fab,
+.app.no-basket .basket-mask { display: none !important; }
+
+/* ============================================================ 抽卡统计 */
+.gacha-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+  padding: 2px 2px 12px;
+  flex: 0 0 auto;
+}
+.gacha-title { font-size: 16px; font-weight: 650; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.gacha-title span { font-size: 12.5px; font-weight: 400; color: var(--text-3); }
+.gacha-tools { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.gacha-updated { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.gacha-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 2px 28px; }
+
+.gacha-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.gacha-card {
+  padding: 13px 15px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(140deg, rgba(30, 36, 50, 0.6), rgba(16, 20, 30, 0.5));
+}
+.gacha-card b {
+  display: block;
+  font-size: 22px; font-weight: 700;
+  letter-spacing: -.6px;
+  font-variant-numeric: tabular-nums;
+}
+.gacha-card span { font-size: 11px; color: var(--text-3); letter-spacing: .4px; }
+.gacha-card i { font-style: normal; font-size: 12px; color: var(--text-3); margin-left: 2px; }
+.gacha-card.gold b { color: var(--star); }
+.gacha-card.mint b { color: var(--mint); }
+
+.gacha-sec { margin-top: 18px; }
+.gacha-sec-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 0 2px 9px;
+}
+.gacha-sec-head b { font-size: 13.5px; font-weight: 650; }
+.gacha-sec-head span { font-size: 11.5px; color: var(--text-3); }
+
+/* 星级分布条 */
+.rar-bars { display: flex; flex-direction: column; gap: 7px; }
+.rar-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.rar-bar > i {
+  flex: 0 0 34px; font-style: normal;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .3px;
+}
+.rar-track {
+  flex: 1 1 auto; height: 9px; border-radius: 99px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.rar-fill { height: 100%; border-radius: 99px; background: var(--mint); }
+.rar-bar > b {
+  flex: 0 0 92px; text-align: right;
+  font-size: 11.5px; font-weight: 600;
+  color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.rar-bar > b small { color: var(--text-3); font-weight: 400; margin-left: 4px; }
+/* 星级配色沿用游戏习惯：6 橘金 / 5 黄 / 4 紫 / 3 蓝 / 2 绿 / 1 灰 */
+.rar-bar > i.r6 { color: var(--star); }
+.rar-bar > i.r5 { color: #e9d07a; }
+.rar-bar > i.r4 { color: #c084fc; }
+.rar-bar > i.r3 { color: #7dd3fc; }
+.rar-bar > i.r2 { color: #6ee7a8; }
+.rar-bar > i.r1 { color: var(--text-3); }
+.rar-fill.r6 { background: linear-gradient(90deg, #ffcf6b, #ff9a5c); }
+.rar-fill.r5 { background: linear-gradient(90deg, #f3dfa8, #c9a86a); }
+.rar-fill.r4 { background: linear-gradient(90deg, #c084fc, #a855f7); }
+.rar-fill.r3 { background: linear-gradient(90deg, #7dd3fc, #38bdf8); }
+.rar-fill.r2 { background: rgba(110, 231, 168, 0.55); }
+.rar-fill.r1 { background: rgba(255, 255, 255, 0.18); }
+
+/* 六星列表 */
+.six-list { display: flex; flex-direction: column; gap: 6px; }
+.six-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+.six-row:hover { border-color: var(--line-strong); background: rgba(255, 255, 255, 0.045); }
+.six-star { color: var(--star); flex: 0 0 auto; letter-spacing: -1px; font-size: 11px; }
+.six-name { font-size: 13px; font-weight: 650; flex: 0 0 116px; color: var(--star); }
+.six-pool {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 11.5px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.six-pity {
+  flex: 0 0 auto; font-size: 11.5px; color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.six-pity b { color: var(--mint); font-weight: 650; }
+.six-new {
+  flex: 0 0 auto;
+  padding: 1px 6px; border-radius: 5px;
+  font-size: 10px; color: var(--mint);
+  background: rgba(94, 234, 212, 0.12);
+  border: 1px solid rgba(94, 234, 212, 0.24);
+}
+.six-at { flex: 0 0 104px; text-align: right; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* 最近记录表 */
+.rec-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rec-table th {
+  text-align: left; font-weight: 500; font-size: 11px;
+  color: var(--text-3); padding: 0 10px 7px;
+  border-bottom: 1px solid var(--line);
+}
+.rec-table td { padding: 7px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.035); }
+.rec-table tr:hover td { background: rgba(255, 255, 255, 0.03); }
+.rec-table .c-name { font-weight: 600; }
+.rec-table .c-name.r6 { color: var(--star); }
+.rec-table .c-name.r5 { color: #e9d07a; }
+.rec-table .c-name.r4 { color: #c084fc; }
+.rec-table .c-name.r3 { color: #7dd3fc; }
+.rec-table .c-name.r2 { color: #6ee7a8; }
+.rec-table .c-dim { color: var(--text-3); }
+.rec-table td:last-child { text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.rec-more { padding: 10px 4px 0; font-size: 11.5px; color: var(--text-3); text-align: center; }
+
+.gacha-empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--text-2);
+  border-radius: 16px;
+  border: 1px dashed var(--line-strong);
+  background: rgba(255, 255, 255, 0.015);
+}
+.gacha-empty h3 { font-size: 15px; color: var(--text); margin-bottom: 8px; }
+.gacha-empty p { font-size: 12.5px; color: var(--text-3); line-height: 1.8; max-width: 460px; margin: 0 auto; }
+.gacha-empty .ghost-btn { margin-top: 16px; }
+.gacha-note {
+  margin-top: 14px; padding: 10px 13px;
+  border-radius: 11px;
+  border: 1px solid rgba(245, 185, 85, 0.22);
+  background: rgba(245, 185, 85, 0.06);
+  font-size: 11.5px; color: #d7b579; line-height: 1.7;
+}
+.gacha-log {
+  margin-top: 12px; max-height: 180px; overflow: auto;
+  padding: 10px 12px; border-radius: 11px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.35);
+  font-family: var(--mono); font-size: 11px; color: var(--text-2);
+  line-height: 1.65; white-space: pre-wrap;
+}
+.gacha-log .err { color: var(--rose); }
+.gacha-log .ok { color: var(--mint); }
+
+@media (max-width: 1400px) {
+  .app.no-basket { grid-template-columns: 252px minmax(0, 1fr); }
+}
+@media (max-width: 1240px) {
+  .app.no-basket { grid-template-columns: 244px minmax(0, 1fr); }
+}
+@media (max-width: 880px) {
+  .app.no-basket { grid-template-columns: 206px minmax(0, 1fr); }
+}
 
 /* 搜索 */
 .search-wrap { padding: 16px 0 6px; flex: 0 0 auto; }

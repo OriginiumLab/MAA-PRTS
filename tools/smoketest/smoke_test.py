@@ -1448,6 +1448,89 @@ def check_op_blacklist(tmp):
         copilot._fetch_ops_raw = orig
 
 
+# ---------------------------------------------------------------- B24 抽卡统计
+def _grec(ts, pid, pname, rarity, name='干员'):
+    return {'category': 'cat', 'poolId': pid, 'poolName': pname, 'charId': 'ch_' + name,
+            'charName': name, 'rarity': rarity, 'isNew': False,
+            'gachaTs': str(ts), 'pos': 0}
+
+
+def check_gacha_stats(tmp):
+    """抽卡统计（纯本地逻辑，不联网）：
+
+    - 星级归一：明日方舟 0 基、终末地口径未知，统一到 1~6
+    - 保底按 **池子 id** 连续计数、出六星清零；展示按池名合并（同名不同期不刷屏）
+    - 缓存视图：有/无 token 都能看已有缓存，抽卡数/六星数与记录一致
+    - 两个游戏账号即便 uid 相同也不能互相认领对方的文件
+    """
+    from core import api, gacha, updater
+
+    _reset_config(tmp)
+
+    # 1) 星级归一
+    assert gacha._norm_rarity(5) == 6, '0 基 5 应该是六星'
+    assert gacha._norm_rarity(0) == 0
+    assert gacha._norm_rarity(6) == 6, '已是 1 基的 6 不能再 +1'
+    assert gacha._norm_rarity(None) == 0 and gacha._norm_rarity('x') == 0
+
+    # 2) 汇总：P1 抽 4 次出 2 个六星、P2 抽 1 次出 1 个六星，交替顺序不能串池
+    base = 1700000000000
+    recs = [
+        _grec(base + 60000, 'P1', '标准寻访', 3),
+        _grec(base + 120000, 'P1', '标准寻访', 6, '六星甲'),
+        _grec(base + 180000, 'P1', '标准寻访', 5),
+        _grec(base + 240000, 'P2', '限定寻访', 6, '六星乙'),
+        _grec(base + 300000, 'P1', '标准寻访', 6, '六星丙'),
+    ]
+    s = gacha.summarize(list(reversed(recs)))     # 故意打乱输入顺序
+    assert s['total'] == 5, s['total']
+    assert s['sixCount'] == 3, s['sixCount']
+    assert s['byRarity']['6'] == 3 and s['byRarity']['5'] == 1 and s['byRarity']['3'] == 1, s['byRarity']
+    assert [x['charName'] for x in s['sixStars']] == ['六星丙', '六星乙', '六星甲'], s['sixStars']
+    assert [x['pity'] for x in s['sixStars']] == [2, 1, 2], s['sixStars']
+    assert s['avgPity'] == 1.7, s['avgPity']
+    assert s['lastSixGap'] == 0, s['lastSixGap']       # 最新一条就是六星
+    assert s['rate6'] == 0.6, s['rate6']
+    assert [(p['poolName'], p['count'], p['six']) for p in s['pools']] == [
+        ('标准寻访', 4, 2), ('限定寻访', 1, 1)], s['pools']
+    assert s['records'][0]['charName'] == '六星丙', s['records'][0]
+    assert s['firstAt'] and s['lastAt'] and s['firstAt'] < s['lastAt'], (s['firstAt'], s['lastAt'])
+
+    # 3) 缓存视图：缓存与 token 相互独立（没 token 也能看历史）
+    path = gacha.cache_path('测试 官服.json')
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({'version': 1, 'updatedAt': '2026-11-10T18:00:00+08:00',
+                   'game': 'arknights', 'uid': '1', 'records': recs}, f)
+    meta = {'game': 'arknights', 'uid': '1', 'nickName': '测试'}
+    v = gacha.view('测试 官服.json', 'TOKEN', meta)
+    assert v['hasToken'] is True and v['count'] == 5 and v['summary']['total'] == 5, v
+    v2 = gacha.view('测试 官服.json', '', meta)
+    assert v2['hasToken'] is False and v2['summary']['sixCount'] == 3, v2
+
+    # 4) 终末地账号快照：game/roleId 落盘，不写练度段
+    snap = updater._ef_snapshot(
+        {'uid': '697277796', 'roleId': '1447867726', 'nickName': '红颜断清梦',
+         'channelName': '官服', 'serverName': 'China', 'level': 57}, 'TOKEN')
+    assert snap['account']['game'] == 'endfield', snap['account']
+    assert snap['account']['roleId'] == '1447867726'
+    assert snap['stats'] == {} and snap['chars'] == [] and snap['missing'] == []
+
+    # 5) 同 uid 跨游戏不串号：scan_accounts 必须按 game 隔离
+    cfg = os.path.join(tmp, 'config')
+    with open(os.path.join(cfg, 'A 官服.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '999', 'game': 'arknights', 'nickName': 'A'}}, f)
+    with open(os.path.join(cfg, 'A 终末地.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '999', 'game': 'endfield', 'nickName': 'A'}}, f)
+    ark = updater.scan_accounts(cfg)
+    ef = updater.scan_accounts(cfg, 'endfield')
+    assert list(ark) == ['999'] and ark['999'].endswith('A 官服.json'), ark
+    assert list(ef) == ['999'] and ef['999'].endswith('A 终末地.json'), ef
+
+    # 6) 路由已注册（前端抽卡统计的入口）
+    assert '/api/gacha' in api.ROUTES and '/api/gacha/sync' in api.ROUTES
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -1488,6 +1571,7 @@ def main():
         r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
         r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
         r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
+        r.check('B24 抽卡统计（星级归一/保底/池合并/跨游戏隔离）', lambda: check_gacha_stats(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

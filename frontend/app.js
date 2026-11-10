@@ -11,6 +11,8 @@ const S = {
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
+  module: 'copilot', // 当前模块：copilot / gacha（配置修改、签到还没做）
+  gacha: null,       // /api/gacha 的最近一次响应
 };
 
 /* ------------------------------------------------------ 黑名单（干员 / 作者 / 作业）
@@ -170,6 +172,10 @@ async function boot() {
     renderMaaState();
     fillBasketProfiles();
     if (S.current) await selectAccount(S.current, true);
+    // ?mod=gacha 直接打开抽卡统计（做快捷方式用，和 ?q=TL-10 一样）
+    // 其余情况模块显隐由 selectAccount → applyModuleAvailability 决定，别重复渲染
+    const mod0 = new URLSearchParams(location.search).get('mod');
+    if (mod0 === 'gacha') setModule('gacha');
     startPing();
     // 资源包后台自动更新：晚几秒，别和首屏渲染抢网络
     setTimeout(packAutoSync, 2500);
@@ -209,15 +215,19 @@ function renderAccounts() {
   }
   box.innerHTML = S.accounts.map(a => {
     const st = a.stats || {};
-    const cls = (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
+    const ef = a.game === 'endfield';                 // 终末地：没有练度数据，副标题换口径
+    const cls = ef ? 'ef' : (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
     const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
+    const sub = ef
+      ? `${esc(a.channelName || '官服')} · Lv${a.level || '?'}`
+      : `${esc(a.channelName || '官服')} · <b>${st.charCount || 0}</b>/${st.charTotal || 440} 干员`;
     return `
       <button class="acct ${a.file === S.current ? 'active' : ''}" data-file="${esc(a.file)}"
-        draggable="true" title="点击选中，拖动可排序">
+        draggable="true" title="点击选中，拖动可排序${ef ? '（终末地账号，不含作业获取）' : ''}">
         <span class="avatar ${cls}">${esc(ch)}</span>
         <span class="acct-main">
-          <span class="acct-name">${esc(a.nickName)}</span>
-          <span class="acct-sub">${esc(a.channelName || '官服')} · <b>${st.charCount || 0}</b>/${st.charTotal || 440} 干员</span>
+          <span class="acct-name">${esc(a.nickName)}${ef ? '<i class="acct-tag">终末地</i>' : ''}</span>
+          <span class="acct-sub">${sub}</span>
         </span>
       </button>`;
   }).join('');
@@ -297,8 +307,10 @@ async function selectAccount(file, silent) {
     const d = await api('/api/account?file=' + encodeURIComponent(file));
     if (seq !== _selectSeq) return;   // 已被更新的选择取代，丢弃旧响应
     S.detail = d;
+    if (S.gacha && S.gacha.file !== file) S.gacha = null;   // 抽卡视图跟着账号走
     renderHero();
     updateParadoxChip();
+    applyModuleAvailability();        // 终末地账号隐藏作业获取，并自动切到抽卡统计
     // 保存 lastAccount 顺带用响应里的全量 settings 刷新 S.settings——
     // 修复启动后第一次拉黑以「无 opBlacklist 的陈旧基底」整键覆盖的窗口期（#45）
     await saveSettings({ lastAccount: file });
@@ -317,11 +329,14 @@ async function selectAccount(file, silent) {
 
 function renderHero() {
   const d = S.detail;
+  const a0 = (d && d.account) || {};
+  const ef = !!(d && (d.game === 'endfield' || a0.game === 'endfield'));
   const importBtn = $('#btn-import-maa');
-  if (importBtn) importBtn.hidden = !d;   // 有选中账号才给「从 MAA 更新干员信息」入口
+  if (importBtn) importBtn.hidden = !d || ef;   // 终末地没有 MAA 练度可导
   const algoSel = $('#algo-select');
   if (algoSel) {
-    algoSel.disabled = !d;                        // 算法下拉跟账号走，没账号不可用
+    // 算法下拉跟账号走：没有账号、或终末地账号（不搜作业）都不可用
+    algoSel.disabled = !d || ef;
     if (d) algoSel.value = d.preferAlgo || 'rating';
   }
   if (!d) return;
@@ -329,6 +344,23 @@ function renderHero() {
   const name = a.nickName || '未知账号';
   $('#hero-name').textContent = name;
   $('#hero-avatar').textContent = name.replace(/[#＃].*$/, '').slice(0, 1);
+  $('#hero-avatar').classList.toggle('ef', ef);   // 终末地：头像配色跟着换
+
+  if (ef) {
+    // 终末地：没有干员图鉴，只展示身份 + 抽卡概况
+    const bits = [a.channelName || '', a.serverName || '', 'Lv' + (a.level || '?'),
+                  'uid ' + (a.uid || '')];
+    $('#hero-sub').textContent = bits.filter(Boolean).join(' · ');
+    const g = (S.gacha && S.gacha.file === S.current && S.gacha.summary) || null;
+    $('#hero-stats').innerHTML = `
+      <div class="stat"><b>${a.level || '—'}</b><span>等级</span></div>
+      <div class="stat"><b>${esc(a.serverName || '—')}</b><span>区服</span></div>
+      <div class="stat mint"><b>${g ? g.total : 0}</b><span>抽卡</span></div>
+      <div class="stat ${g && g.sixCount ? 'amber' : ''}"><b>${g ? g.sixCount : 0}</b><span>六星</span></div>
+    `;
+    return;
+  }
+
   const bits = [a.channelName || '', 'Lv' + (a.level || '?'), 'uid ' + (a.uid || '')];
   const sec = (a.secretary || {}).name;
   if (sec) bits.splice(2, 0, '看板 ' + sec);
@@ -2799,6 +2831,221 @@ function openOpBlacklist() {
   });
 }
 
+/* ------------------------------------------------------------ 模块切换
+   菜单：作业获取 / 抽卡统计 / 配置修改 / 森空岛签到。
+   后两个还没做，只占了位置（disabled + 待做角标）；终末地账号没有作业获取
+   （MAA 只跑明日方舟），选中终末地时那个 tab 直接不显示，并自动切到抽卡统计。 */
+
+function currentAccount() {
+  return S.accounts.find(a => a.file === S.current) || null;
+}
+
+function currentGame() {
+  const a = currentAccount();
+  if (a && a.game) return a.game;
+  return (S.detail && S.detail.game) || 'arknights';
+}
+
+function applyModuleAvailability() {
+  const ef = currentGame() === 'endfield';
+  const ct = $('.modtab[data-mod="copilot"]');
+  if (ct) ct.hidden = ef;
+  if (ef && S.module !== 'gacha') setModule('gacha');
+  else if (!ef && S.module === 'gacha') renderGacha();
+}
+
+function setModule(mod) {
+  if (mod === 'copilot' && currentGame() === 'endfield') mod = 'gacha';
+  S.module = mod;
+  $$('.modtab').forEach(b => {
+    const on = b.dataset.mod === mod && !b.disabled;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const cp = $('#mod-copilot'), gg = $('#mod-gacha');
+  if (cp) cp.hidden = mod !== 'copilot';
+  if (gg) gg.hidden = mod !== 'gacha';
+  // 抽卡统计用不到右栏作业集：收掉第三列，主区拿满宽度
+  $('#app').classList.toggle('no-basket', mod !== 'copilot');
+  if (mod !== 'copilot') toggleBasket(false);
+  if (mod === 'gacha') renderGacha();
+}
+
+/* ------------------------------------------------------------ 抽卡统计 */
+let _gachaSeq = 0;
+let _gachaBusy = false;
+
+const fmtPct = x => (x ? (x * 100).toFixed(2) : '0.00') + '%';
+
+async function renderGacha(force) {
+  const body = $('#gacha-body');
+  if (!body) return;
+  const acc = currentAccount();
+  const sub = $('#gacha-sub');
+  if (sub) {
+    sub.textContent = acc
+      ? `${acc.nickName} · ${acc.game === 'endfield' ? '终末地' : '明日方舟'}`
+      : '';
+  }
+  if (!S.current) {
+    body.innerHTML = `<div class="gacha-empty"><h3>还没有账号</h3>
+      <p>先用森空岛 token 添加一个账号，抽卡记录才有地方读。</p></div>`;
+    const up = $('#gacha-updated');
+    if (up) up.textContent = '';
+    return;
+  }
+  if (!force && S.gacha && S.gacha.file === S.current) { paintGacha(S.gacha); return; }
+  const seq = ++_gachaSeq;
+  body.innerHTML = `<div class="gacha-cards">${'<div class="gacha-card"><b>—</b><span>读取中</span></div>'.repeat(5)}</div>
+    <div class="loading-row"><span class="spinner"></span>读取本地抽卡缓存…</div>`;
+  try {
+    const d = await api('/api/gacha?file=' + encodeURIComponent(S.current));
+    if (seq !== _gachaSeq) return;
+    S.gacha = d;
+    paintGacha(d);
+    if (currentGame() === 'endfield') renderHero();   // 头像卡里的抽卡/六星跟着刷新
+  } catch (e) {
+    if (seq !== _gachaSeq) return;
+    body.innerHTML = `<div class="gacha-empty"><h3>读取失败</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function paintGacha(d) {
+  const body = $('#gacha-body');
+  if (!body) return;
+  const up = $('#gacha-updated');
+  if (up) up.textContent = d.updatedAt ? '上次同步 ' + d.updatedAt.replace('T', ' ').slice(0, 16) : '';
+
+  if (!d.hasToken) {
+    body.innerHTML = `<div class="gacha-empty">
+      <h3>这个账号读不到抽卡记录</h3>
+      <p>抽卡记录必须用森空岛 token 查。这个账号是用 MAA 的干员识别结果建的（或 token 已失效）。
+      用「添加账号 → 森空岛 token」再同步一次即可，会复用同一个账号文件。</p>
+      <button class="ghost-btn mint" id="gacha-add">去添加 token</button></div>`;
+    const b = $('#gacha-add');
+    if (b) b.addEventListener('click', openAddAccount);
+    return;
+  }
+
+  const s = d.summary;
+  if (!s || !s.total) {
+    const ef = d.game === 'endfield';
+    body.innerHTML = `<div class="gacha-empty">
+      <h3>还没有抽卡记录</h3>
+      <p>${ef
+        ? '终末地的记录接口也能读：点下面按钮拉一次。如果这个角色确实没抽过，这里会一直是 0 条。'
+        : '点下面的按钮从森空岛拉一次。首次会把所有寻访分类翻完，几秒钟。'}</p>
+      <button class="ghost-btn mint" id="gacha-sync-empty">拉取抽卡记录</button></div>`;
+    const b = $('#gacha-sync-empty');
+    if (b) b.addEventListener('click', gachaSync);
+    return;
+  }
+
+  const rarOrder = [6, 5, 4, 3, 2, 1];
+  const rarMax = Math.max(1, ...rarOrder.map(r => s.byRarity[String(r)] || 0));
+  const bars = rarOrder.map(r => {
+    const n = s.byRarity[String(r)] || 0;
+    const pct = (n / rarMax) * 100;
+    return `<div class="rar-bar">
+      <i class="r${r}">${r}★</i>
+      <div class="rar-track"><div class="rar-fill r${r}" style="width:${pct.toFixed(1)}%"></div></div>
+      <b>${n} 次<small>${s.total ? ((n / s.total) * 100).toFixed(1) : '0.0'}%</small></b>
+    </div>`;
+  }).join('');
+
+  const sixRows = (s.sixStars || []).slice(0, 40).map(x => `
+    <div class="six-row">
+      <span class="six-star">★★★★★★</span>
+      <span class="six-name">${esc(x.charName)}</span>
+      <span class="six-pool" title="${esc(x.poolName)}">${esc(x.poolName)}</span>
+      ${x.isNew ? '<span class="six-new">new</span>' : ''}
+      <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
+      <span class="six-at">${esc(x.at)}</span>
+    </div>`).join('') || '<div class="gacha-empty" style="padding:28px"><p>这段时间还没出过六星。</p></div>';
+
+  const poolRows = (s.pools || []).slice(0, 8).map(p => `
+    <div class="six-row">
+      <span class="six-name" style="color:var(--text)">${esc(p.poolName)}</span>
+      <span class="six-pool">最近 ${esc(p.lastTs)}</span>
+      <span class="six-pity">${p.count} 抽 · 六星 <b>${p.six}</b></span>
+    </div>`).join('');
+
+  const recRows = (s.records || []).slice(0, 60).map(r => `
+    <tr>
+      <td class="c-name r${r.rarity}">${esc(r.charName)}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
+      <td class="c-dim">${'★'.repeat(Math.max(1, Math.min(6, r.rarity || 1)))}</td>
+      <td class="c-dim">${esc(r.poolName)}</td>
+      <td>${esc(r.at)}</td>
+    </tr>`).join('');
+
+  body.innerHTML = `
+    <div class="gacha-cards">
+      <div class="gacha-card"><b>${s.total}</b><span>总抽卡</span></div>
+      <div class="gacha-card gold"><b>${s.sixCount}</b><span>六星</span></div>
+      <div class="gacha-card mint"><b>${fmtPct(s.rate6)}</b><span>六星出率</span></div>
+      <div class="gacha-card"><b>${s.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
+      <div class="gacha-card"><b>${s.lastSixGap}</b><span>距上次六星（抽）</span></div>
+    </div>
+
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>星级分布</b><span>${esc(s.firstAt)} — ${esc(s.lastAt)}</span></div>
+      <div class="rar-bars">${bars}</div>
+    </div>
+
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>六星记录</b><span>共 ${s.sixCount} 次${s.sixCount > 40 ? '，只列最近 40 次' : ''}</span></div>
+      <div class="six-list">${sixRows}</div>
+    </div>
+
+    ${poolRows ? `<div class="gacha-sec">
+      <div class="gacha-sec-head"><b>按卡池</b><span>抽数最多的 ${Math.min(8, (s.pools || []).length)} 个</span></div>
+      <div class="six-list">${poolRows}</div>
+    </div>` : ''}
+
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>最近记录</b><span>最新在前${s.total > 60 ? `，只列最近 60 条（共 ${s.total} 条）` : ''}</span></div>
+      <table class="rec-table">
+        <thead><tr><th>干员</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
+        <tbody>${recRows}</tbody>
+      </table>
+    </div>
+
+    <div class="gacha-note">
+      ! 保底按卡池连续计数（同池每抽 +1，出六星清零）；抽卡记录只保留最近一段窗口，
+      最早几次六星的「第几抽」只是窗口内的下限，不是真实垫抽数。
+      ${d.game === 'endfield' ? '终末地只统计角色寻访，武器申领未纳入。' : ''}
+    </div>
+  `;
+}
+
+async function gachaSync() {
+  if (!S.current) { toast('先在左边选一个账号', 'warn'); return; }
+  if (_gachaBusy) return;
+  _gachaBusy = true;
+  const btn = $('#btn-gacha-sync');
+  const oldHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
+  const body = $('#gacha-body');
+  body.innerHTML = `<div class="loading-row"><span class="spinner"></span>正在从森空岛拉取抽卡记录…</div>
+    <div class="gacha-log" id="task-log"></div>`;
+  try {
+    const { taskId } = await api('/api/gacha/sync', { file: S.current });
+    await pollTask(taskId, body);
+    toast('抽卡记录已更新');
+    await renderGacha(true);
+  } catch (e) {
+    toast('同步失败：' + e.message, 'err', 6000);
+    const box = $('#task-log', body);
+    if (box && !box.textContent.trim()) {
+      body.insertAdjacentHTML('beforeend',
+        `<div class="gacha-note">同步没跑起来：${esc(e.message)}</div>`);
+    }
+  } finally {
+    _gachaBusy = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = oldHtml; }
+  }
+}
+
 /* ------------------------------------------------------------ 事件绑定 */
 function bindGlobal() {
   $('#btn-next').addEventListener('click', () => {
@@ -2820,6 +3067,11 @@ function bindGlobal() {
     }
   });
   bindAccountOrder($('#account-list'));
+  $$('.modtab').forEach(b => b.addEventListener('click', () => {
+    if (b.disabled) return;
+    setModule(b.dataset.mod);
+  }));
+  $('#btn-gacha-sync').addEventListener('click', gachaSync);
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);
   $('#btn-settings').addEventListener('click', openSettings);
