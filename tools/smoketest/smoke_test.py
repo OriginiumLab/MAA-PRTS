@@ -1579,9 +1579,23 @@ def check_gacha_stats(tmp):
          'charName': '武器甲', 'rarity': 6, 'gachaTs': str(base + 3000), 'pos': 21},
     ]
     s2 = gacha.summarize(ef_recs)
-    assert s2['total'] == 3 and s2['charTotal'] == 2 and s2['weaponTotal'] == 1, s2
-    assert s2['sixCount'] == 2 and s2['charSix'] == 1 and s2['weaponSix'] == 1, s2
-    assert s2['charRate6'] == 0.5 and s2['weaponRate6'] == 1.0, s2
+    assert s2['total'] == 3 and s2['sixCount'] == 2, s2
+    # 两套口径各给一份完整汇总（前端按 tab 分别渲染整套面板）
+    assert s2['char']['total'] == 2 and s2['char']['sixCount'] == 1, s2['char']
+    assert s2['weapon']['total'] == 1 and s2['weapon']['sixCount'] == 1, s2['weapon']
+    assert s2['char']['rate6'] == 0.5 and s2['weapon']['rate6'] == 1.0, s2
+    assert s2['char']['avgPity'] == 1 and s2['weapon']['avgPity'] == 1, s2
+    # 每个 tab 的「按卡池」只含自己那一套，池子下面挂着自己的六星记录
+    assert [p['poolName'] for p in s2['char']['pools']] == ['限定寻访'], s2['char']['pools']
+    assert [p['poolName'] for p in s2['weapon']['pools']] == ['篆玉申领'], s2['weapon']['pools']
+    wpool = s2['weapon']['pools'][0]
+    assert wpool['kind'] == 'weapon' and wpool['six'] == 1, wpool
+    assert [(x['charName'], x['pity']) for x in wpool['sixItems']] == [('武器甲', 1)], wpool
+    assert [x['charName'] for x in s2['weapon']['sixStars']] == ['武器甲'], s2['weapon']['sixStars']
+    assert [x['charName'] for x in s2['weapon']['records']] == ['武器甲'], s2['weapon']['records']
+    assert s2['char']['firstAt'] and s2['weapon']['firstAt'] == s2['weapon']['lastAt'], s2
+    # 全是角色记录时 weapon 为 None（前端据此决定要不要给武器池 tab）
+    assert gacha.summarize(ef_recs[:2])['weapon'] is None
     assert {p['poolName']: p['kind'] for p in s2['pools']} == {
         '限定寻访': 'char', '篆玉申领': 'weapon'}, s2['pools']
 

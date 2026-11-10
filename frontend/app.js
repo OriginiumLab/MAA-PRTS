@@ -13,6 +13,7 @@ const S = {
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
   module: 'copilot', // 当前模块：copilot / gacha（配置修改、签到还没做）
   gacha: null,       // /api/gacha 的最近一次响应
+  gachaTab: 'char',  // 抽卡统计里看哪个池：char 角色寻访 / weapon 武器申领（终末地专用）
   sideGame: 'arknights',   // 左侧账号列表当前看哪一栏：arknights / endfield
   gachaByGame: false,      // 抽卡统计是因为选中终末地账号才打开的（切回方舟时自动回作业获取）
 };
@@ -364,6 +365,7 @@ async function selectAccount(file, silent) {
     if (seq !== _selectSeq) return;   // 已被更新的选择取代，丢弃旧响应
     S.detail = d;
     if (S.gacha && S.gacha.file !== file) S.gacha = null;   // 抽卡视图跟着账号走
+    S.gachaTab = 'char';                                    // 换号回角色池，别停在武器池
     renderHero();
     updateParadoxChip();
     applyModuleAvailability();        // 终末地账号隐藏作业获取，并自动切到抽卡统计
@@ -2974,6 +2976,13 @@ async function renderGacha(force) {
   }
 }
 
+/* 空口径：终末地没抽过武器时，武器池 tab 也得能点开（显示 0，不炸） */
+const GACHA_BLANK = {
+  total: 0, sixCount: 0, fiveCount: 0, rate6: 0, avgPity: 0, lastSixGap: 0,
+  byRarity: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 },
+  firstAt: '', lastAt: '', sixStars: [], pools: [], records: [],
+};
+
 function paintGacha(d) {
   const body = $('#gacha-body');
   if (!body) return;
@@ -3005,98 +3014,151 @@ function paintGacha(d) {
     return;
   }
 
+  // 终末地：角色寻访 / 武器申领 是两套记录、两套保底，分两个 tab 看（明日方舟只有一套）
+  if (d.game !== 'endfield' || S.gachaTab !== 'weapon') S.gachaTab = 'char';
+  paintGachaBody();
+}
+
+function paintGachaBody() {
+  const d = S.gacha;
+  const body = $('#gacha-body');
+  if (!d || !body) return;
+  const s = d.summary || {};
+  const ef = d.game === 'endfield';
+  const tab = ef ? S.gachaTab : 'char';
+  // 终末地每个 tab 只在 S.gacha.summary.char / .weapon 里取；方舟就是顶层那份
+  const cur = ef ? ((tab === 'weapon' ? s.weapon : s.char) || GACHA_BLANK) : s;
+
   const rarOrder = [6, 5, 4, 3, 2, 1];
-  const rarMax = Math.max(1, ...rarOrder.map(r => s.byRarity[String(r)] || 0));
+  const byRarity = cur.byRarity || GACHA_BLANK.byRarity;
+  const rarMax = Math.max(1, ...rarOrder.map(r => byRarity[String(r)] || 0));
   const bars = rarOrder.map(r => {
-    const n = s.byRarity[String(r)] || 0;
+    const n = byRarity[String(r)] || 0;
     const pct = (n / rarMax) * 100;
     return `<div class="rar-bar">
       <i class="r${r}">${r}★</i>
       <div class="rar-track"><div class="rar-fill r${r}" style="width:${pct.toFixed(1)}%"></div></div>
-      <b>${n} 次<small>${s.total ? ((n / s.total) * 100).toFixed(1) : '0.0'}%</small></b>
+      <b>${n} 次<small>${cur.total ? ((n / cur.total) * 100).toFixed(1) : '0.0'}%</small></b>
     </div>`;
   }).join('');
 
-  const sixRows = (s.sixStars || []).slice(0, 40).map(x => `
-    <div class="six-row">
-      <span class="six-star">★★★★★★</span>
-      <span class="six-name">${esc(x.charName)}${x.kind === 'weapon' ? '<i class="gacha-tag">武器</i>' : ''}</span>
-      <span class="six-pool" title="${esc(x.poolName)}">${esc(x.poolName)}</span>
-      ${x.isNew ? '<span class="six-new">new</span>' : ''}
-      <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
-      <span class="six-at">${esc(x.at)}</span>
-    </div>`).join('') || '<div class="gacha-empty" style="padding:28px"><p>这段时间还没出过六星。</p></div>';
+  // 终末地：一个池子一张卡片，池子下面直接挂这个池出的六星（抽卡记录 App 的常见排版）
+  const poolCards = (cur.pools || []).slice(0, 12).map(p => {
+    const items = p.sixItems || [];
+    const shown = items.slice(0, 6);
+    const rows = shown.map(x => `
+      <div class="six-row">
+        <span class="six-star">★★★★★★</span>
+        <span class="six-name">${esc(x.charName)}${x.isNew ? '<i class="six-new">new</i>' : ''}</span>
+        <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
+        <span class="six-at">${esc(x.at)}</span>
+      </div>`).join('');
+    const more = items.length > shown.length
+      ? `<div class="pool-more">还有 ${items.length - shown.length} 个六星没列出</div>` : '';
+    const none = items.length ? '' : '<div class="pool-none">这个池还没出六星</div>';
+    return `<div class="pool-card">
+      <div class="pool-head">
+        <b>${esc(p.poolName)}</b>
+        <span>${p.count} 抽 · 六星 <b>${p.six}</b> · ${fmtPct(p.rate6)}</span>
+      </div>
+      ${p.firstTs ? `<div class="pool-time">${esc(p.firstTs)} — ${esc(p.lastTs)}</div>` : ''}
+      ${rows}${more}${none}
+    </div>`;
+  }).join('');
 
-  const poolRows = (s.pools || []).slice(0, 8).map(p => `
-    <div class="six-row">
-      <span class="six-name" style="color:var(--text)">${esc(p.poolName)}${p.kind === 'weapon' ? '<i class="gacha-tag">武器</i>' : ''}</span>
-      <span class="six-pool">最近 ${esc(p.lastTs)}</span>
-      <span class="six-pity">${p.count} 抽 · 六星 <b>${p.six}</b></span>
-    </div>`).join('');
-
-  const recRows = (s.records || []).slice(0, 60).map(r => `
+  const recRows = (cur.records || []).slice(0, 60).map(r => `
     <tr>
-      <td class="c-name r${r.rarity}">${esc(r.charName)}${r.kind === 'weapon' ? '<i class="gacha-tag">武器</i>' : ''}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
+      <td class="c-name r${r.rarity}">${esc(r.charName)}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
       <td class="c-dim">${'★'.repeat(Math.max(1, Math.min(6, r.rarity || 1)))}</td>
       <td class="c-dim">${esc(r.poolName)}</td>
       <td>${esc(r.at)}</td>
     </tr>`).join('');
 
-  // 终末地的武器申领和角色寻访是两套保底与概率（实测角色约 1.9%、武器约 5%），
-  // 混在一起算出率会两头都不对，所以有武器记录时拆成两张卡片分开报
-  const ef = d.game === 'endfield';
-  const withWeapon = ef && (s.weaponTotal || 0) > 0;
-  const cards = withWeapon
-    ? `<div class="gacha-card"><b>${s.charTotal}</b><span>角色寻访（抽）</span></div>
-       <div class="gacha-card gold"><b>${s.charSix}</b><span>角色六星</span></div>
-       <div class="gacha-card mint"><b>${fmtPct(s.charRate6)}</b><span>六星出率</span></div>
-       <div class="gacha-card"><b>${s.charAvgPity || '—'}</b><span>平均出六星（抽）</span></div>
-       <div class="gacha-card"><b>${s.charLastGap}</b><span>距上次六星（抽）</span></div>
-       <div class="gacha-card"><b>${s.weaponTotal}</b><span>武器申领（抽）</span></div>
-       <div class="gacha-card gold"><b>${s.weaponSix}</b><span>武器六星</span></div>`
-    : `<div class="gacha-card"><b>${s.total}</b><span>总抽卡</span></div>
-       <div class="gacha-card gold"><b>${s.sixCount}</b><span>六星</span></div>
-       <div class="gacha-card mint"><b>${fmtPct(s.rate6)}</b><span>六星出率</span></div>
-       <div class="gacha-card"><b>${s.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
-       <div class="gacha-card"><b>${s.lastSixGap}</b><span>距上次六星（抽）</span></div>`;
+  const tabs = ef ? `<div class="gacha-tabs">
+      ${[['char', '角色寻访', (s.char || {}).total || 0],
+         ['weapon', '武器申领', (s.weapon || {}).total || 0]]
+        .map(([k, label, n]) => `<button class="gacha-tab${tab === k ? ' active' : ''}"
+          data-gtab="${k}" aria-selected="${tab === k}">${label}<i>${n}</i></button>`).join('')}
+    </div>` : '';
 
-  body.innerHTML = `
-    <div class="gacha-cards">${cards}</div>
-    ${ef ? `<div class="gacha-window">官方记录接口只保留最近一段：角色 ${s.charTotal} 抽 · 武器 ${s.weaponTotal} 抽。
-      更早的记录接口不返回，所以这里比实际总抽数少（不是统计漏了）。</div>` : ''}
+  const cards = `
+    <div class="gacha-card"><b>${cur.total}</b><span>${ef
+      ? (tab === 'weapon' ? '武器申领（抽）' : '角色寻访（抽）') : '总抽卡'}</span></div>
+    <div class="gacha-card gold"><b>${cur.sixCount}</b><span>${ef
+      ? (tab === 'weapon' ? '六星武器' : '六星角色') : '六星'}</span></div>
+    <div class="gacha-card mint"><b>${fmtPct(cur.rate6)}</b><span>六星出率</span></div>
+    <div class="gacha-card"><b>${cur.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
+    <div class="gacha-card"><b>${cur.lastSixGap}</b><span>距上次六星（抽）</span></div>`;
 
+  // 方舟：六星时间线独立一块；终末地并进各池卡片，不重复列
+  const sixSec = (ef ? '' : `
     <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>星级分布</b><span>${withWeapon ? '角色 + 武器（全部记录）· ' : ''}${esc(s.firstAt)} — ${esc(s.lastAt)}</span></div>
+      <div class="gacha-sec-head"><b>六星记录</b><span>共 ${cur.sixCount} 次${cur.sixCount > 40 ? '，只列最近 40 次' : ''}</span></div>
+      <div class="six-list">${(cur.sixStars || []).slice(0, 40).map(x => `
+        <div class="six-row">
+          <span class="six-star">★★★★★★</span>
+          <span class="six-name">${esc(x.charName)}${x.isNew ? '<i class="six-new">new</i>' : ''}</span>
+          <span class="six-pool" title="${esc(x.poolName)}">${esc(x.poolName)}</span>
+          <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
+          <span class="six-at">${esc(x.at)}</span>
+        </div>`).join('') || '<div class="gacha-empty" style="padding:28px"><p>这段时间还没出过六星。</p></div>'}
+      </div>
+    </div>`);
+
+  const poolSec = (cur.pools || []).length ? `
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>按卡池</b><span>${ef
+        ? `按抽数排序${(cur.pools.length > 12) ? `，只列前 12 个（共 ${cur.pools.length} 个）` : ''}`
+        : `抽数最多的 ${Math.min(8, cur.pools.length)} 个`}</span></div>
+      ${ef ? `<div class="pool-list">${poolCards}</div>` : `<div class="six-list">${cur.pools.slice(0, 8).map(p => `
+        <div class="six-row">
+          <span class="six-name" style="color:var(--text)">${esc(p.poolName)}</span>
+          <span class="six-pool">最近 ${esc(p.lastTs)}</span>
+          <span class="six-pity">${p.count} 抽 · 六星 <b>${p.six}</b></span>
+        </div>`).join('')}</div>`}
+    </div>` : '';
+
+  const rarSec = `
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>星级分布</b><span>${esc(cur.firstAt)} — ${esc(cur.lastAt)}</span></div>
       <div class="rar-bars">${bars}</div>
-    </div>
+    </div>`;
 
+  const recSec = `
     <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>六星记录</b><span>共 ${s.sixCount} 次${s.sixCount > 40 ? '，只列最近 40 次' : ''}</span></div>
-      <div class="six-list">${sixRows}</div>
-    </div>
-
-    ${poolRows ? `<div class="gacha-sec">
-      <div class="gacha-sec-head"><b>按卡池</b><span>抽数最多的 ${Math.min(8, (s.pools || []).length)} 个</span></div>
-      <div class="six-list">${poolRows}</div>
-    </div>` : ''}
-
-    <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>最近记录</b><span>最新在前${s.total > 60 ? `，只列最近 60 条（共 ${s.total} 条）` : ''}</span></div>
+      <div class="gacha-sec-head"><b>最近记录</b><span>最新在前${cur.total > 60 ? `，只列最近 60 条（共 ${cur.total} 条）` : ''}</span></div>
       <table class="rec-table">
-        <thead><tr><th>${ef ? '角色/武器' : '干员'}</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
+        <thead><tr><th>${ef ? (tab === 'weapon' ? '武器' : '角色') : '干员'}</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
         <tbody>${recRows}</tbody>
       </table>
-    </div>
+    </div>`;
+
+  // 终末地：六星直接落在各池卡片里，先给池子；方舟池子多、六星少，先给星级分布
+  // 和六星时间线，池子汇总垫在后面（保持原来的版式）
+  const secs = ef ? [poolSec, rarSec, recSec] : [rarSec, sixSec, poolSec, recSec];
+
+  body.innerHTML = `
+    ${tabs}
+    <div class="gacha-cards">${cards}</div>
+    ${ef ? `<div class="gacha-window">官方记录接口只保留最近一段：角色 ${(s.char || {}).total || 0} 抽 · 武器 ${(s.weapon || {}).total || 0} 抽。
+      更早的记录接口不返回，所以这里比实际总抽数少（不是统计漏了）。</div>` : ''}
+
+    ${secs.join('')}
 
     <div class="gacha-note">
       ! 保底按卡池连续计数（同池每抽 +1，出六星清零）；抽卡记录只保留最近一段窗口，
       最早几次六星的「第几抽」只是窗口内的下限，不是真实垫抽数。
-      ${ef && withWeapon
-        ? `终末地的记录接口同样只给最近一段：角色寻访 ${s.charTotal} 抽、武器申领 ${s.weaponTotal} 抽，更早的拉不到。
-           上面卡片的出率 / 平均 / 距上次只按角色寻访算（武器是另一套保底）。`
-        : (ef ? '终末地只统计角色寻访，武器申领未纳入。' : '')}
+      ${ef ? '角色寻访与武器申领是两套保底、两套概率，所以分开两个 tab 统计，别把它们加在一起算。' : ''}
     </div>
   `;
+
+  $$('.gacha-tab', body).forEach(b => b.addEventListener('click', () => {
+    if (S.gachaTab === b.dataset.gtab) return;
+    S.gachaTab = b.dataset.gtab;
+    paintGachaBody();
+    const sc = $('.gacha-scroll');
+    if (sc) sc.scrollTop = 0;
+  }));
 }
 
 async function gachaSync() {

@@ -532,36 +532,48 @@ def _tally(rs: list) -> dict:
     }
 
 
-def summarize(records: list) -> dict:
-    """把记录汇总成界面要的数字
+def _pools_of(rs: list) -> list:
+    """按卡池分组（升序 rs 进，最新在前的六星挂在池子下）
 
-    终末地的「武器申领」和角色寻访是两套保底与概率（实测角色 6 星约 1.9%、
-    武器约 5%），混在一起算出率会两头不讨好，所以两套口径都算：
-    `char*` 是角色寻访（明日方舟就是全部记录），`weapon*` 是武器申领。
-    `total` / `sixCount` / `rate6` 仍是全部记录，用于「按卡池」「最近记录」。
+    合并口径：
+    - 展示按 **池名** 合并——明日方舟的「标准寻访」会拆成好几期，终末地武器
+      池的 poolId 还有 `weponbox` / `weaponbox` 两种拼法，按 id 分等于同名刷屏
+    - 保底计数仍按 **poolId**——同一期池子跨期保底是连续的，按池名合并后整体
+      +1 才对得上游戏里显示的垫抽数
     """
-    rs = sorted(records or [],
-                key=lambda r: (int(r.get('gachaTs') or 0), r.get('pos') or 0))
-    full = _tally(rs)
-    chars = [r for r in rs if (r.get('kind') or 'char') != 'weapon']
-    char = _tally(chars) if len(chars) != len(rs) else full
-    weapon = _tally([r for r in rs if (r.get('kind') or 'char') == 'weapon'])
-
-    # 按池名合并展示：明日方舟的「标准寻访」会拆成好几期，终末地武器池
-    # poolId 还有 `weponbox` / `weaponbox` 两种拼法，按 id 分等于同名刷屏
-    pools = {}
+    pools, counters = {}, {}
     for r in rs:
+        pid = r.get('poolId') or r.get('category') or ''
         pname = r.get('poolName') or '未知寻访'
+        counters[pid] = counters.get(pid, 0) + 1
         p = pools.setdefault(pname, {
-            'poolId': r.get('poolId') or '', 'poolName': pname,
-            'count': 0, 'six': 0, 'lastTs': '',
-            'kind': r.get('kind') or 'char',
+            'poolId': pid, 'poolName': pname,
+            'count': 0, 'six': 0, 'firstTs': '', 'lastTs': '',
+            'kind': r.get('kind') or 'char', 'sixItems': [],
         })
         p['count'] += 1
-        p['lastTs'] = _at(r.get('gachaTs')) or p['lastTs']
+        at = _at(r.get('gachaTs'))
+        if at:
+            p['firstTs'] = p['firstTs'] or at
+            p['lastTs'] = at
         if int(r.get('rarity') or 0) >= 6:
             p['six'] += 1
+            p['sixItems'].append({
+                'charName': r.get('charName') or '?',
+                'at': at,
+                'pity': counters[pid],
+                'isNew': bool(r.get('isNew')),
+            })
+            counters[pid] = 0
+    for p in pools.values():
+        p['rate6'] = round(p['six'] / p['count'], 4) if p['count'] else 0
+        p['sixItems'] = list(reversed(p['sixItems']))      # 新的在前
+    return sorted(pools.values(), key=lambda p: (-p['count'], p['poolName']))
 
+
+def _slice_summary(rs: list) -> dict:
+    """一个口径的完整汇总：卡片数字 + 星级分布 + 六星时间线 + 按卡池 + 最近记录"""
+    t = _tally(rs)
     recent = []
     for r in reversed(rs[-200:]):
         recent.append({
@@ -572,31 +584,39 @@ def summarize(records: list) -> dict:
             'at': _at(r.get('gachaTs')),
             'isNew': bool(r.get('isNew')),
         })
-
     return {
-        'total': full['total'],
-        'byRarity': full['byRarity'],
-        'sixCount': full['sixCount'],
-        'fiveCount': full['byRarity']['5'],
-        'rate6': full['rate6'],
-        'avgPity': full['avgPity'],
-        'lastSixGap': full['lastGap'],
-        'charTotal': char['total'],
-        'charSix': char['sixCount'],
-        'charFive': char['byRarity']['5'],
-        'charRate6': char['rate6'],
-        'charAvgPity': char['avgPity'],
-        'charLastGap': char['lastGap'],
-        'weaponTotal': weapon['total'],
-        'weaponSix': weapon['sixCount'],
-        'weaponRate6': weapon['rate6'],
+        'total': t['total'],
+        'byRarity': t['byRarity'],
+        'sixCount': t['sixCount'],
+        'fiveCount': t['byRarity']['5'],
+        'rate6': t['rate6'],
+        'avgPity': t['avgPity'],
+        'lastSixGap': t['lastGap'],
         'firstAt': _at(rs[0].get('gachaTs')) if rs else '',
         'lastAt': _at(rs[-1].get('gachaTs')) if rs else '',
-        'sixStars': list(reversed(full['six'])),
-        'pools': sorted(pools.values(), key=lambda p: (-p['count'], p['poolName'])),
+        'sixStars': list(reversed(t['six'])),
+        'pools': _pools_of(rs),
         'records': recent,
-        'hasSix': bool(full['six']),
     }
+
+
+def summarize(records: list) -> dict:
+    """把记录汇总成界面要的数字
+
+    终末地的「角色寻访」和「武器申领」是两套保底与概率（实测角色 6 星约
+    1.9%、武器约 5%），界面按两个 tab 分开看，所以各给一份**完整**汇总
+    （`char` / `weapon`：卡片数字、星级分布、六星时间线、按卡池、最近记录
+    都在里面）。顶层字段仍是全部记录的口径，给账号卡等只需要一个总数的地方用。
+    """
+    rs = sorted(records or [],
+                key=lambda r: (int(r.get('gachaTs') or 0), r.get('pos') or 0))
+    chars = [r for r in rs if (r.get('kind') or 'char') != 'weapon']
+    weapons = [r for r in rs if (r.get('kind') or 'char') == 'weapon']
+    full = _slice_summary(rs)
+    full['char'] = _slice_summary(chars)      # 明日方舟：char 就是全部记录
+    full['weapon'] = _slice_summary(weapons) if weapons else None
+    full['hasSix'] = bool(full['sixCount'])
+    return full
 
 
 def view(file: str, token: str, meta: dict) -> dict:
