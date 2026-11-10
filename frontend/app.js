@@ -12,7 +12,9 @@ const S = {
   paradoxPending: [],
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
   module: 'copilot', // 当前模块：copilot / gacha（配置修改、签到还没做）
-  gacha: null,       // /api/gacha 的最近一次响应
+  gacha: null,       // /api/gacha 的最近一次响应（当前账号那份）
+  gachaOf: {},       // file → 已加载过的抽卡视图：切账号/切菜单回来直接复用，不再转圈
+  lastOfGame: { arknights: '', endfield: '' },  // 每栏上次看的是哪个号（切回这一栏时还原）
   gachaTab: 'char',  // 抽卡统计里看哪个池：char 角色寻访 / weapon 武器申领（终末地专用）
   sideGame: 'arknights',   // 左侧账号列表当前看哪一栏：arknights / endfield
   gachaByGame: false,      // 抽卡统计是因为选中终末地账号才打开的（切回方舟时自动回作业获取）
@@ -241,8 +243,10 @@ function setSideGame(g) {
   S.sideGame = g;
   const cur = currentAccount();
   if (changed && S.current && gameOf(cur) !== g) {
-    const first = S.accounts.find(a => gameOf(a) === g);
-    if (first) { selectAccount(first.file); return; }   // selectAccount 里会重建列表
+    // 先回这一栏上次看的号（切走前在看谁，切回来还是谁），没有才取第一个
+    const pick = S.accounts.find(a => a.file === S.lastOfGame[g] && gameOf(a) === g)
+      || S.accounts.find(a => gameOf(a) === g);
+    if (pick) { selectAccount(pick.file); return; }   // selectAccount 里会重建列表
   }
   renderAccounts();
 }
@@ -348,7 +352,11 @@ async function selectAccount(file, silent) {
   S.current = file;
   // 选中的账号在哪一栏，左侧就切到哪一栏（新加/刚同步出来的账号可能属于另一组）
   const acc0 = S.accounts.find(a => a.file === file);
-  if (acc0) S.sideGame = gameOf(acc0);
+  if (acc0) {
+    const g0 = gameOf(acc0);
+    S.sideGame = g0;
+    S.lastOfGame[g0] = file;      // 切走再切回这一栏时回到这个号，而不是永远第一个
+  }
   renderAccounts();
   if (changed && S.basket.length) {
     S.basket = [];
@@ -364,7 +372,9 @@ async function selectAccount(file, silent) {
     const d = await api('/api/account?file=' + encodeURIComponent(file));
     if (seq !== _selectSeq) return;   // 已被更新的选择取代，丢弃旧响应
     S.detail = d;
-    if (S.gacha && S.gacha.file !== file) S.gacha = null;   // 抽卡视图跟着账号走
+    // 抽卡视图跟着账号走：这个号之前看过就直接复用内存里的那份（本地缓存本来就在，
+    // 只是别再闪一次「读取中」），没看过才交给 renderGacha 去读
+    S.gacha = S.gachaOf[file] || null;
     S.gachaTab = 'char';                                    // 换号回角色池，别停在武器池
     renderHero();
     updateParadoxChip();
@@ -2914,7 +2924,9 @@ function applyModuleAvailability() {
   } else if (!ef && S.gachaByGame) {
     S.gachaByGame = false;             // 从终末地切回方舟：别把人留在抽卡统计里，回作业获取
     setModule('copilot', true);
-  } else if (!ef && S.module === 'gacha') {
+  } else if (S.module === 'gacha') {
+    // 已经停在抽卡统计：换号就得重画（终末地之间互切也走这里，
+    // 之前只判断了 !ef，结果终末地换号后还挂着上一个号的数据）
     renderGacha();
   }
 }
@@ -2968,6 +2980,7 @@ async function renderGacha(force) {
     const d = await api('/api/gacha?file=' + encodeURIComponent(S.current));
     if (seq !== _gachaSeq) return;
     S.gacha = d;
+    if (d && d.file) S.gachaOf[d.file] = d;   // 切走再回来直接用这份，不再请求
     paintGacha(d);
     if (currentGame() === 'endfield') renderHero();   // 头像卡里的抽卡/六星跟着刷新
   } catch (e) {
@@ -3003,12 +3016,18 @@ function paintGacha(d) {
   const s = d.summary;
   if (!s || !s.total) {
     const ef = d.game === 'endfield';
-    body.innerHTML = `<div class="gacha-empty">
-      <h3>还没有抽卡记录</h3>
-      <p>${ef
+    // 已经同步过还是 0 条：这个号确实没记录（接口只留最近一段），别再让人反复点拉取
+    const synced = !!d.updatedAt;
+    const at = synced ? esc(d.updatedAt.replace('T', ' ').slice(0, 16)) : '';
+    const tip = synced
+      ? `上次同步 ${at}，接口返回 0 条：这个号确实没有抽卡记录，不用再拉。`
+      : (ef
         ? '终末地的记录接口也能读：点下面按钮拉一次。如果这个角色确实没抽过，这里会一直是 0 条。'
-        : '点下面的按钮从森空岛拉一次。首次会把所有寻访分类翻完，几秒钟。'}</p>
-      <button class="ghost-btn mint" id="gacha-sync-empty">拉取抽卡记录</button></div>`;
+        : '点下面的按钮从森空岛拉一次。首次会把所有寻访分类翻完，几秒钟。');
+    body.innerHTML = `<div class="gacha-empty">
+      <h3>${synced ? '这个账号没有抽卡记录' : '还没有抽卡记录'}</h3>
+      <p>${tip}</p>
+      <button class="ghost-btn mint" id="gacha-sync-empty">${synced ? '再拉一次' : '拉取抽卡记录'}</button></div>`;
     const b = $('#gacha-sync-empty');
     if (b) b.addEventListener('click', gachaSync);
     return;
@@ -3042,10 +3061,12 @@ function paintGachaBody() {
     </div>`;
   }).join('');
 
-  // 终末地：一个池子一张卡片，池子下面直接挂这个池出的六星（抽卡记录 App 的常见排版）
+  // 一个池子一张卡片，池子下面直接挂这个池出的六星（抽卡记录 App 的常见排版）。
+  // 明日方舟和终末地同一套版式：方舟的「标准寻访」会合并好几期，一个池里可能
+  // 出 7、8 个六星，所以先列最近 8 个，再多就只给一句「还有 N 个」。
   const poolCards = (cur.pools || []).slice(0, 12).map(p => {
     const items = p.sixItems || [];
-    const shown = items.slice(0, 6);
+    const shown = items.slice(0, 8);
     const rows = shown.map(x => `
       <div class="six-row">
         <span class="six-star">★★★★★★</span>
@@ -3090,32 +3111,11 @@ function paintGachaBody() {
     <div class="gacha-card"><b>${cur.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
     <div class="gacha-card"><b>${cur.lastSixGap}</b><span>距上次六星（抽）</span></div>`;
 
-  // 方舟：六星时间线独立一块；终末地并进各池卡片，不重复列
-  const sixSec = (ef ? '' : `
-    <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>六星记录</b><span>共 ${cur.sixCount} 次${cur.sixCount > 40 ? '，只列最近 40 次' : ''}</span></div>
-      <div class="six-list">${(cur.sixStars || []).slice(0, 40).map(x => `
-        <div class="six-row">
-          <span class="six-star">★★★★★★</span>
-          <span class="six-name">${esc(x.charName)}${x.isNew ? '<i class="six-new">new</i>' : ''}</span>
-          <span class="six-pool" title="${esc(x.poolName)}">${esc(x.poolName)}</span>
-          <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
-          <span class="six-at">${esc(x.at)}</span>
-        </div>`).join('') || '<div class="gacha-empty" style="padding:28px"><p>这段时间还没出过六星。</p></div>'}
-      </div>
-    </div>`);
-
   const poolSec = (cur.pools || []).length ? `
     <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>按卡池</b><span>${ef
-        ? `按最近抽卡时间排序${(cur.pools.length > 12) ? `，只列最近 12 个（共 ${cur.pools.length} 个）` : ''}`
-        : `最近的 ${Math.min(8, cur.pools.length)} 个`}</span></div>
-      ${ef ? `<div class="pool-list">${poolCards}</div>` : `<div class="six-list">${cur.pools.slice(0, 8).map(p => `
-        <div class="six-row">
-          <span class="six-name" style="color:var(--text)">${esc(p.poolName)}</span>
-          <span class="six-pool">最近 ${esc(p.lastTs)}</span>
-          <span class="six-pity">${p.count} 抽 · 六星 <b>${p.six}</b></span>
-        </div>`).join('')}</div>`}
+      <div class="gacha-sec-head"><b>按卡池</b><span>按最近抽卡时间排序${(cur.pools.length > 12)
+        ? `，只列最近 12 个（共 ${cur.pools.length} 个）` : ''}</span></div>
+      <div class="pool-list">${poolCards}</div>
     </div>` : '';
 
   const rarSec = `
@@ -3133,9 +3133,8 @@ function paintGachaBody() {
       </table>
     </div>`;
 
-  // 终末地：六星直接落在各池卡片里，先给池子；方舟池子多、六星少，先给星级分布
-  // 和六星时间线，池子汇总垫在后面（保持原来的版式）
-  const secs = ef ? [poolSec, rarSec, recSec] : [rarSec, sixSec, poolSec, recSec];
+  // 两个游戏同一套版式：按卡池（六星挂在池下）→ 星级分布 → 最近记录
+  const secs = [poolSec, rarSec, recSec];
 
   body.innerHTML = `
     ${tabs}
