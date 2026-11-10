@@ -26,9 +26,54 @@ APP_CODE = '4ca99fa6b56cc2ba'
 GRANT_URL = 'https://as.hypergryph.com/user/oauth2/v2/grant'
 CRED_URL = 'https://zonai.skland.com/api/v1/user/auth/generate_cred_by_code'
 API = 'https://zonai.skland.com'
+# UA 钉在某个真实客户端版本上：伪装更新版本号而没有对应的协议行为反而
+# 更扎眼，跟随官方发版整体更新这串即可
 SKLAND_UA = ('Skland/1.0.1 (com.hypergryph.skland; build:100001014; '
              'Android 31; ) Okhttp/4.11.0')
+# 完全落不了盘时的兜底（老行为的值）；正常路径都用 _default_did() 的
+# 每安装一份的随机 dId
 DID = 'de9759a5afaa634f'
+
+_did_cache = [None]
+
+
+def _default_did() -> str:
+    """本安装的设备指纹：首次随机生成 16 位 hex，持久化到 config/_did.json。
+
+    dId 参与签名与 grant/cred 请求体，是服务端设备维度风控的键——所有
+    安装、所有用户上报同一个硬编码 dId，等于把全体登录/同步押在同一个
+    设备指纹上，一旦按 dId 限流就同时失效且无客户端手段缓解（#58）。
+    每安装随机 + 持久化复用，兼顾「同一设备稳定」的语义。文件名带下划线
+    前缀，天然不会被账号目录扫描当成账号。落盘彻底失败才退回内置值。
+    """
+    if _did_cache[0]:
+        return _did_cache[0]
+    did = ''
+    try:
+        import os
+        import secrets
+        from . import settings
+        path = os.path.join(settings.CONFIG_DIR, '_did.json')
+        try:
+            with open(path, encoding='utf-8') as f:
+                saved = json.load(f)
+            v = saved.get('did') if isinstance(saved, dict) else ''
+            if isinstance(v, str) and len(v) == 16:
+                did = v
+        except Exception:
+            pass
+        if not did:
+            did = secrets.token_hex(8)
+            os.makedirs(settings.CONFIG_DIR, exist_ok=True)
+            with open(path + '.tmp', 'w', encoding='utf-8') as f:
+                json.dump({'did': did, 'createdAt': time.strftime('%Y-%m-%d %H:%M:%S')},
+                          f, ensure_ascii=False, indent=2)
+            os.replace(path + '.tmp', path)
+    except Exception:
+        did = DID
+    _did_cache[0] = did
+    return did
+
 
 _RETRY_HOOK = None      # 由调用方注入 log 函数，用于提示重试
 
@@ -46,11 +91,13 @@ def _note(msg):
             pass
 
 
-def _http(method, url, headers, body=None, timeout=30, retries=3):
+def _http(method, url, headers, body=None, timeout=30, retries=3, note=None):
     """带退避重试的请求。
 
     headers 可以传 dict，也可以传无参函数（每次重试重新签名，避免时间戳过期返 401）。
-    只重试网络层超时/断连和 401/403（签名过期）；其他 4xx 直接抛出。
+    只重试网络层超时/断连/坏响应体，以及**可重签名请求**的 401/403（签名过期）；
+    登录链（grant/cred）的 401/403 是坏 token 本身，重试纯属浪费。其他 4xx 直接抛出。
+    note 是本实例的日志回调（重试提示写进各自任务的日志，#61）。
     """
     data = None
     if body is not None:
@@ -70,25 +117,37 @@ def _http(method, url, headers, body=None, timeout=30, retries=3):
                 return json.loads(raw.decode('utf-8'))
         except urllib.error.HTTPError as e:
             last = e
-            if e.code not in (401, 403) or attempt >= retries:
+            # 401/403 只有「headers 是函数」的可重签名请求才值得重试（时间戳
+            # 过期）；登录链的死 token 重试三次只是浪费
+            if e.code not in (401, 403) or not callable(headers) or attempt >= retries:
                 raise
-            _note('    [签名重试 %d/%d] HTTP %s' % (attempt, retries - 1, e.code))
+            (note or _note)('    [签名重试 %d/%d] HTTP %s' % (attempt, retries - 1, e.code))
             time.sleep(1.0 * attempt)
         except (urllib.error.URLError, socket.timeout, TimeoutError,
                 ConnectionError, OSError) as e:
             last = e
             if attempt >= retries:
                 raise
-            _note('    [网络重试 %d/%d] %s' % (attempt, retries - 1, e))
+            (note or _note)('    [网络重试 %d/%d] %s' % (attempt, retries - 1, e))
+            time.sleep(1.5 * attempt)
+        except ValueError:
+            # 网关/代理返回 HTML 错误页时 json.loads 抛 JSONDecodeError（ValueError
+            # 子类）：按网络类重试换下一轮，而不是冒泡成同步任务失败
+            last = ValueError('响应不是 JSON（网关错误页？）')
+            if attempt >= retries:
+                raise last
+            (note or _note)('    [网络重试 %d/%d] 响应不是 JSON' % (attempt, retries - 1))
             time.sleep(1.5 * attempt)
     if last:
         raise last
 
 
 class Skland:
-    def __init__(self, token: str, did: str = DID):
+    def __init__(self, token: str, did: str = None, log=None):
         self.token = token          # 森空岛用户 token（鹰角通行证）
-        self.did = did
+        self.did = did or _default_did()
+        self._note = log            # 重试提示随实例走：两个同步任务并行时不再
+                                    # 互相写进对方的任务日志（#61）
         self.cred = None            # 32 位凭证
         self.sign_token = None      # 签名密钥
         self.login()
@@ -98,7 +157,8 @@ class Skland:
         g = _http('POST', GRANT_URL,
                   {'User-Agent': SKLAND_UA, 'Accept-Encoding': 'identity',
                    'Connection': 'close', 'dId': self.did},
-                  {'appCode': APP_CODE, 'token': self.token, 'type': 0})
+                  {'appCode': APP_CODE, 'token': self.token, 'type': 0},
+                  note=self._note)
         if g.get('status') != 0:
             raise RuntimeError('换取 grant code 失败: %s' % (g.get('msg') or g))
         grant = g['data']['code']
@@ -106,7 +166,8 @@ class Skland:
         c = _http('POST', CRED_URL,
                   {'User-Agent': SKLAND_UA, 'Accept-Encoding': 'identity',
                    'Connection': 'close', 'dId': self.did},
-                  {'code': grant, 'kind': 1})
+                  {'code': grant, 'kind': 1},
+                  note=self._note)
         if c.get('code') != 0:
             raise RuntimeError('换取 cred 失败: %s' % (c.get('msg') or c))
         self.cred = c['data']['cred']
@@ -135,11 +196,27 @@ class Skland:
             'X-Requested-With': 'com.hypergryph.skland',
         }
 
-    def api_get(self, path_query: str, timeout=40):
+    def api_get(self, path_query: str, timeout=40, headers=None):
         p = urllib.parse.urlparse(API + path_query)
+        extra = dict(headers or {})
         # 传函数而不是现成 headers：每次重试都重新签名，时间戳才是新的
         return _http('GET', API + path_query,
-                     lambda: self._sign(p.path, p.query or ''), timeout=timeout)
+                     lambda: dict(self._sign(p.path, p.query or ''), **extra),
+                     timeout=timeout, note=self._note)
+
+    def api_post(self, path: str, body=None, headers=None, timeout=40, retries=3):
+        """带签名的 POST。
+
+        body 为 None 时不发请求体——终末地签到就是这个形态，角色身份写在
+        `sk-game-role: 3_<roleId>_<serverId>` 头里，签名串里 body 段是空的。
+        签到这类一次性的写操作传 retries=1：403 多半是「今天已经签过」，
+        重试只会多喂几次风控。
+        """
+        payload = json.dumps(body, separators=(',', ':')) if body is not None else ''
+        extra = dict(headers or {})
+        return _http('POST', API + path,
+                     lambda: dict(self._sign(path, payload), **extra),
+                     body=body, timeout=timeout, retries=retries, note=self._note)
 
     def _get(self, path_query: str, timeout=40):
         """401/403 视作 cred 过期：重新走一次鉴权链再请求"""
@@ -148,7 +225,7 @@ class Skland:
         except urllib.error.HTTPError as e:
             if e.code not in (401, 403):
                 raise
-            _note('    [凭证过期] 重新登录一次')
+            self._note('    [凭证过期] 重新登录一次')
             self.login()
             return self.api_get(path_query, timeout=timeout)
 

@@ -27,7 +27,7 @@ import os
 import threading
 import time
 
-from . import settings
+from . import atomicio, settings
 
 STATE_PATH = os.path.join(settings.CONFIG_DIR, 'gamedata.json')
 
@@ -57,6 +57,10 @@ def _write_json(path, data):
 
 
 # ---------------------------------------------------------------- 程序版本
+# version.json 的 schema 由本模块的 app_version() 定义并读取：
+#   {"version": "2.4.0"}（一个键，不带 v 前缀）
+# 写入方是 release.yml 里内联的 Python（发版 CI）——改字段名要两边一起动，
+# yml 里有注释指回这里（#63）。
 # 版本号不在代码里维护：发版 CI 按 PR 标题的版号把 version.json 写进
 # 发布包根目录（与 exe 同级），本地源码运行和本地打包都没有这个文件，
 # 统一是 dev 版。

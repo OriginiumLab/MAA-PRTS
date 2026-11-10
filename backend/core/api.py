@@ -7,8 +7,8 @@ import os
 import traceback
 import urllib.parse
 
-from . import (accounts, appupdate, copilot, maa, operbox, packsync, paradox,
-               resources, settings, sklogin, tasks, version)
+from . import (accounts, appupdate, copilot, gacha, maa, operbox, packsync,
+               paradox, resources, settings, signin, sklogin, tasks, version)
 
 WEB = settings.static_dir()
 
@@ -48,10 +48,10 @@ def bootstrap(_q, _body):
     acts = resources.activity_list(18)
     sv = _settings_view(st, accs)
     return {
-        'settings': {k: sv[k] for k in ('maaDir', 'maaDirs', 'autoStartMaa',
-                                        'autoUpdatePack', 'autoCheckAppUpdate',
-                                        'acceptPrerelease', 'proxy',
-                                        'charBlacklist', 'authorBlacklist')},
+        # 全量 settings 视图（均非敏感字段）：不再维护键清单白名单——
+        # 清单漏一个键（如 opBlacklist），前端以这份子集为基底整键保存
+        # 就会把磁盘上已有的黑名单覆盖清空（#45）
+        'settings': sv,
         'accounts': accs,
         'lastAccount': last,
         'maa': status,
@@ -405,13 +405,56 @@ def api_paradox_pick(_q, body):
     return res
 
 
+def _gacha_ctx(file):
+    """抽卡要用到的三样东西：账号快照、游戏/uid 元信息、解密后的 token"""
+    snap = accounts.get_account(file)
+    a = snap.get('account') or {}
+    meta = {
+        'game': a.get('game') or 'arknights',
+        'uid': str(a.get('uid') or ''),
+        'nickName': a.get('nickName') or os.path.splitext(file)[0],
+    }
+    return snap, meta, accounts.token_for(file)
+
+
+def api_gacha(q, _body):
+    """抽卡统计视图（只读缓存，不发网络请求）"""
+    file = _account_for(q.get('file'))
+    _snap, meta, token = _gacha_ctx(file)
+    return gacha.view(file, token, meta)
+
+
+def api_gacha_sync(_q, body):
+    """同步抽卡记录（后台任务，前端轮询 /api/task）"""
+    file = _account_for((body or {}).get('file'))
+    _snap, meta, token = _gacha_ctx(file)
+    if not token:
+        raise ValueError('该账号没有森空岛 token（MAA 导入的账号读不到抽卡记录），'
+                         '请用「添加账号 → 森空岛 token」重新同步一次')
+    return {'taskId': gacha.start_sync(file, token, meta)}
+
+
+def api_signin_run(_q, body):
+    """森空岛签到（后台任务，日志在前端面板里轮询）
+
+    body: {"file": "<账号文件>"} —— 空 / 不传 = 全部账号（明日方舟 + 终末地）
+    """
+    file = ((body or {}).get('file') or '').strip()
+    if file:
+        file = _account_for(file)
+    return {'taskId': signin.start(file)}
+
+
 def api_paradox_mark(_q, body):
     """记下这些悖论已经排进过 MAA，下次默认不勾"""
     body = body or {}
     file = _account_for(body.get('file'))
-    snap = accounts.get_account(file)
-    imp = paradox.mark_imported(snap, body.get('stages') or [])
-    accounts.save_account(file, snap)
+    imp = {}
+
+    def _mut(snap):
+        imp.update(paradox.mark_imported(snap, body.get('stages') or []))
+
+    accounts.update(file, _mut)   # 锁内读-改-写，不与后台同步丢更新（#47）
     return {'file': file, 'imported': len(imp)}
 
 
@@ -494,4 +537,7 @@ ROUTES = {
     '/api/paradox/plan': api_paradox_plan,
     '/api/paradox/pick': api_paradox_pick,
     '/api/paradox/mark': api_paradox_mark,
+    '/api/gacha': api_gacha,
+    '/api/gacha/sync': api_gacha_sync,
+    '/api/signin/run': api_signin_run,
 }

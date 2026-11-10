@@ -106,6 +106,9 @@ def trusted_request(headers, server_address):
 class Handler(BaseHTTPRequestHandler):
     server_version = 'MAA-PRTS/%s' % version.app_version()
     protocol_version = 'HTTP/1.1'
+    # 挂死客户端（Content-Length 虚大、发一半断掉）不至于永久占用线程：
+    # 超时后 rfile.read 抛 socket.timeout，连接被回收（#61）
+    timeout = 60
 
     def log_message(self, fmt, *args):
         pass
@@ -132,13 +135,24 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[0] for k, v in urllib.parse.parse_qs(p.query).items()}, p.path
 
     def _body(self):
-        n = int(self.headers.get('Content-Length') or 0)
+        """读 POST body；坏 JSON / 非 JSON 对象抛 ValueError，由调用方回 400。
+
+        此前静默吞掉返回 {}：带损坏 body 的 /api/settings 会走 patch={}
+        分支返回 ok:true，前端 toast「成功」而实际什么都没存（#61）。
+        """
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            raise ValueError('Content-Length 不是合法数字')
         if not n:
             return {}
         try:
-            return json.loads(self.rfile.read(n).decode('utf-8'))
+            v = json.loads(self.rfile.read(n).decode('utf-8'))
         except Exception:
-            return {}
+            raise ValueError('请求体不是合法 JSON')
+        if not isinstance(v, dict):
+            raise ValueError('请求体必须是 JSON 对象')
+        return v
 
     def _static(self, path):
         if path in ('/', ''):
@@ -147,12 +161,24 @@ class Handler(BaseHTTPRequestHandler):
         if rel.startswith('static/'):
             rel = rel[len('static/'):]
         full = os.path.normpath(os.path.join(WEB, rel))
-        if not full.startswith(os.path.normpath(WEB)) or not os.path.isfile(full):
+        # 目录分量级的前缀校验：字符串 startswith 会把 frontend-xxx 这类
+        # 兄弟目录也放进来（#61）；不同盘符 commonpath 抛 ValueError，必在 WEB 外
+        try:
+            inside = os.path.commonpath([os.path.normpath(WEB), full]) == os.path.normpath(WEB)
+        except ValueError:
+            inside = False
+        if not inside or not os.path.isfile(full):
             self._send(404, b'not found', 'text/plain; charset=utf-8')
             return
         ext = os.path.splitext(full)[1].lower()
-        with open(full, 'rb') as f:
-            data = f.read()
+        try:
+            with open(full, 'rb') as f:
+                data = f.read()
+        except OSError as e:
+            # 杀软临时锁文件在 Windows 不罕见：按 500 报，别让异常冒泡成连接重置
+            self._send(500, ('read failed: %s' % e).encode('utf-8'),
+                       'text/plain; charset=utf-8')
+            return
         self._send(200, data, api.MIME.get(ext, 'application/octet-stream'))
 
     def do_GET(self):
@@ -190,7 +216,12 @@ class Handler(BaseHTTPRequestHandler):
             self._err('接口不存在：' + path, 404)
             return
         try:
-            self._json({'ok': True, 'data': fn(q, self._body())})
+            body = self._body()
+        except ValueError as e:
+            self._err('请求体读不了：%s' % e, 400)
+            return
+        try:
+            self._json({'ok': True, 'data': fn(q, body)})
         except Exception as e:
             self._fail(e)
 
@@ -281,8 +312,14 @@ class Bridge:
             return {'ok': False, 'error': str(e)}
 
     def open_url(self, url):
+        # 只放行 http(s)：Windows 上 webbrowser 最终走 os.startfile，
+        # 其他 scheme（file:/smb:/自定义协议）等于任意命令执行面（#61）
+        u = urllib.parse.urlparse(str(url or ''))
+        if u.scheme not in ('http', 'https'):
+            return {'ok': False, 'error': '只允许打开 http/https 链接'}
         try:
-            webbrowser.open(url)
+            webview_url = url
+            webbrowser.open(webview_url)
             return {'ok': True}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
@@ -295,7 +332,20 @@ class Bridge:
 
 
 def serve(port):
-    srv = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    """起 HTTP 服务。find_port 探测与真正绑定之间有 TOCTOU 窗口，
+    绑定失败（OSError）顺延端口重试而不是让守护线程无声死掉（#61）。"""
+    srv = None
+    for off in range(10):
+        try:
+            srv = ThreadingHTTPServer(('127.0.0.1', port + off), Handler)
+            break
+        except OSError:
+            continue
+    if srv is None:
+        log('[error] 127.0.0.1:%d 起连续 10 个端口都绑定失败，界面服务起不来' % port)
+        return
+    if srv.server_address[1] != port:
+        log('端口 %d 被占，改用 %d' % (port, srv.server_address[1]))
     srv.daemon_threads = True
     _srv[0] = srv
     srv.serve_forever()
@@ -335,16 +385,26 @@ def main():
     no_window = '--no-window' in sys.argv
     debug = '--debug' in sys.argv
     port = find_port()
-    threading.Thread(target=serve, args=(port,), daemon=True, name='http').start()
-    url = 'http://127.0.0.1:%d/' % port
-    time.sleep(0.25)
 
+    # 先完成初始化再起 HTTP：窗口期打进来的 /api/app/install 会因 quit hook
+    # 未装而「前端收到已拉起安装、进程永远不退」（#61）
     settings.ensure_dirs()          # config/ 与 debug/ 在启动时才建（import 不建）
     # 程序自更新：装完后由 api 层调 install()，需要让整个进程退出，
     # 而 api 不能 import main，所以反过来把退出函数注册进去
     appupdate.set_quit_hook(lambda reason: _quit(0, reason))
     st = settings.load()
     accounts.ensure_tokens()
+
+    threading.Thread(target=serve, args=(port,), daemon=True, name='http').start()
+    # 确认真的在监听再开窗（绑定可能顺延端口/整体失败），别给 webview 一个死地址
+    deadline = time.time() + 5
+    while _srv[0] is None and time.time() < deadline:
+        time.sleep(0.05)
+    if _srv[0] is None:
+        log('[error] 界面服务没起来，退出（详见上面的端口绑定错误）')
+        return 1
+    url = 'http://127.0.0.1:%d/' % _srv[0].server_address[1]
+
     log('=' * 56)
     log('MAA-PRTS %s  界面 %s' % (version.app_version(), url))
     log('运行目录  %s' % settings.project_root())

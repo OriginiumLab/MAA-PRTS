@@ -187,7 +187,11 @@ def effective_req(op, rarity, strict_skill=True):
     """
     r = op.get('requirements') or {}
     if r.get('elite') is None and r.get('level') is None:
-        r = dict(r, **DEFAULT_REQ.get(int(rarity or 6), DEFAULT_REQ[6]), implied=True)
+        # 默认垫底、作者值优先：dict(r, **DEFAULT) 会把条目里已写明的键盖掉
+        # （只写了 skill_level: 7 的六星会被默认的 9 顶掉，还被标成「默认」）；
+        # 显式写了 null 的键当未写，让默认值补位
+        given = {k: v for k, v in r.items() if v is not None}
+        r = {**DEFAULT_REQ.get(int(rarity or 6), DEFAULT_REQ[6]), **given, 'implied': True}
     if not strict_skill:
         r = {k: v for k, v in r.items()
              if k not in ('skill_level', 'skillLevel', 'module')}
@@ -230,19 +234,26 @@ def req_met(req, owned):
 
 
 def _group_ok(group, owned_map):
-    cands = [c for c in (group.get('opers') or []) if norm(c.get('name')) in owned_map]
+    cands = [c for c in (group.get('opers') or []) if isinstance(c, dict)
+             and norm(c.get('name')) in owned_map]
     if any(req_met(c, owned_map[norm(c.get('name'))]) for c in cands):
         return 'ready'
     return 'train' if cands else 'missing'
 
 
 def _group_label(g):
-    return g.get('name') or ' / '.join(o.get('name', '') for o in (g.get('opers') or [])) or '组合'
+    return g.get('name') or ' / '.join(
+        o.get('name', '') for o in (g.get('opers') or []) if isinstance(o, dict)) or '组合'
 
 
 def match_operation(content, owned_map):
-    opers = content.get('opers') or []
-    groups = content.get('groups') or []
+    # content 是站内用户上传的任意 JSON：结构不对（opers 是 dict、元素是
+    # 字符串等）的条目跳过而不是让 AttributeError 沿线程池冒泡成整次搜索
+    # 500（_pull 对解析失败容错，这里对结构同样设防，口径一致）（#55）
+    if not isinstance(content, dict):
+        content = {}
+    opers = [o for o in (content.get('opers') or []) if isinstance(o, dict)]
+    groups = [g for g in (content.get('groups') or []) if isinstance(g, dict)]
     missing, training, detail = [], [], []
     rmap = _rarity_by_name()
     six = 0
@@ -290,7 +301,10 @@ def match_operation(content, owned_map):
     elif len(missing) == 1:
         mode = 'train' if training else 'borrow'
     elif not training:
-        mode = 'borrow' if total == 13 else 'ready'
+        # 走到这里 missing/training 均空——人全齐练度全达标，就是 ready。
+        # 此前 13 人全齐标 borrow（「差一人可借」）与 missing=[] 自相矛盾；
+        # MAA 侧语义也是 unmatched==1 才借人，全拥有不需要助战（#55）
+        mode = 'ready'
     else:
         mode = 'borrow' if (len(training) == 1 and total < 13) else 'train'
     # 阵容权重均值（少人优先排序用）：只算 opers 里的具名干员，除以具名干员数
@@ -298,21 +312,25 @@ def match_operation(content, owned_map):
     return mode, missing, training, total, detail, six, weight
 
 
-# 六星判定用：名字 → 1~6 星（character_table 的 rarity 是 0 起算，转成 1 起）
-_rarity_cache = None
+# 六星判定用：名字 → 1~6 星（character_table 的 rarity 是 0 起算，转成 1 起）。
+# 按资源包 (version, fingerprint) 键控（同 _char_index）：热更新出新六星后
+# 不能还按旧表把新干员当「认不出」（#50）
+_RARITY = {'key': None, 'map': None}
 _rarity_lock = threading.Lock()
 
 
 def _rarity_by_name():
-    global _rarity_cache
+    pack = resources.pack()
+    key = (pack.get('version'), pack.get('fingerprint'))
     with _rarity_lock:
-        if _rarity_cache is None:
+        if _RARITY['map'] is None or _RARITY['key'] != key:
             m = {}
             for c in (resources.char_table() or {}).values():
                 if isinstance(c, dict) and c.get('name'):
                     m[norm(c['name'])] = int(c.get('rarity') or 0) + 1
-            _rarity_cache = m
-    return _rarity_cache
+            _RARITY['map'] = m
+            _RARITY['key'] = key
+        return _RARITY['map']
 
 
 # 六星权重表（resources/oper-weights.json，进程内缓存，文件换了自动重载）
@@ -743,7 +761,9 @@ def detail_opers(content, owned_map=None):
         stars = (idx.get(o.get('name') or '') or (6,))[0]
         owned = (owned_map or {}).get(norm(o.get('name')))
         known = bool(owned.get('skillKnown', True)) if owned else True
-        o['requirements'] = effective_req(op, stars, strict_skill=known)
+        # 键名与搜索侧 _item 的 'req' 统一：两处各叫各的（req/requirements），
+        # 任一侧改名另一侧就静默显示「无特殊要求」（#63）
+        o['req'] = effective_req(op, stars, strict_skill=known)
         o['skillKnown'] = known if owned else None
         out.append(o)
     return out
@@ -786,7 +806,10 @@ _ACTION_SKILL_TYPES = ('Skill', 'Retreat', 'BulletTime', 'SkillUsage')
 
 
 def _fix_oper(op, idx, notes):
-    """修正单个干员条目，返回 False 表示条目本身不可用"""
+    """修正单个干员条目（星级/技能合法性、练度下限），问题就地改并记进 notes。
+
+    恒返回 True：查不到的条目（装置、召唤物）MAA 也会跳过检查，不算不可用。
+    """
     if not isinstance(op, dict) or not op.get('name'):
         return True
 

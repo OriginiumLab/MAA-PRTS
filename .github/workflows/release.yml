@@ -20,9 +20,11 @@ on:
 permissions:
   contents: write
 
-# 连续合并不互相取消，按顺序逐个发版
+# 连续合并不互相取消，按顺序逐个发版。并发组用固定值：按 PR 号隔离时，
+# 两个 Release PR 一先一后合并会并行跑两个 release job，tag 创建与资产
+# 上传可能交错（#62）
 concurrency:
-  group: release-${{ github.event.pull_request.number }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -92,7 +94,9 @@ jobs:
         run: python -u tools/build.py
 
       # 版本号唯一来源是 PR 标题：打包后写进包内 version.json，
-      # 程序运行时读它显示版本；没有这个文件的本地构建都是 dev 版
+      # 程序运行时读它显示版本；没有这个文件的本地构建都是 dev 版。
+      # schema 单点定义在 backend/core/version.py 的 app_version()（读侧），
+      # 改字段名两边一起动（#63）
       - name: Write version.json
         shell: python
         run: |
@@ -111,7 +115,9 @@ jobs:
           $map = @{ 'AMD64' = 'x64'; 'ARM64' = 'arm64'; 'x86' = 'x86' }
           $arch = $map[$env:PROCESSOR_ARCHITECTURE]
           if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE.ToLower() }
-          # 压缩包内保留顶层 MAA-PRTS 文件夹（与历史发布包一致），解压即得完整目录
+          # 压缩包内保留顶层 MAA-PRTS 文件夹（与历史发布包一致），解压即得完整目录。
+          # 资产命名契约 MAA-PRTS-<tag>-win-<arch>.zip：appupdate._fallback_asset
+          # 按 it 拼兜底下载地址、docs/update.md 有说明，三处一起改（#63）
           $zip = "MAA-PRTS-$env:VERSION-win-$arch.zip"
           Compress-Archive -Path 'build/MAA-PRTS' -DestinationPath $zip
           "ZIP=$zip" | Add-Content $env:GITHUB_ENV

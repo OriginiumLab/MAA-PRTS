@@ -6,12 +6,25 @@
 const S = {
   settings: {}, accounts: [], current: '', detail: null,
   maa: {}, activities: [],
-  basket: [], result: null, searching: false, appInfo: null,
+  basket: [], result: null, appInfo: null,
   paths: {}, pack: {}, setup: {}, gamedata: {}, onboarded: false,
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
+  module: 'copilot', // 当前模块：copilot / gacha / signin（配置修改按需求去掉了）
+  signBusy: '',      // 正在跑哪一块签到：''/all/one——同一 token 并发签到会被风控，只能一个一个来
+  gacha: null,       // /api/gacha 的最近一次响应（当前账号那份）
+  gachaOf: {},       // file → 已加载过的抽卡视图：切账号/切菜单回来直接复用，不再转圈
+  lastOfGame: { arknights: '', endfield: '' },  // 每栏上次看的是哪个号（切回这一栏时还原）
+  gachaTab: 'char',  // 抽卡统计里看哪个池：char 角色寻访 / weapon 武器申领（终末地专用）
+  sideGame: 'arknights',   // 左侧账号列表当前看哪一栏：arknights / endfield
+  gachaByGame: false,      // 抽卡统计是因为选中终末地账号才打开的（切回方舟时自动回作业获取）
 };
+
+/* 账号属于哪个游戏（老账号没有 game 字段，一律当明日方舟） */
+function gameOf(a) {
+  return (a && a.game === 'endfield') ? 'endfield' : 'arknights';
+}
 
 /* ------------------------------------------------------ 黑名单（干员 / 作者 / 作业）
    干员黑名单是纯显示层过滤：比对结论（可直接抄 / 差一人 / 需练度）不变，
@@ -49,17 +62,40 @@ function esc(s) {
   ));
 }
 
-async function api(path, body) {
+async function api(path, body, { signal } = {}) {
   const opt = body === undefined ? {} : {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   };
+  if (signal) opt.signal = signal;   // 调用方可中止在途请求（搜索被新输入作废时用）
   const r = await fetch(path, opt);
   let j;
   try { j = await r.json(); } catch (e) { throw new Error('服务返回异常（' + r.status + '）'); }
   if (!j.ok) throw new Error(j.error || '未知错误');
   return j.data;
+}
+
+/* 设置保存统一走这里（#45）：
+   - 串行排队：后端是整键替换，两个在途保存以陈旧基底各发各的会互相覆盖
+     （快速连续拉黑丢前一条就是这类），排队 + 先把 patch 乐观并进 S.settings，
+     后一个保存就能以前一个的结果为基底；
+   - 成功用服务端返回的全量视图刷新 S.settings；失败先拉一次全量恢复现场
+     （乐观值可能已经写进 UI），再把错误抛给调用方。 */
+let _saveSettingsQ = Promise.resolve();
+function saveSettings(patch) {
+  const run = async () => {
+    Object.assign(S.settings, patch);
+    try {
+      const d = await api('/api/settings', patch);
+      S.settings = d.settings;
+    } catch (e) {
+      try { S.settings = (await api('/api/settings', {})).settings; } catch (_) { }
+      throw e;
+    }
+  };
+  _saveSettingsQ = _saveSettingsQ.then(run, run);
+  return _saveSettingsQ;
 }
 
 /* ------------------------------------------------------------ 提示 */
@@ -140,6 +176,8 @@ async function boot() {
     S.gamedata = d.gamedata || {};
     S.setup = d.setup || {};
     S.current = d.lastAccount || (d.accounts[0] && d.accounts[0].file) || '';
+    // 左侧默认停在当前账号那一栏（上次用的是终末地就停在终末地）
+    S.sideGame = gameOf(d.accounts.find(a => a.file === S.current) || d.accounts[0]);
     $('#basket-autostart').checked = S.settings.autoStartMaa !== false;   // 设置里的默认开关真正生效
     renderAccounts();
     renderUpdate();
@@ -147,6 +185,10 @@ async function boot() {
     renderMaaState();
     fillBasketProfiles();
     if (S.current) await selectAccount(S.current, true);
+    // ?mod=gacha 直接打开抽卡统计（做快捷方式用，和 ?q=TL-10 一样）
+    // 其余情况模块显隐由 selectAccount → applyModuleAvailability 决定，别重复渲染
+    const mod0 = new URLSearchParams(location.search).get('mod');
+    if (mod0 === 'gacha' || mod0 === 'signin') setModule(mod0);
     startPing();
     // 资源包后台自动更新：晚几秒，别和首屏渲染抢网络
     setTimeout(packAutoSync, 2500);
@@ -178,23 +220,67 @@ function startPing() {
 }
 
 /* ------------------------------------------------------------ 账号 */
+/* 侧栏顶部两个分组标签（明日方舟 / 终末地）：数量实时跟着 S.accounts 走。
+   某一组没有账号时标签照样在（点了给空态提示），不然会让人以为账号丢了。 */
+function renderGameSwitch() {
+  const box = $('#game-switch');
+  if (!box) return;
+  const n = { arknights: 0, endfield: 0 };
+  S.accounts.forEach(a => { n[gameOf(a)] += 1; });
+  $$('.gswitch', box).forEach(b => {
+    const g = b.dataset.game, on = g === S.sideGame;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    const c = $('.gcount', b);
+    if (c) c.textContent = n[g];
+  });
+}
+
+/* 切换分组：当前选中的账号不在这一组时，顺手选这组的第一个，
+   否则左边是终末地、右边主区还挂着方舟账号，看着对不上。 */
+function setSideGame(g) {
+  if (g !== 'arknights' && g !== 'endfield') return;
+  const changed = S.sideGame !== g;
+  S.sideGame = g;
+  const cur = currentAccount();
+  if (changed && S.current && gameOf(cur) !== g) {
+    // 先回这一栏上次看的号（切走前在看谁，切回来还是谁），没有才取第一个
+    const pick = S.accounts.find(a => a.file === S.lastOfGame[g] && gameOf(a) === g)
+      || S.accounts.find(a => gameOf(a) === g);
+    if (pick) { selectAccount(pick.file); return; }   // selectAccount 里会重建列表
+  }
+  renderAccounts();
+}
+
 function renderAccounts() {
   const box = $('#account-list');
+  renderGameSwitch();
   if (!S.accounts.length) {
     box.innerHTML = '<div style="padding:14px 10px;font-size:12px;color:var(--text-3);line-height:1.8">还没有账号<br>点下面的按钮用森空岛 token 添加</div>';
     return;
   }
-  box.innerHTML = S.accounts.map(a => {
+  const list = S.accounts.filter(a => gameOf(a) === S.sideGame);
+  if (!list.length) {
+    box.innerHTML = S.sideGame === 'endfield'
+      ? '<div style="padding:14px 10px;font-size:12px;color:var(--text-3);line-height:1.8">这一栏还没有终末地账号<br>用森空岛 token 同步账号时，token 绑定了终末地角色就会自动生成</div>'
+      : '<div style="padding:14px 10px;font-size:12px;color:var(--text-3);line-height:1.8">这一栏还没有明日方舟账号<br>点下面的按钮用森空岛 token 添加</div>';
+    return;
+  }
+  box.innerHTML = list.map(a => {
     const st = a.stats || {};
-    const cls = (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
+    const ef = a.game === 'endfield';                 // 终末地：没有练度数据，副标题换口径
+    const cls = ef ? 'ef' : (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
     const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
+    const sub = ef
+      ? `${esc(a.channelName || '官服')} · Lv${a.level || '?'}`
+      : `${esc(a.channelName || '官服')} · <b>${st.charCount || 0}</b>/${st.charTotal || 440} 干员`;
     return `
       <button class="acct ${a.file === S.current ? 'active' : ''}" data-file="${esc(a.file)}"
-        draggable="true" title="点击选中，拖动可排序">
+        draggable="true" title="点击选中，拖动可排序${ef ? '（终末地账号，不含作业获取）' : ''}">
         <span class="avatar ${cls}">${esc(ch)}</span>
         <span class="acct-main">
-          <span class="acct-name">${esc(a.nickName)}</span>
-          <span class="acct-sub">${esc(a.channelName || '官服')} · <b>${st.charCount || 0}</b>/${st.charTotal || 440} 干员</span>
+          <span class="acct-name">${esc(a.nickName)}${ef ? '<i class="acct-tag">终末地</i>' : ''}</span>
+          <span class="acct-sub">${sub}</span>
         </span>
       </button>`;
   }).join('');
@@ -209,12 +295,18 @@ function bindAccountOrder(box) {
   let dragEl = null;
 
   const saveOrder = async () => {
-    const files = $$('.acct', box).map(b => b.dataset.file);
+    // 列表里只有当前分组（明日方舟或终末地）。把这一组的新序填回原位，
+    // 另一组的位置保持不动——否则拖一次就把另一组的排序整体冲掉了
+    const moved = $$('.acct', box).map(b => b.dataset.file);
+    const pick = new Set(moved);
+    let k = 0;
+    const order = S.accounts.map(a => (pick.has(a.file) ? moved[k++] : a.file));
+    const byFile = new Map(S.accounts.map(a => [a.file, a]));
     // 内存数组同步成新序——否则下一次 renderAccounts（点选别的账号就会触发）
     // 还按旧序重建，界面看起来像「拖完又弹回去」
-    S.accounts = files.map(f => S.accounts.find(a => a.file === f)).filter(Boolean);
+    S.accounts = order.map(f => byFile.get(f)).filter(Boolean);
     try {
-      S.settings = (await api('/api/settings', { accountOrder: files })).settings;
+      await saveSettings({ accountOrder: order });
     } catch (e) { /* 保存失败不回滚视觉顺序，刷新后会还原 */ }
   };
 
@@ -249,40 +341,71 @@ function bindAccountOrder(box) {
   });
 }
 
+/* 切号请求的代数：快速连点 A→B 时两个请求并发，晚归的旧响应不能
+   覆盖新选择（详情串台：头像/统计是 A 的、高亮在 B 上） */
+let _selectSeq = 0;
+
 async function selectAccount(file, silent) {
   if (!file) return;
+  const seq = ++_selectSeq;
+  const prev = S.current;
   const changed = S.current && S.current !== file;
   S.current = file;
+  // 选中的账号在哪一栏，左侧就切到哪一栏（新加/刚同步出来的账号可能属于另一组）
+  const acc0 = S.accounts.find(a => a.file === file);
+  if (acc0) {
+    const g0 = gameOf(acc0);
+    S.sideGame = g0;
+    S.lastOfGame[g0] = file;      // 切走再切回这一栏时回到这个号，而不是永远第一个
+  }
   renderAccounts();
   if (changed && S.basket.length) {
     S.basket = [];
     renderBasket();
     toast('已切换账号，作业集重新开始', 'warn');
   }
+  if (changed) {
+    // 悖论 stage 跟着账号走：切号不清理的话，A 挑的悖论写入时会记到
+    // 当前账号（B）的已导入表里
+    S.paradoxPending = [];
+  }
   try {
     const d = await api('/api/account?file=' + encodeURIComponent(file));
+    if (seq !== _selectSeq) return;   // 已被更新的选择取代，丢弃旧响应
     S.detail = d;
+    // 抽卡视图跟着账号走：这个号之前看过就直接复用内存里的那份（本地缓存本来就在，
+    // 只是别再闪一次「读取中」），没看过才交给 renderGacha 去读
+    S.gacha = S.gachaOf[file] || null;
+    S.gachaTab = 'char';                                    // 换号回角色池，别停在武器池
     renderHero();
     updateParadoxChip();
-    await api('/api/settings', { lastAccount: file });
-    S.settings.lastAccount = file;
+    applyModuleAvailability();        // 终末地账号隐藏作业获取，并自动切到抽卡统计
+    // 保存 lastAccount 顺带用响应里的全量 settings 刷新 S.settings——
+    // 修复启动后第一次拉黑以「无 opBlacklist 的陈旧基底」整键覆盖的窗口期（#45）
+    await saveSettings({ lastAccount: file });
     refreshMaaStatus();          // 状态卡与配置下拉切到这个账号绑定的 MAA
     if (!silent) {
       const r = $('#results');
       if (r.dataset.mode) doSearch();
     }
   } catch (e) {
+    if (seq !== _selectSeq) return;   // 有更新选择在途，交给它收尾
+    S.current = prev;                 // 失败回滚高亮，别停在半切换状态
+    renderAccounts();                 // （作业集已清空的不恢复，宁空勿串）
     toast('读取账号失败：' + e.message, 'err');
   }
 }
 
 function renderHero() {
   const d = S.detail;
+  const a0 = (d && d.account) || {};
+  const ef = !!(d && (d.game === 'endfield' || a0.game === 'endfield'));
   const importBtn = $('#btn-import-maa');
-  if (importBtn) importBtn.hidden = !d;   // 有选中账号才给「从 MAA 更新干员信息」入口
+  if (importBtn) importBtn.hidden = !d || ef;   // 终末地没有 MAA 练度可导
   const algoSel = $('#algo-select');
   if (algoSel) {
-    algoSel.disabled = !d;                        // 算法下拉跟账号走，没账号不可用
+    // 算法下拉跟账号走：没有账号、或终末地账号（不搜作业）都不可用
+    algoSel.disabled = !d || ef;
     if (d) algoSel.value = d.preferAlgo || 'rating';
   }
   if (!d) return;
@@ -290,6 +413,23 @@ function renderHero() {
   const name = a.nickName || '未知账号';
   $('#hero-name').textContent = name;
   $('#hero-avatar').textContent = name.replace(/[#＃].*$/, '').slice(0, 1);
+  $('#hero-avatar').classList.toggle('ef', ef);   // 终末地：头像配色跟着换
+
+  if (ef) {
+    // 终末地：没有干员图鉴，只展示身份 + 抽卡概况
+    const bits = [a.channelName || '', a.serverName || '', 'Lv' + (a.level || '?'),
+                  'uid ' + (a.uid || '')];
+    $('#hero-sub').textContent = bits.filter(Boolean).join(' · ');
+    const g = (S.gacha && S.gacha.file === S.current && S.gacha.summary) || null;
+    $('#hero-stats').innerHTML = `
+      <div class="stat"><b>${a.level || '—'}</b><span>等级</span></div>
+      <div class="stat"><b>${esc(a.serverName || '—')}</b><span>区服</span></div>
+      <div class="stat mint"><b>${g ? g.total : 0}</b><span>抽卡</span></div>
+      <div class="stat ${g && g.sixCount ? 'amber' : ''}"><b>${g ? g.sixCount : 0}</b><span>六星</span></div>
+    `;
+    return;
+  }
+
   const bits = [a.channelName || '', 'Lv' + (a.level || '?'), 'uid ' + (a.uid || '')];
   const sec = (a.secretary || {}).name;
   if (sec) bits.splice(2, 0, '看板 ' + sec);
@@ -882,6 +1022,7 @@ function renderParadoxPanel(root, d, close) {
           name: meta.name || '',
           difficulty: x.difficulty, difficultyText: x.difficultyText,
           maaCode: 'maa://' + x.copilotId,
+          px: true,   // 悖论来源标记：作业集里删掉它时联动清 paradoxPending
         });
       });
       const added = addManyToBasket(ops);
@@ -914,10 +1055,26 @@ function renderParadoxPanel(root, d, close) {
 /* ------------------------------------------------------------ 搜索 */
 /* 输入停约 0.5s 自动搜索：每次键入重置计时，清空输入不搜也不弹提示 */
 let searchTimer = 0;
+let searchAbort = null;   // 在途搜索的 AbortController；配合 searchKey 给 doSearch 去重
+let searchKey = '';       // 在途搜索的「账号|关键词」
+
+/* 立刻作废还在飞行的搜索：中止请求（活动检索后端要跑十几秒，等它跑完再搜新的没意义）。
+   被中止的一方走 doSearch catch 的 aborted 分支安静退场，不碰 UI。 */
+function stopSearch() {
+  if (searchAbort) { const a = searchAbort; searchAbort = null; searchKey = ''; a.abort(); }
+}
+
 function queueAutoSearch() {
   clearTimeout(searchTimer);
+  stopSearch();   // 键入即停旧搜索：不等它完成，新一轮防抖接管
   searchTimer = setTimeout(() => {
     if ($('#search-input').value.trim()) doSearch();
+    // 旧搜索被作废后输入又清空了：骨架屏不能一直转下去，落回可解释的空态
+    else if ($('#results').dataset.mode === 'loading') {
+      const box = $('#results');
+      box.dataset.mode = '';
+      box.innerHTML = '<div class="empty-state"><h3>已停止检索</h3><p>输入关卡或活动代号，停顿后自动搜索</p></div>';
+    }
   }, 500);
 }
 
@@ -945,29 +1102,36 @@ async function doSearch() {
   const q = $('#search-input').value.trim();
   if (!q) { toast('先输入关卡或活动', 'warn'); return; }
   if (!S.current) { toast('先选一个账号', 'warn'); openAddAccount(); return; }
-  if (S.searching) return;
-  S.searching = true;
+  const key = S.current + '|' + q;
+  if (searchAbort && searchKey === key) return;   // 同账号同关键词已在途，别重复发
+  stopSearch();   // 顶掉仍在飞行的旧搜索：Enter / 切号 / 拉黑重搜都走这里
+  const ac = new AbortController();
+  searchAbort = ac;
+  searchKey = key;
+  const file0 = S.current;      // 发起搜索时的账号：结束时变了要补搜（#59，静默切号不会中止在途搜索）
   const box = $('#results');
   box.dataset.mode = 'loading';
   box.innerHTML = `<div class="result-head"><div class="result-title">正在检索「${esc(q)}」…<span>比对干员与练度中</span></div></div>
     <div class="loading-row"><span class="spinner"></span>正在从作业站拉取作业，活动关卡多时可能要十几秒</div>
     <div class="ops-grid">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
   try {
-    const d = await api('/api/search', { file: S.current, q, pages: 2, limit: 10 });
+    const d = await api('/api/search', { file: S.current, q, pages: 2, limit: 10 }, { signal: ac.signal });
     S.result = d;
     box.dataset.mode = d.mode;
     renderResult(d);
     setNextBtn(d.next);
     box.scrollTop = 0;
   } catch (e) {
-    box.dataset.mode = '';
+    if (ac.signal.aborted) return;   // 被新输入 / 新搜索作废：安静退场，UI 由后来者接管
+    box.dataset.mode = 'error';   // 留个非空标记：之后切号仍会触发重搜
     box.innerHTML = `<div class="empty-state"><h3>没搜到</h3><p>${esc(e.message)}</p></div>`;
     setNextBtn(null);
     toast(e.message, 'err', 4000);
   } finally {
-    S.searching = false;
-    // 搜索进行中输入又变了（防抖那次会被上面的 S.searching 拦掉）→ 完事后补搜最新词
-    if ($('#search-input').value.trim() !== q) queueAutoSearch();
+    if (searchAbort === ac) { searchAbort = null; searchKey = ''; }
+    // 正常完成后输入或账号变了 → 防抖补搜：不然旧账号的比对结果挂在新账号名下。
+    // 被中止的不补——中止它的那一方（键入 / 新 doSearch）自会安排后续搜索
+    if (!ac.signal.aborted && ($('#search-input').value.trim() !== q || S.current !== file0)) queueAutoSearch();
   }
 }
 
@@ -1018,16 +1182,15 @@ function diffLabel(dcn, variant) {
   return dcn || '';
 }
 
-function opChips(op, max = 8) {
-  const list = visOpers(op.opers).slice();
-  const chips = list.slice(0, max).map(o => {
+/* 干员 chips 全量铺开（容器 flex-wrap 换行）：折叠成 +N 会把缺的干员藏起来，
+   一眼看不出这份作业到底缺谁 */
+function opChips(op) {
+  return visOpers(op.opers).map(o => {
     let cls = 'own';
     if (!o.owned) cls = 'lack';
     else if (!o.ok) cls = 'train';
     return `<span class="op-chip ${cls}" title="${esc(chipTitle(o))}">${esc(o.name)}</span>`;
-  });
-  if (list.length > max) chips.push(`<span class="op-chip more">+${list.length - max}</span>`);
-  return chips.join('');
+  }).join('');
 }
 
 function chipTitle(o) {
@@ -1319,8 +1482,7 @@ async function showOpDetail(op, variant) {
         const old = btn.textContent;
         btn.disabled = true;   // 请求在途防重复点
         try {
-          const d = await api('/api/settings', { [key]: next });
-          S.settings = d.settings;
+          await saveSettings({ [key]: next });
           btn.textContent = doneText;
           btn.title = tip;
           toast(`${doneText}，可在设置里移除`, 'ok');
@@ -1348,7 +1510,7 @@ async function showOpDetail(op, variant) {
         const body = d.content || {};
         const shown = visOpers(d.opers);
         const rows = shown.map(o => {
-          const req = o.requirements || {};
+          const req = o.req || {};   // 与搜索侧同键名（#63）
           const bits = [];
           if (req.elite != null) bits.push('精' + req.elite);
           if (req.level != null) bits.push(req.level + ' 级');
@@ -1479,7 +1641,14 @@ function renderBasket() {
       </button>
     </div>`).join('');
   $$('[data-del]', list).forEach(b => b.addEventListener('click', () => {
-    S.basket.splice(Number(b.dataset.del), 1);
+    const idx = Number(b.dataset.del);
+    const item = S.basket[idx];
+    S.basket.splice(idx, 1);
+    // 悖论作业删出作业集：对应 stage 也从「写完记已导入」清单移除，
+    // 不然没写入的悖论会被标成已导入（#59）
+    if (item && item.px && item.stageId && (S.paradoxPending || []).includes(item.stageId)) {
+      S.paradoxPending = S.paradoxPending.filter(s => s !== item.stageId);
+    }
     renderBasket();
   }));
   bindBasketDrag(list);
@@ -1529,9 +1698,17 @@ function syncBasketOrder() {
 function fillBasketProfiles() {
   const sel = $('#basket-profile');
   const list = (S.maa && S.maa.profiles) || [];
-  // 不做预选：档案列表来自当前账号绑定的 MAA，默认选第一个
-  sel.innerHTML = list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
+  // 列表没变就不重建：这个下拉每 30 秒被 refreshMaaStatus 重建一次，
+  // 无条件 innerHTML 会把用户选中的档案弹回第一项，之后点「写入 MAA」
+  // 就写进第一个档案的配置里（#51）
+  const html = list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
     || '<option value="">（无配置）</option>';
+  if (sel.dataset.list === html) return;
+  const keep = sel.value;
+  sel.innerHTML = html;
+  sel.dataset.list = html;
+  // 列表变了也尽量保住选中项（保不住再默认选第一个）
+  if (keep && list.includes(keep)) sel.value = keep;
 }
 
 /* ------------------------------------------------------------ 写入 MAA */
@@ -1564,7 +1741,11 @@ async function applyToMaa() {
     // 写完自动收弹窗：日志末尾的「✓ 完成」给读者留一眼的工夫；
     // 之前这里不关，弹窗会一直挂着等用户手点「后台执行」
     setTimeout(() => m.close(), 900);
-    const px = S.paradoxPending || [];
+    // 按实际写进 MAA 的条目核对后再记「已导入」：paradoxPending 可能带着
+    // 别的账号挑的、或已从作业集删掉的 stage（#59）
+    const written = new Set(items.map(o => o.stageCode));
+    const px = (S.paradoxPending || []).filter(s => written.has(s));
+    S.paradoxPending = [];
     S.basket = [];
     renderBasket();
     toggleBasket(false);          // 窄屏写完顺手收起抽屉
@@ -1572,7 +1753,6 @@ async function applyToMaa() {
     if (S.result) doSearch();
     // 悖论：写完才记「已导入」，下次打开面板默认不勾
     if (px.length) {
-      S.paradoxPending = [];
       api('/api/paradox/mark', { file: S.current, stages: px })
         .then(() => api('/api/paradox/plan', { file: S.current }))
         .then(p => { if (S.detail) S.detail.paradox = p.stats; updateParadoxChip(); })
@@ -1584,11 +1764,13 @@ async function applyToMaa() {
   }
 }
 
-function pollTask(tid, root) {
+/* root 里放日志的容器：默认 #task-log；签到面板两块日志各有各的 id，
+   所以允许传 sel 指定（否则只能给两块日志复制一套轮询逻辑） */
+function pollTask(tid, root, sel) {
   return new Promise((resolve, reject) => {
     let since = 0;
     let done = false;
-    const box = root ? $('#task-log', root) : null;
+    const box = root ? $(sel || '#task-log', root) : null;
     const tick = async () => {
       if (done) return;
       try {
@@ -1935,7 +2117,19 @@ function openAccountWizard(mode) {
 
   // 方式一：森空岛 token，一行一个批量导入，失败的不拖累后面的行
   let pendingRetry = [];
+  let aaGoBusy = false;
   $('#aa-go', m).addEventListener('click', async () => {
+    // 第一行就锁：btn.disabled 要等 probe/存目录两个 await 之后才置上，
+    // 窗口期内双击会启动两条 token 同步循环，交错写同一个日志框（#59）
+    if (aaGoBusy) return;
+    aaGoBusy = true;
+    try {
+      await aaGoRun();
+    } finally {
+      aaGoBusy = false;
+    }
+  });
+  const aaGoRun = async () => {
     const btn = $('#aa-go', m);
     const tokens = pendingRetry.length ? pendingRetry
       : [...new Set($('#onb-token', m).value.split(/\r?\n/).map(s => s.trim()).filter(Boolean))];
@@ -2019,7 +2213,7 @@ function openAccountWizard(mode) {
     toast(many ? `${added.length} 个账号已添加${extra}` : `账号已添加${extra}`);
     const target = added[added.length - 1];
     if (target) await selectAccount(target, true);
-  });
+  };
 
   // 方式二：不用 token，直接用选定 MAA 的识别结果建本地账号
   $('#aa-maa-go', m).addEventListener('click', async () => {
@@ -2680,8 +2874,7 @@ function openOpBlacklist() {
       };
       const persist = async next => {
         try {
-          const d = await api('/api/settings', { opBlacklist: next });
-          S.settings = d.settings;
+          await saveSettings({ opBlacklist: next });
           dirty = true;
           render();
         } catch (e) { toast('保存失败：' + e.message, 'err'); }
@@ -2709,6 +2902,365 @@ function openOpBlacklist() {
   });
 }
 
+/* ------------------------------------------------------------ 模块切换
+   菜单：作业获取 / 抽卡统计 / 配置修改 / 森空岛签到。
+   后两个还没做，只占了位置（disabled + 待做角标）；终末地账号没有作业获取
+   （MAA 只跑明日方舟），选中终末地时那个 tab 直接不显示，并自动切到抽卡统计。 */
+
+function currentAccount() {
+  return S.accounts.find(a => a.file === S.current) || null;
+}
+
+function currentGame() {
+  const a = currentAccount();
+  if (a && a.game) return a.game;
+  return (S.detail && S.detail.game) || 'arknights';
+}
+
+function applyModuleAvailability() {
+  const ef = currentGame() === 'endfield';
+  // 终末地账号只留抽卡统计：作业获取、森空岛签到两枚 tab 都不显示
+  // （签到本身支持终末地，全局签到照样会签，只是不给终末地账号开这块界面）
+  ['copilot', 'signin'].forEach(m => {
+    const b = $('.modtab[data-mod="' + m + '"]');
+    if (b) b.hidden = ef;
+  });
+  if (ef && S.module !== 'gacha') {
+    S.gachaByGame = true;              // 终末地没有作业获取，只能看抽卡统计（记一笔是被账号逼的）
+    setModule('gacha', true);
+  } else if (!ef && S.gachaByGame) {
+    S.gachaByGame = false;             // 从终末地切回方舟：别把人留在抽卡统计里，回作业获取
+    setModule('copilot', true);
+  } else if (S.module === 'gacha') {
+    // 已经停在抽卡统计：换号就得重画（终末地之间互切也走这里，
+    // 之前只判断了 !ef，结果终末地换号后还挂着上一个号的数据）
+    renderGacha();
+  } else if (S.module === 'signin') {
+    renderSignin();                    // 签到面板上的「当前账号」跟着换
+  }
+}
+
+function setModule(mod, byGame) {
+  if (!byGame) S.gachaByGame = false;   // 用户自己点的模块，之后别被账号切走
+  if (mod !== 'gacha' && currentGame() === 'endfield') mod = 'gacha';
+  S.module = mod;
+  $$('.modtab').forEach(b => {
+    const on = b.dataset.mod === mod && !b.disabled;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const cp = $('#mod-copilot'), gg = $('#mod-gacha'), sg = $('#mod-signin');
+  if (cp) cp.hidden = mod !== 'copilot';
+  if (gg) gg.hidden = mod !== 'gacha';
+  if (sg) sg.hidden = mod !== 'signin';
+  // 抽卡统计/签到都用不到右栏作业集：收掉第三列，主区拿满宽度
+  $('#app').classList.toggle('no-basket', mod !== 'copilot');
+  if (mod !== 'copilot') toggleBasket(false);
+  if (mod === 'gacha') renderGacha();
+  if (mod === 'signin') renderSignin();
+}
+
+/* ------------------------------------------------------------ 森空岛签到 */
+function renderSignin() {
+  const acc = currentAccount();
+  const gname = a => (gameOf(a) === 'endfield' ? '终末地' : '明日方舟');
+  const sub = $('#sign-sub');
+  if (sub) sub.textContent = acc ? `${acc.nickName} · ${gname(acc)}` : '未选择账号';
+
+  const one = $('#sign-one-name');
+  if (one) {
+    one.textContent = acc
+      ? `${acc.nickName}（${gname(acc)}${acc.channelName ? ' · ' + acc.channelName : ''}）`
+      : '未选择账号';
+    one.title = (acc && !acc.hasToken) ? 'MAA 导入的账号没有森空岛 token，签不了' : '';
+  }
+
+  const withTok = S.accounts.filter(a => a.hasToken);
+  const note = $('#sign-all-note');
+  if (note) {
+    note.textContent = S.accounts.length
+      ? `所有账号 · 明日方舟 + 终末地（${withTok.length}/${S.accounts.length} 个有 token）`
+      : '还没有账号';
+  }
+
+  const bAll = $('#btn-sign-all'), bOne = $('#btn-sign-one');
+  if (bAll) bAll.disabled = !withTok.length || !!S.signBusy;
+  if (bOne) bOne.disabled = !acc || !acc.hasToken || !!S.signBusy;
+  const tip = $('#sign-tip');
+  if (tip) tip.textContent = S.signBusy ? '正在签到…' : '';
+}
+
+/* scope: 'all' 全部账号 / 'one' 当前账号。两块日志各写自己那块，互不覆盖 */
+async function signinRun(scope) {
+  if (S.signBusy) return;
+  const boxSel = scope === 'all' ? '#sign-log-all' : '#sign-log-one';
+  const box = $(boxSel);
+  if (!box) return;
+  if (scope === 'one' && !S.current) {
+    toast('先在左侧选一个账号', 'err');
+    return;
+  }
+  S.signBusy = scope;
+  box.innerHTML = '';
+  renderSignin();
+  try {
+    const { taskId } = await api('/api/signin/run', { file: scope === 'one' ? S.current : '' });
+    const res = (await pollTask(taskId, document, boxSel)) || {};
+    const c = res.counts || {};
+    const line = `成功 ${c.ok || 0} · 已签到 ${c.already || 0} · 失败 ${c.fail || 0}`;
+    toast('签到完成：' + line, c.fail ? 'err' : 'ok', 4200);
+  } catch (e) {
+    const d = document.createElement('div');
+    d.className = 'err';
+    d.textContent = '✗ ' + e.message;
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    toast('签到失败：' + e.message, 'err', 5000);
+  } finally {
+    S.signBusy = '';
+    renderSignin();
+  }
+}
+
+/* ------------------------------------------------------------ 抽卡统计 */
+let _gachaSeq = 0;
+let _gachaBusy = false;
+
+const fmtPct = x => (x ? (x * 100).toFixed(2) : '0.00') + '%';
+
+async function renderGacha(force) {
+  const body = $('#gacha-body');
+  if (!body) return;
+  const acc = currentAccount();
+  const sub = $('#gacha-sub');
+  if (sub) {
+    sub.textContent = acc
+      ? `${acc.nickName} · ${acc.game === 'endfield' ? '终末地' : '明日方舟'}`
+      : '';
+  }
+  if (!S.current) {
+    body.innerHTML = `<div class="gacha-empty"><h3>还没有账号</h3>
+      <p>先用森空岛 token 添加一个账号，抽卡记录才有地方读。</p></div>`;
+    const up = $('#gacha-updated');
+    if (up) up.textContent = '';
+    return;
+  }
+  if (!force && S.gacha && S.gacha.file === S.current) { paintGacha(S.gacha); return; }
+  const seq = ++_gachaSeq;
+  body.innerHTML = `<div class="gacha-cards">${'<div class="gacha-card"><b>—</b><span>读取中</span></div>'.repeat(5)}</div>
+    <div class="loading-row"><span class="spinner"></span>读取本地抽卡缓存…</div>`;
+  try {
+    const d = await api('/api/gacha?file=' + encodeURIComponent(S.current));
+    if (seq !== _gachaSeq) return;
+    S.gacha = d;
+    if (d && d.file) S.gachaOf[d.file] = d;   // 切走再回来直接用这份，不再请求
+    paintGacha(d);
+    if (currentGame() === 'endfield') renderHero();   // 头像卡里的抽卡/六星跟着刷新
+  } catch (e) {
+    if (seq !== _gachaSeq) return;
+    body.innerHTML = `<div class="gacha-empty"><h3>读取失败</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+/* 空口径：终末地没抽过武器时，武器池 tab 也得能点开（显示 0，不炸） */
+const GACHA_BLANK = {
+  total: 0, sixCount: 0, fiveCount: 0, rate6: 0, avgPity: 0, lastSixGap: 0,
+  byRarity: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 },
+  firstAt: '', lastAt: '', sixStars: [], pools: [], records: [],
+};
+
+function paintGacha(d) {
+  const body = $('#gacha-body');
+  if (!body) return;
+  const up = $('#gacha-updated');
+  if (up) up.textContent = d.updatedAt ? '上次同步 ' + d.updatedAt.replace('T', ' ').slice(0, 16) : '';
+
+  if (!d.hasToken) {
+    body.innerHTML = `<div class="gacha-empty">
+      <h3>这个账号读不到抽卡记录</h3>
+      <p>抽卡记录必须用森空岛 token 查。这个账号是用 MAA 的干员识别结果建的（或 token 已失效）。
+      用「添加账号 → 森空岛 token」再同步一次即可，会复用同一个账号文件。</p>
+      <button class="ghost-btn mint" id="gacha-add">去添加 token</button></div>`;
+    const b = $('#gacha-add');
+    if (b) b.addEventListener('click', openAddAccount);
+    return;
+  }
+
+  const s = d.summary;
+  if (!s || !s.total) {
+    const ef = d.game === 'endfield';
+    // 已经同步过还是 0 条：这个号确实没记录（接口只留最近一段），别再让人反复点拉取
+    const synced = !!d.updatedAt;
+    const at = synced ? esc(d.updatedAt.replace('T', ' ').slice(0, 16)) : '';
+    const tip = synced
+      ? `上次同步 ${at}，接口返回 0 条：这个号确实没有抽卡记录，不用再拉。`
+      : (ef
+        ? '终末地的记录接口也能读：点下面按钮拉一次。如果这个角色确实没抽过，这里会一直是 0 条。'
+        : '点下面的按钮从森空岛拉一次。首次会把所有寻访分类翻完，几秒钟。');
+    body.innerHTML = `<div class="gacha-empty">
+      <h3>${synced ? '这个账号没有抽卡记录' : '还没有抽卡记录'}</h3>
+      <p>${tip}</p>
+      <button class="ghost-btn mint" id="gacha-sync-empty">${synced ? '再拉一次' : '拉取抽卡记录'}</button></div>`;
+    const b = $('#gacha-sync-empty');
+    if (b) b.addEventListener('click', gachaSync);
+    return;
+  }
+
+  // 终末地：角色寻访 / 武器申领 是两套记录、两套保底，分两个 tab 看（明日方舟只有一套）
+  if (d.game !== 'endfield' || S.gachaTab !== 'weapon') S.gachaTab = 'char';
+  paintGachaBody();
+}
+
+function paintGachaBody() {
+  const d = S.gacha;
+  const body = $('#gacha-body');
+  if (!d || !body) return;
+  const s = d.summary || {};
+  const ef = d.game === 'endfield';
+  const tab = ef ? S.gachaTab : 'char';
+  // 终末地每个 tab 只在 S.gacha.summary.char / .weapon 里取；方舟就是顶层那份
+  const cur = ef ? ((tab === 'weapon' ? s.weapon : s.char) || GACHA_BLANK) : s;
+
+  const rarOrder = [6, 5, 4, 3, 2, 1];
+  const byRarity = cur.byRarity || GACHA_BLANK.byRarity;
+  const rarMax = Math.max(1, ...rarOrder.map(r => byRarity[String(r)] || 0));
+  const bars = rarOrder.map(r => {
+    const n = byRarity[String(r)] || 0;
+    const pct = (n / rarMax) * 100;
+    return `<div class="rar-bar">
+      <i class="r${r}">${r}★</i>
+      <div class="rar-track"><div class="rar-fill r${r}" style="width:${pct.toFixed(1)}%"></div></div>
+      <b>${n} 次<small>${cur.total ? ((n / cur.total) * 100).toFixed(1) : '0.0'}%</small></b>
+    </div>`;
+  }).join('');
+
+  // 一个池子一张卡片，池子下面直接挂这个池出的六星（抽卡记录 App 的常见排版）。
+  // 明日方舟和终末地同一套版式：方舟的「标准寻访」会合并好几期，一个池里可能
+  // 出 7、8 个六星，所以先列最近 8 个，再多就只给一句「还有 N 个」。
+  const poolCards = (cur.pools || []).slice(0, 12).map(p => {
+    const items = p.sixItems || [];
+    const shown = items.slice(0, 8);
+    const rows = shown.map(x => `
+      <div class="six-row">
+        <span class="six-star">★★★★★★</span>
+        <span class="six-name">${esc(x.charName)}${x.isNew ? '<i class="six-new">new</i>' : ''}</span>
+        <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
+        <span class="six-at">${esc(x.at)}</span>
+      </div>`).join('');
+    const more = items.length > shown.length
+      ? `<div class="pool-more">还有 ${items.length - shown.length} 个六星没列出</div>` : '';
+    const none = items.length ? '' : '<div class="pool-none">这个池还没出六星</div>';
+    return `<div class="pool-card">
+      <div class="pool-head">
+        <b>${esc(p.poolName)}</b>
+        <span>${p.count} 抽 · 六星 <b>${p.six}</b> · ${fmtPct(p.rate6)}</span>
+      </div>
+      ${p.firstTs ? `<div class="pool-time">${esc(p.firstTs)} — ${esc(p.lastTs)}</div>` : ''}
+      ${rows}${more}${none}
+    </div>`;
+  }).join('');
+
+  const recRows = (cur.records || []).slice(0, 60).map(r => `
+    <tr>
+      <td class="c-name r${r.rarity}">${esc(r.charName)}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
+      <td class="c-dim">${'★'.repeat(Math.max(1, Math.min(6, r.rarity || 1)))}</td>
+      <td class="c-dim">${esc(r.poolName)}</td>
+      <td>${esc(r.at)}</td>
+    </tr>`).join('');
+
+  const tabs = ef ? `<div class="gacha-tabs">
+      ${[['char', '角色寻访', (s.char || {}).total || 0],
+         ['weapon', '武器申领', (s.weapon || {}).total || 0]]
+        .map(([k, label, n]) => `<button class="gacha-tab${tab === k ? ' active' : ''}"
+          data-gtab="${k}" aria-selected="${tab === k}">${label}<i>${n}</i></button>`).join('')}
+    </div>` : '';
+
+  const cards = `
+    <div class="gacha-card"><b>${cur.total}</b><span>${ef
+      ? (tab === 'weapon' ? '武器申领（抽）' : '角色寻访（抽）') : '总抽卡'}</span></div>
+    <div class="gacha-card gold"><b>${cur.sixCount}</b><span>${ef
+      ? (tab === 'weapon' ? '六星武器' : '六星角色') : '六星'}</span></div>
+    <div class="gacha-card mint"><b>${fmtPct(cur.rate6)}</b><span>六星出率</span></div>
+    <div class="gacha-card"><b>${cur.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
+    <div class="gacha-card"><b>${cur.lastSixGap}</b><span>距上次六星（抽）</span></div>`;
+
+  const poolSec = (cur.pools || []).length ? `
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>按卡池</b><span>按最近抽卡时间排序${(cur.pools.length > 12)
+        ? `，只列最近 12 个（共 ${cur.pools.length} 个）` : ''}</span></div>
+      <div class="pool-list">${poolCards}</div>
+    </div>` : '';
+
+  const rarSec = `
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>星级分布</b><span>${esc(cur.firstAt)} — ${esc(cur.lastAt)}</span></div>
+      <div class="rar-bars">${bars}</div>
+    </div>`;
+
+  const recSec = `
+    <div class="gacha-sec">
+      <div class="gacha-sec-head"><b>最近记录</b><span>最新在前${cur.total > 60 ? `，只列最近 60 条（共 ${cur.total} 条）` : ''}</span></div>
+      <table class="rec-table">
+        <thead><tr><th>${ef ? (tab === 'weapon' ? '武器' : '角色') : '干员'}</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
+        <tbody>${recRows}</tbody>
+      </table>
+    </div>`;
+
+  // 两个游戏同一套版式：按卡池（六星挂在池下）→ 星级分布 → 最近记录
+  const secs = [poolSec, rarSec, recSec];
+
+  body.innerHTML = `
+    ${tabs}
+    <div class="gacha-cards">${cards}</div>
+    ${ef ? `<div class="gacha-window">官方记录接口只保留最近一段：角色 ${(s.char || {}).total || 0} 抽 · 武器 ${(s.weapon || {}).total || 0} 抽。
+      更早的记录接口不返回，所以这里比实际总抽数少（不是统计漏了）。</div>` : ''}
+
+    ${secs.join('')}
+
+    <div class="gacha-note">
+      ! 保底按卡池连续计数（同池每抽 +1，出六星清零）；抽卡记录只保留最近一段窗口，
+      最早几次六星的「第几抽」只是窗口内的下限，不是真实垫抽数。
+      ${ef ? '角色寻访与武器申领是两套保底、两套概率，所以分开两个 tab 统计，别把它们加在一起算。' : ''}
+    </div>
+  `;
+
+  $$('.gacha-tab', body).forEach(b => b.addEventListener('click', () => {
+    if (S.gachaTab === b.dataset.gtab) return;
+    S.gachaTab = b.dataset.gtab;
+    paintGachaBody();
+    const sc = $('.gacha-scroll');
+    if (sc) sc.scrollTop = 0;
+  }));
+}
+
+async function gachaSync() {
+  if (!S.current) { toast('先在左边选一个账号', 'warn'); return; }
+  if (_gachaBusy) return;
+  _gachaBusy = true;
+  const btn = $('#btn-gacha-sync');
+  const oldHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
+  const body = $('#gacha-body');
+  body.innerHTML = `<div class="loading-row"><span class="spinner"></span>正在从森空岛拉取抽卡记录…</div>
+    <div class="gacha-log" id="task-log"></div>`;
+  try {
+    const { taskId } = await api('/api/gacha/sync', { file: S.current });
+    await pollTask(taskId, body);
+    toast('抽卡记录已更新');
+    await renderGacha(true);
+  } catch (e) {
+    toast('同步失败：' + e.message, 'err', 6000);
+    const box = $('#task-log', body);
+    if (box && !box.textContent.trim()) {
+      body.insertAdjacentHTML('beforeend',
+        `<div class="gacha-note">同步没跑起来：${esc(e.message)}</div>`);
+    }
+  } finally {
+    _gachaBusy = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = oldHtml; }
+  }
+}
+
 /* ------------------------------------------------------------ 事件绑定 */
 function bindGlobal() {
   $('#btn-next').addEventListener('click', () => {
@@ -2730,6 +3282,19 @@ function bindGlobal() {
     }
   });
   bindAccountOrder($('#account-list'));
+  $('#game-switch').addEventListener('click', e => {
+    const b = e.target.closest('.gswitch');
+    if (b) setSideGame(b.dataset.game);
+  });
+  $$('.modtab').forEach(b => b.addEventListener('click', () => {
+    if (b.disabled) return;
+    setModule(b.dataset.mod);
+  }));
+  $('#btn-gacha-sync').addEventListener('click', gachaSync);
+
+  $('#btn-sign-all').addEventListener('click', () => signinRun('all'));
+
+  $('#btn-sign-one').addEventListener('click', () => signinRun('one'));
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);
   $('#btn-settings').addEventListener('click', openSettings);
@@ -2738,8 +3303,15 @@ function bindGlobal() {
     toast(S.maa.running ? 'MAA 正在运行' : 'MAA 未运行');
   });
   $('#btn-apply').addEventListener('click', applyToMaa);
-  $('#btn-clear-basket').addEventListener('click', () => { S.basket = []; renderBasket(); });
+  $('#btn-clear-basket').addEventListener('click', () => {
+    S.basket = [];
+    S.paradoxPending = [];   // 作业集清空，「写完记已导入」的悖论清单一并清（#59）
+    renderBasket();
+  });
   $('#btn-refresh-all').addEventListener('click', async () => {
+    const btn = $('#btn-refresh-all');
+    if (btn.disabled) return;   // 按钮原本无任何禁用，双击=两个并发全量同步+两个弹窗（#59）
+    btn.disabled = true;
     const m = modal(`<h3>同步全部账号</h3>
       <div class="sub">按 tokens.json 逐个刷新，可能耗时 1~3 分钟。</div>
       <div class="log-box" id="task-log"></div>
@@ -2754,6 +3326,7 @@ function bindGlobal() {
       toast('全部账号已同步');
       if (S.current) selectAccount(S.current, true);
     } catch (e) { toast('同步失败：' + e.message, 'err', 5000); }
+    finally { btn.disabled = false; }
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { toggleBasket(false); return; }

@@ -227,6 +227,29 @@ def _default_subprof(root):
     return os.path.join(root, 'config', 'subprof_cache.json')
 
 
+def check_counts(old, new, log=None):
+    """条数只增不减的闸（生成端与自动同步端共用，#63）：返回变少的字段列表。
+
+    old 是旧包 dict（取其 counts），new 是新 counts；log 传 print 或
+    sync_pack 的 log，逐项打印增减。"""
+    if log is None:
+        log = print
+    lost = []
+    old_counts = (old or {}).get('counts') or {}
+    for k, v in (new or {}).items():
+        prev = old_counts.get(k)
+        if prev is None:
+            log('  %-16s %-6d 新增' % (k, v))
+        elif v > prev:
+            log('  %-16s %-6d +%d' % (k, v, v - prev))
+        elif v < prev:
+            log('  %-16s %-6d %+d  <- 变少' % (k, v, v - prev))
+            lost.append(k)
+        else:
+            log('  %-16s %-6d 持平' % (k, v))
+    return lost
+
+
 def main(argv=None):
     root = os.path.dirname(HERE)
     ap = argparse.ArgumentParser(description='生成内置游戏资源包')

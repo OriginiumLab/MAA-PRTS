@@ -40,7 +40,9 @@ GET  https://api.github.com/repos/OriginiumLab/MAA-PRTS/releases/latest
 - **手动检查不受节流**：设置页「检查更新」走 `?force=1`。
 - **版本比较按数字**：`v2.10.0 > v2.9.0`；`v2.4.0-beta.1 < v2.4.0`；
   解析不了的 tag（`latest`、`2.4`）一律当作没有更新，绝不触发。
-- **预发布**：默认不提示。设置里开「接收预发布版」才会看到 `vX.Y.Z-beta.N`。
+- **预发布**：默认不提示（检查走 `releases/latest`，它永远不含预发布）。
+  设置里开「接收预发布版」后检查改走 `releases` 列表端点（含预发布，按发布时间倒序），
+  这时才会看到 `vX.Y.Z-beta.N`；预发布的详情（changelog/sha256）按 tag 单独取。
 
 ### GitHub API 不通时（国内常见）
 
@@ -123,10 +125,11 @@ MAA-PRTS/                    ← 程序本体整个换掉
 
 1. **Release 的 tag 必须是 `vX.Y.Z`**：`release.yml` 从 PR 标题 `Release vX.Y.Z` 取版本号，
    tag 也用它。解析不了的 tag 用户端一律忽略。
-2. **别删旧 Release 的 asset**：检查用的是 `/releases/latest`，只认最新那条；
-   但如果最新是预发布，`latest` 会返回上一个正式版——这是 GitHub 的行为，符合预期。
-3. **Windows 的包必须叫 `*-win-x64.zip`（或 arm64）**：`_pick_asset()` 按架构挑，
-   挑不到才退到第一个 zip。
+2. **别删旧 Release 的 asset**：没开「接收预发布版」时检查用的是 `/releases/latest`，
+   它永远返回最近的非预发布 Release；开了开关才走 `releases` 列表端点把预发布也算进来。
+3. **Windows 的包必须叫 `MAA-PRTS-<tag>-win-<arch>.zip`**：命名契约三处一致——
+   release.yml 打包步骤、`appupdate.ASSET_NAME`（兜底下载按它拼地址）、本文件；
+   `_pick_asset()` 按架构挑，挑不到才退到第一个 zip。
 4. **不需要额外配置**：`digest` 是 GitHub 自己给 asset 算的 sha256，发版流程一个字都不用改。
 
 ## 排查表

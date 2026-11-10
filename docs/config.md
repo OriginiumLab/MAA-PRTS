@@ -13,8 +13,9 @@ config/
 ├── settings.json                全局设置（MAA 路径、上次账号等）
 ├── gamedata.json                资源版本记录（自动生成）
 ├── <昵称> <服务器>.json         ★ 每个角色一份账号配置（练度 + 缺卡 + token 密文）
-├── _index.json / _removed/      账号索引 / 删除备份（自动生成）
-├── 作业站/                       导出「作业站本地导入」格式（界面上点导出才生成）
+├── _did.json / _removed/        本机随机设备指纹 / 删除账号的备份（自动生成）
+├── gacha/                       抽卡记录缓存：<账号文件名>.json（只增不减，删了重新同步即可）
+├── 作业站/                       导出「作业站本地导入」格式（API /api/export 生成，界面暂无入口）
 ├── subprof_cache.json           分支中文名缓存（边同步边学）
 └── tokens.json                  旧版密文 token 库：迁移产物 + 只读兜底，不再写入
 ```
@@ -48,6 +49,8 @@ config/
 
 这个文件可以直接手改；改完要重启程序生效（程序启动时读一次并缓存）。
 删掉它等于恢复默认：引导会重新出现，需要再填一次 MAA 目录。
+手改坏了 JSON 也不会丢数据：启动时会把坏文件改名成
+`settings.json.broken-<时间戳>` 保住原件，程序按默认设置继续运行。
 
 ## 账号文件（<昵称> <服务器>.json）
 
@@ -71,6 +74,19 @@ schemaVersion 2 快照（`backend/core/updater.py` 的 `build_snapshot`）加一
 `maa.dir` 与 `skd` 同处一个账号文件：一个账号用哪个 MAA、拿哪个 token，
 删文件即整体清除。从 MAA 导入干员识别结果（界面的「从 MAA 导入干员信息」）
 也是改这份文件——只覆盖 `chars/stats/missing/sync`，其余原样保留。
+
+### 终末地账号
+
+同一个森空岛 token 若还绑了《明日方舟：终末地》角色，同步时会额外生成一份
+账号文件（文件名 `<昵称> 终末地.json`），`account` 段多两个字段：
+
+| 字段 | 说明 |
+|---|---|
+| `account.game` | `arknights`（缺省）或 `endfield`；界面按它区分账号、决定是否给「作业获取」 |
+| `account.roleId` | 终末地角色 id（读取抽卡记录用的是 `account.uid`，不是这个） |
+
+终末地账号没有 `chars/stats/missing`（终末地不吃 zonai 的 `player/info`），
+只有身份 + `skd`，用途是抽卡统计（以及后续的签到）。
 
 ### token 加密（skd 段）
 
@@ -136,6 +152,7 @@ token 是账号凭证，明文落盘不放心，所以**每条 token 单独**用
 
 - `skd` 段与 `tokens.json` 是密文，但**不要**把它当作可以随便分享的东西——
   在能解密的那台电脑上它就等于明文 token；
-- 账号 JSON 里有游戏 uid、昵称、完整干员练度，上传前注意（分享练度请用
-  界面的「导出」，那才是干净数据）；
+- 账号 JSON 里有游戏 uid、昵称、完整干员练度，上传前注意（界面暂无
+  「导出」入口：想分享练度先自行删掉 `skd` 段，或用 API `/api/export`
+  导出只含练度的干净数据）；
 - `.gitignore` 已忽略整个 `config/`，不会误提交。

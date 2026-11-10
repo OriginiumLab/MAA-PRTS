@@ -6,7 +6,7 @@
   2. 和本地包里的 sourceCommit 比，一样就直接退出（零下载、零提交）
   3. 按那个 sha 定点下载 gamedata/excel 下 9 个 json（不 clone，上游仓库 7 GB）
   4. 调 resources/make_pack.py 和 tools/build_paradox_data.py 生成两个包
-  5. 条数只增不减才放行，写出 resources/pack-manifest.json 给客户端用
+  5. 条数只增不减才放行（arknights 各字段 + 悖论条数），写出 resources/pack-manifest.json 给客户端用
 
 用法：
     python tools/sync_pack.py                       # 本地手动同步
@@ -38,11 +38,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 UPSTREAM = 'yuanyan3060/ArknightsGameResource'
-# 客户端按这个仓库地址拼下载 URL；改名后要一起改（和 releases 页面一致）
-PACK_REPO = 'OriginiumLab/MAA-PRTS'
-# 资源数据单独走一条分支，不进 main：main 的规则集强制走 PR + 审批，
-# bot 直推会被拒。数据分支没有保护，客户端按这个分支名拼 raw/jsDelivr 地址。
-PACK_BRANCH = os.environ.get('MAA_PRTS_PACK_BRANCH') or 'pack-data'
+# 仓库/分支/镜像顺序与客户端 packsync 共用一份契约（backend/core/packrepo.py，
+# #63）：仓库或分支改名只改那一处，manifest 的下载 URL 与客户端拼的地址
+# 自动跟着变（环境变量 MAA_PRTS_PACK_REPO / MAA_PRTS_PACK_BRANCH 仍可覆盖）
+sys.path.insert(0, ROOT)
+from backend.core import packrepo as _packrepo  # noqa: E402
+PACK_REPO = _packrepo.PACK_REPO
+PACK_BRANCH = _packrepo.PACK_BRANCH
 
 FILES = [
     'version',
@@ -180,24 +182,6 @@ def sha256_of(path):
     return h.hexdigest()
 
 
-def check_counts(old, new):
-    """条数只增不减；返回变少的字段列表"""
-    lost = []
-    old_counts = (old or {}).get('counts') or {}
-    for k, v in (new or {}).items():
-        prev = old_counts.get(k)
-        if prev is None:
-            log('  %-16s %-6d 新增' % (k, v))
-        elif v > prev:
-            log('  %-16s %-6d +%d' % (k, v, v - prev))
-        elif v < prev:
-            log('  %-16s %-6d %+d  <- 变少' % (k, v, v - prev))
-            lost.append(k)
-        else:
-            log('  %-16s %-6d 持平' % (k, v))
-    return lost
-
-
 def build_manifest(root, sha, commit_time, game_version):
     packs = {}
     for key, rel, local in (
@@ -209,11 +193,9 @@ def build_manifest(root, sha, commit_time, game_version):
             continue
         d = read_json(path)
         fp = d.get('fingerprint') or ''
-        urls = []
-        for base in ('https://cdn.jsdelivr.net/gh/%s@%s/',
-                     'https://raw.githubusercontent.com/%s/%s/',
-                     'https://gh-proxy.com/https://raw.githubusercontent.com/%s/%s/'):
-            urls.append((base % (PACK_REPO, PACK_BRANCH)) + rel + '?v=' + (fp or sha[:8]))
+        # 镜像顺序用 packrepo.PACK_MIRRORS（新鲜度优先 raw → gh-proxy → jsDelivr），
+        # 与客户端 packsync 的 manifest 源同一份契约（#63；jsDelivr 长缓存只能兜底）
+        urls = _packrepo.mirror_urls(rel, '?v=' + (fp or sha[:8]))
         packs[key] = {
             'file': os.path.basename(local),
             'version': d.get('version') or d.get('gameVersion') or '',
@@ -331,7 +313,7 @@ def main(argv=None):
             excel, subprof_path=None, base_path=base,
             game_version=game_version, source_commit=sha,
             generated_at=commit_time or '')
-        lost = check_counts(old, data.get('counts') or {})
+        lost = make_pack.check_counts(old, data.get('counts') or {}, log)
         if lost:
             log('')
             log('[失败] 这些字段比现有包少：%s' % '、'.join(lost))
@@ -350,6 +332,15 @@ def main(argv=None):
         if not pdata.get('count'):
             log('[失败] 悖论清单为空')
             return 2
+        # 悖论条数与旧包只增不减：客户端 packsync._verify 对条数变少是拒绝
+        # 落盘的，服务端不拦的话每次启动都「资源已更新→校验失败」循环（#49）
+        prev_pc = (read_json(paradox_path) or {}).get('count') or 0
+        new_pc = pdata.get('count') or 0
+        if prev_pc and new_pc < prev_pc:
+            log('[失败] 悖论条数变少：%d → %d（上游可能只推了部分表，等补全再同步）'
+                % (prev_pc, new_pc))
+            return 2
+        log('悖论条数：%d%s' % (new_pc, '（+%d）' % (new_pc - prev_pc) if new_pc > prev_pc else ''))
 
         log('')
         log('落盘')

@@ -8,7 +8,8 @@
 三组检查，任何一组失败都以非 0 退出码结束：
 
     A. 静态检查
-       - 三个 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位）
+       - 全仓库 .bat 必须 UTF-8 无 BOM + CRLF 行尾（错编码会导致标签错位；
+         代码实际遍历仓库里所有 .bat，不止根目录三个）
        - backend / tools 全部 .py 可编译
     B. 加密与 token 存储（隔离临时目录，monkeypatch 路径）
        - DPAPI 往返、密文篡改必报错
@@ -35,6 +36,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
 import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -83,6 +86,19 @@ def check_py_compile():
 
 
 # ---------------------------------------------------------------- B. 加密与 token 存储
+def _isolate_data_root():
+    """进程起手就把 MAA_PRTS_DATA_ROOT 指到临时目录（#62）。
+
+    core.settings 在 import 时就执行 _migrate_legacy_*，此时模块级 ROOT 若是
+    真实用户数据目录（%LOCALAPPDATA% 下的 dev 根），迁移会碰真实用户数据——
+    与文件头「不碰真实用户数据」的承诺相悖。必须在任何 `from core import ...`
+    之前设好环境变量，让首次 import 就落在隔离根上（C 组子进程也继承它）。
+    """
+    root = tempfile.mkdtemp(prefix='maaprts-smoke-root-')
+    os.environ['MAA_PRTS_DATA_ROOT'] = root
+    return root
+
+
 def _patch_settings(tmp):
     """把 core.settings 的数据路径指到临时目录。
 
@@ -103,11 +119,17 @@ def _patch_settings(tmp):
 
 
 def _reset_config(tmp):
-    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库"""
+    """每个 B 检查前清空临时 config，互相看不见对方的账号文件/token 库。
+
+    顺手清 settings._cache：不清的话缓存还带着上一个检查保存的设置，
+    当前断言恰好不受影响，属潜伏坑（#62）。"""
     cfg = os.path.join(tmp, 'config')
     if os.path.isdir(cfg):
         shutil.rmtree(cfg)
     os.makedirs(cfg, exist_ok=True)
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import settings
+    settings._cache = None
 
 
 def check_vault_roundtrip():
@@ -568,11 +590,13 @@ def check_maa_import_level_only():
                           'requirements': {'elite': 2, 'level': 60,
                                            'skill_level': 9, 'module': 3}}]}
     dop = copilot.detail_opers(content, maa)
-    assert 'skill_level' not in dop[0]['requirements'], dop[0]['requirements']
-    assert 'module' not in dop[0]['requirements'], dop[0]['requirements']
+    # 展示副本的合并要求键与搜索侧统一为 'req'（#63）；'requirements' 是
+    # 原始作业内容的字段，保留不动
+    assert 'skill_level' not in dop[0]['req'], dop[0]['req']
+    assert 'module' not in dop[0]['req'], dop[0]['req']
     assert dop[0]['skillKnown'] is False
-    assert copilot.detail_opers(content, skl)[0]['requirements']['skill_level'] == 9
-    assert copilot.detail_opers(content)[0]['requirements']['skill_level'] == 9, \
+    assert copilot.detail_opers(content, skl)[0]['req']['skill_level'] == 9
+    assert copilot.detail_opers(content)[0]['req']['skill_level'] == 9, \
         '不带账号上下文时不该改变展示'
     v1 = {'opers': [{'name': six, 'skill': 1}]}      # v1 条目：本来没有 requirements
     copilot.detail_opers(v1, maa)
@@ -831,10 +855,11 @@ def check_copilot_v1_default_req():
     mode, missing, training, total, detail, _six, _w = copilot.match_operation(content, owned_map)
     assert mode == 'ready' and not training, '满练号打 v1 作业不该被误伤'
 
-    # 详情弹窗用的 detail_opers：requirements 也要补上默认
+    # 详情弹窗用的 detail_opers：合并要求键为 'req'（与搜索侧统一，#63），
+    # 也要补上默认
     dop = copilot.detail_opers(content)
-    assert dop[0]['requirements']['elite'] == 2 and dop[0]['requirements']['implied']
-    assert dop[0]['requirements']['skill_level'] == 9, '六星默认要带专三要求'
+    assert dop[0]['req']['elite'] == 2 and dop[0]['req']['implied']
+    assert dop[0]['req']['skill_level'] == 9, '六星默认要带专三要求'
     assert 'requirements' not in content['opers'][0], '展示副本不能污染原始 content'
 
 
@@ -1139,12 +1164,17 @@ def check_app_update():
     from core import appupdate as A
 
     # 1. 版本比较
-    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0)
-    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 2)
+    assert A.parse_version('v2.4.0') == (2, 4, 0, 1, 0, 0)
+    assert A.parse_version('2.4.0-beta.2') == (2, 4, 0, 0, 1, 2)
+    assert A.parse_version('v2.5.0-rc1') == (2, 5, 0, 0, 2, 1)
     assert A.is_newer('v2.10.0', '2.9.0'), '2.10 必须大于 2.9（按数字比，不是字符串比）'
     assert not A.is_newer('v2.4.0-beta.1', '2.4.0'), '预发布不该比同号正式版新'
     assert A.is_newer('v2.4.0', '2.4.0-beta.1')
     assert not A.is_newer('v2.4.0', '2.4.0')
+    # 预发布段位 alpha < beta < rc：只比序号会把 rc1 判到 beta.2 之下（#52）
+    assert A.is_newer('v2.5.0-rc1', 'v2.5.0-beta.2'), 'rc 必须大于 beta'
+    assert A.is_newer('v2.5.0-beta.3', 'v2.5.0-alpha.9'), 'beta 必须大于 alpha'
+    assert A.is_newer('v2.5.0-beta.2', 'v2.5.0-beta.1'), '同段位比序号'
     for junk in ('', 'latest', 'v2', '2.4', 'v2.4.0.1', 'release-2.4'):
         assert A.parse_version(junk) is None, '脏 tag 不该解析成功：%r' % junk
         assert not A.is_newer(junk, '2.0.0'), '脏 tag 不该触发更新：%r' % junk
@@ -1420,12 +1450,314 @@ def check_op_blacklist(tmp):
         copilot._fetch_ops_raw = orig
 
 
+# ---------------------------------------------------------------- B24 抽卡统计
+def _grec(ts, pid, pname, rarity, name='干员'):
+    return {'category': 'cat', 'poolId': pid, 'poolName': pname, 'charId': 'ch_' + name,
+            'charName': name, 'rarity': rarity, 'isNew': False,
+            'gachaTs': str(ts), 'pos': 0}
+
+
+def check_gacha_stats(tmp):
+    """抽卡统计（纯本地逻辑，不联网）：
+
+    - 星级归一：明日方舟 0 基、终末地口径未知，统一到 1~6
+    - 保底按 **池子 id** 连续计数、出六星清零；展示按池名合并（同名不同期不刷屏）
+    - 缓存视图：有/无 token 都能看已有缓存，抽卡数/六星数与记录一致
+    - 两个游戏账号即便 uid 相同也不能互相认领对方的文件
+    """
+    from core import api, gacha, updater
+
+    _reset_config(tmp)
+
+    # 1) 星级归一
+    assert gacha._norm_rarity(5) == 6, '0 基 5 应该是六星'
+    assert gacha._norm_rarity(0) == 0
+    assert gacha._norm_rarity(6) == 6, '已是 1 基的 6 不能再 +1'
+    assert gacha._norm_rarity(None) == 0 and gacha._norm_rarity('x') == 0
+
+    # 2) 汇总：P1 抽 4 次出 2 个六星、P2 抽 1 次出 1 个六星，交替顺序不能串池
+    base = 1700000000000
+    recs = [
+        _grec(base + 60000, 'P1', '标准寻访', 3),
+        _grec(base + 120000, 'P1', '标准寻访', 6, '六星甲'),
+        _grec(base + 180000, 'P1', '标准寻访', 5),
+        _grec(base + 240000, 'P2', '限定寻访', 6, '六星乙'),
+        _grec(base + 300000, 'P1', '标准寻访', 6, '六星丙'),
+    ]
+    s = gacha.summarize(list(reversed(recs)))     # 故意打乱输入顺序
+    assert s['total'] == 5, s['total']
+    assert s['sixCount'] == 3, s['sixCount']
+    assert s['byRarity']['6'] == 3 and s['byRarity']['5'] == 1 and s['byRarity']['3'] == 1, s['byRarity']
+    assert [x['charName'] for x in s['sixStars']] == ['六星丙', '六星乙', '六星甲'], s['sixStars']
+    assert [x['pity'] for x in s['sixStars']] == [2, 1, 2], s['sixStars']
+    assert s['avgPity'] == 1.7, s['avgPity']
+    assert s['lastSixGap'] == 0, s['lastSixGap']       # 最新一条就是六星
+    assert s['rate6'] == 0.6, s['rate6']
+    assert [(p['poolName'], p['count'], p['six']) for p in s['pools']] == [
+        ('标准寻访', 4, 2), ('限定寻访', 1, 1)], s['pools']
+
+    # 2b) 卡池按最近抽卡时间倒序：抽得少但更近的池子排最上面（不按抽数排）
+    late = [
+        _grec(base + 10000, 'PA', '老池', 3),
+        _grec(base + 20000, 'PA', '老池', 3),
+        _grec(base + 30000, 'PA', '老池', 3),
+        _grec(base + 40000, 'PB', '新池', 4),
+    ]
+    order = [p['poolName'] for p in gacha.summarize(late)['pools']]
+    assert order == ['新池', '老池'], order           # 新池只 1 抽也排前面
+    assert 'lastMs' not in gacha.summarize(late)['pools'][0], '排序字段不该外泄'
+    assert s['records'][0]['charName'] == '六星丙', s['records'][0]
+    assert s['firstAt'] and s['lastAt'] and s['firstAt'] < s['lastAt'], (s['firstAt'], s['lastAt'])
+
+    # 3) 缓存视图：缓存与 token 相互独立（没 token 也能看历史）
+    path = gacha.cache_path('测试 官服.json')
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({'version': 1, 'updatedAt': '2026-11-10T18:00:00+08:00',
+                   'game': 'arknights', 'uid': '1', 'records': recs}, f)
+    meta = {'game': 'arknights', 'uid': '1', 'nickName': '测试'}
+    v = gacha.view('测试 官服.json', 'TOKEN', meta)
+    assert v['hasToken'] is True and v['count'] == 5 and v['summary']['total'] == 5, v
+    v2 = gacha.view('测试 官服.json', '', meta)
+    assert v2['hasToken'] is False and v2['summary']['sixCount'] == 3, v2
+
+    # 4) 终末地账号快照：game/roleId 落盘，不写练度段
+    snap = updater._ef_snapshot(
+        {'uid': '697277796', 'roleId': '1447867726', 'nickName': '红颜断清梦',
+         'channelName': '官服', 'serverName': 'China', 'level': 57}, 'TOKEN')
+    assert snap['account']['game'] == 'endfield', snap['account']
+    assert snap['account']['roleId'] == '1447867726'
+    assert snap['stats'] == {} and snap['chars'] == [] and snap['missing'] == []
+
+    # 5) 同 uid 跨游戏不串号：scan_accounts 必须按 game 隔离
+    cfg = os.path.join(tmp, 'config')
+    with open(os.path.join(cfg, 'A 官服.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '999', 'game': 'arknights', 'nickName': 'A'}}, f)
+    with open(os.path.join(cfg, 'A 终末地.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '999', 'game': 'endfield', 'nickName': 'A'}}, f)
+    ark = updater.scan_accounts(cfg)
+    ef = updater.scan_accounts(cfg, 'endfield')
+    assert list(ark) == ['999'] and ark['999'].endswith('A 官服.json'), ark
+    assert list(ef) == ['999'] and ef['999'].endswith('A 终末地.json'), ef
+
+    # 6) 路由已注册（前端抽卡统计的入口）
+    assert '/api/gacha' in api.ROUTES and '/api/gacha/sync' in api.ROUTES
+
+    # 7) 终末地星级是 1 基（4/5/6），不能套明日方舟那套 +1；非抽卡记录要丢掉
+    assert gacha._norm_ef_rarity(4) == 4 and gacha._norm_ef_rarity(6) == 6
+    assert gacha._norm_ef_rarity(None) == 0 and gacha._norm_ef_rarity(9) == 0
+    assert gacha._ef_norm({'kind': 'gift_intel_book', 'seqId': '9'}, 'C') == {}
+    w = gacha._ef_norm({'kind': 'draw', 'poolId': 'weaponbox_1_6_1', 'poolName': '篆玉申领',
+                        'weaponId': 'wpn_1', 'weaponName': '呼啸守卫', 'rarity': 6,
+                        'gachaTs': '1792038254646', 'seqId': '740'},
+                       gacha.EF_WEAPON_CATEGORY)
+    assert w['kind'] == 'weapon' and w['charName'] == '呼啸守卫' and w['charId'] == 'wpn_1', w
+    assert w['rarity'] == 6 and w['pos'] == 740, w
+
+    # 8) 终末地翻页：服务端只认 seq_id 游标（size/limit 全被忽略、每页固定 5 条），
+    #    不传游标就永远只拿到最新一页；stop_below 接上本地缓存要立刻停
+    calls = []
+
+    def _fake_get(url, headers=None, timeout=25):
+        q = dict(urllib.parse.parse_qsl(url.split('?', 1)[1]))
+        calls.append(q)
+        end = int(q.get('seq_id') or 21)
+        rows = [{'kind': 'draw', 'seqId': str(i), 'rarity': 4, 'poolId': 'p',
+                 'poolName': '池', 'gachaTs': str(1700000000000 + i)}
+                for i in range(end - 1, max(0, end - 6), -1)]
+        return {'code': 0, 'data': {'list': rows, 'hasMore': len(rows) >= 5}}
+
+    _orig_get = gacha._get_json
+    gacha._get_json = _fake_get
+    try:
+        full = gacha._ef_drain('http://x', {'token': 't'}, 'C', '测试')
+        assert len(full) == 20, len(full)              # seq 21..1 一路翻到底
+        assert calls[0].get('seq_id') is None, calls[0]
+        assert 'size' not in calls[0] and 'page' not in calls[0], calls[0]
+        assert len(calls) == 5, len(calls)
+        calls.clear()
+        part = gacha._ef_drain('http://x', {'token': 't'}, 'C', '测试', stop_below=17)
+        assert len(part) == 5 and len(calls) == 1, (len(part), len(calls))
+    finally:
+        gacha._get_json = _orig_get
+
+    # 9) 终末地两套口径：角色寻访与武器申领分开算（保底/出率不能混），总数是两者之和
+    ef_recs = [
+        {'category': 'c', 'kind': 'char', 'poolId': 'c1', 'poolName': '限定寻访',
+         'charName': '角色甲', 'rarity': 6, 'gachaTs': str(base + 1000), 'pos': 11},
+        {'category': 'c', 'kind': 'char', 'poolId': 'c1', 'poolName': '限定寻访',
+         'charName': '角色乙', 'rarity': 4, 'gachaTs': str(base + 2000), 'pos': 12},
+        {'category': 'w', 'kind': 'weapon', 'poolId': 'w1', 'poolName': '篆玉申领',
+         'charName': '武器甲', 'rarity': 6, 'gachaTs': str(base + 3000), 'pos': 21},
+    ]
+    s2 = gacha.summarize(ef_recs)
+    assert s2['total'] == 3 and s2['sixCount'] == 2, s2
+    # 两套口径各给一份完整汇总（前端按 tab 分别渲染整套面板）
+    assert s2['char']['total'] == 2 and s2['char']['sixCount'] == 1, s2['char']
+    assert s2['weapon']['total'] == 1 and s2['weapon']['sixCount'] == 1, s2['weapon']
+    assert s2['char']['rate6'] == 0.5 and s2['weapon']['rate6'] == 1.0, s2
+    assert s2['char']['avgPity'] == 1 and s2['weapon']['avgPity'] == 1, s2
+    # 每个 tab 的「按卡池」只含自己那一套，池子下面挂着自己的六星记录
+    assert [p['poolName'] for p in s2['char']['pools']] == ['限定寻访'], s2['char']['pools']
+    assert [p['poolName'] for p in s2['weapon']['pools']] == ['篆玉申领'], s2['weapon']['pools']
+    wpool = s2['weapon']['pools'][0]
+    assert wpool['kind'] == 'weapon' and wpool['six'] == 1, wpool
+    assert [(x['charName'], x['pity']) for x in wpool['sixItems']] == [('武器甲', 1)], wpool
+    assert [x['charName'] for x in s2['weapon']['sixStars']] == ['武器甲'], s2['weapon']['sixStars']
+    assert [x['charName'] for x in s2['weapon']['records']] == ['武器甲'], s2['weapon']['records']
+    assert s2['char']['firstAt'] and s2['weapon']['firstAt'] == s2['weapon']['lastAt'], s2
+    # 全是角色记录时 weapon 为 None（前端据此决定要不要给武器池 tab）
+    assert gacha.summarize(ef_recs[:2])['weapon'] is None
+    assert {p['poolName']: p['kind'] for p in s2['pools']} == {
+        '限定寻访': 'char', '篆玉申领': 'weapon'}, s2['pools']
+
+    # 10) 旧版终末地缓存（version 1，只取了每池第一页且星级错位）直接作废重建
+    ef_path = gacha.cache_path('旧 终末地.json')
+    os.makedirs(os.path.dirname(ef_path), exist_ok=True)
+    with open(ef_path, 'w', encoding='utf-8') as f:
+        json.dump({'version': 1, 'game': 'endfield', 'uid': '9',
+                   'records': [_grec(base, 'P', '限定寻访', 5)]}, f)
+    assert gacha.load_cache('旧 终末地.json') == {}, 'v1 终末地缓存必须丢弃'
+    with open(ef_path, 'w', encoding='utf-8') as f:
+        json.dump({'version': 2, 'game': 'endfield', 'uid': '9',
+                   'records': [_grec(base, 'P', '限定寻访', 5)]}, f)
+    assert len(gacha.load_cache('旧 终末地.json').get('records') or []) == 1
+
+
+# ---------------------------------------------------------------- B25 森空岛签到
+def check_signin(_tmp):
+    """森空岛签到（不联网，全用假客户端）：
+
+    - 两套口径：方舟 POST {uid, gameId:1}；终末地 POST + header
+      sk-game-role: 3_<roleId>_<serverId>（拿 uid 打方舟接口会 403）
+    - 今天签过（方舟 records 里有今天的 ts / 终末地 hasToday）就不发签到请求
+    - 签到撞 HTTP 403 = 今天已签到，算 already 不算失败
+    - 没 token / 解不开 token / 终末地缺 roleId 一律跳过；坏 token 只登录一次
+    - 同一角色被两个账号文件指向时只签一次
+    """
+    import types
+    import urllib.error
+
+    from core import accounts, api, signin
+
+    now = time.time()
+    rows = [
+        {'file': 'a 官服.json', 'nickName': 'A', 'game': 'arknights', 'uid': '1', 'hasToken': True},
+        {'file': 'b 官服.json', 'nickName': 'B', 'game': 'arknights', 'uid': '2', 'hasToken': True},
+        {'file': 'c 终末地.json', 'nickName': 'C', 'game': 'endfield', 'uid': '9',
+         'roleId': '1715413040', 'serverId': '1', 'hasToken': True},
+        {'file': 'a-dup 官服.json', 'nickName': 'A2', 'game': 'arknights', 'uid': '1', 'hasToken': True},
+        {'file': 'no-token.json', 'nickName': 'N', 'game': 'arknights', 'uid': '3', 'hasToken': False},
+        {'file': 'bad 官服.json', 'nickName': 'X', 'game': 'arknights', 'uid': '4', 'hasToken': True},
+        {'file': 'bad2 官服.json', 'nickName': 'Y', 'game': 'arknights', 'uid': '5', 'hasToken': True},
+        {'file': 'd 官服.json', 'nickName': 'D', 'game': 'arknights', 'uid': '6', 'hasToken': True},
+        {'file': 'e 终末地.json', 'nickName': 'E', 'game': 'endfield', 'uid': '10', 'hasToken': True},
+        {'file': 'f 终末地.json', 'nickName': 'F', 'game': 'endfield', 'uid': '11',
+         'roleId': '222', 'serverId': '2', 'hasToken': True},
+    ]
+    tokens = {'a 官服.json': 'T1', 'b 官服.json': 'T2', 'c 终末地.json': 'T3',
+              'a-dup 官服.json': 'T1', 'no-token.json': '', 'bad 官服.json': 'BAD',
+              'bad2 官服.json': 'BAD', 'd 官服.json': 'T403', 'e 终末地.json': 'T4',
+              'f 终末地.json': 'T5'}
+
+    class FakeSk:
+        """假的森空岛客户端：记录请求，按 token 决定「今天签没签」"""
+
+        made = []
+        inst = {}
+
+        def __init__(self, token, log=None):
+            if token == 'BAD':
+                raise RuntimeError('token 无效')
+            FakeSk.made.append(token)
+            FakeSk.inst[token] = self
+            self.token = token
+            self.posts = []
+
+        def api_get(self, path, **kw):
+            if path.startswith(signin.EF_PATH):
+                assert kw.get('headers', {}).get('sk-game-role'), '终末地必须带 sk-game-role'
+                return {'code': 0, 'data': {'hasToday': self.token != 'T5'}}
+            return {'code': 0, 'data': {
+                'records': ([{'ts': str(int(now))}] if self.token == 'T2' else [])}}
+
+        def api_post(self, path, body=None, headers=None, **kw):
+            self.posts.append((path, body, headers))
+            if self.token == 'T403':
+                raise urllib.error.HTTPError('u', 403, 'Forbidden', None, None)
+            if path == signin.EF_PATH:
+                return {'code': 0, 'data': {
+                    'awardIds': [{'id': 'x'}],
+                    'resourceInfoMap': {'x': {'name': '折金票', 'count': 2000}}}}
+            return {'code': 0, 'data': {
+                'awards': [{'resource': {'name': '合成玉'}, 'count': 300}]}}
+
+    # 0) 纯函数：日期判定与终末地身份头
+    assert signin._is_today(now) is True, '今天的时间戳应该判成今天'
+    assert signin._is_today(now - 3 * 86400) is False, '三天前不是今天'
+    assert signin._is_today('') is False and signin._is_today('x') is False
+    h = signin._ef_headers({'roleId': '1', 'serverId': '2'})
+    assert h['sk-game-role'] == '3_1_2', h          # gameId_roleId_serverId
+    assert '/api/signin/run' in api.ROUTES, '签到接口没挂上 ROUTES'
+
+    orig_rows, orig_tok = accounts.list_accounts, accounts.token_for
+    orig_sk, orig_time = signin.skland.Skland, signin.time
+    try:
+        accounts.list_accounts = lambda: [dict(r) for r in rows]
+        accounts.token_for = lambda f: tokens.get(f, '')
+        signin.skland.Skland = FakeSk
+        signin.time = types.SimpleNamespace(sleep=lambda s: None)   # 别真睡 0.4 秒 × 10
+
+        res = signin.run('', log=lambda s: None)
+        c = res['counts']
+        assert c == {'ok': 2, 'already': 3, 'fail': 2, 'skip': 3}, c
+        assert len(res['items']) == len(rows), len(res['items'])
+
+        # 每个 token 只登录一次（a-dup 直接跳过，没有多登录一次 T1）
+        assert FakeSk.made == ['T1', 'T2', 'T3', 'T403', 'T4', 'T5'], FakeSk.made
+
+        # 方舟：POST {uid, gameId:1}
+        path, body, _h = FakeSk.inst['T1'].posts[-1]
+        assert path == signin.ARK_PATH and body == {'uid': '1', 'gameId': 1}, (path, body)
+
+        # 终末地：body 为空，身份在头上
+        path, body, hdr = FakeSk.inst['T5'].posts[-1]
+        assert path == signin.EF_PATH and body is None, (path, body)
+        assert hdr['sk-game-role'] == '3_222_2', hdr
+        assert hdr['Origin'] == 'https://game.skland.com/', hdr
+
+        # 今天签过的号不发签到请求
+        assert FakeSk.inst['T2'].posts == [], FakeSk.inst['T2'].posts
+
+        # 403 记成「已签到」而不是失败
+        states = {i['file']: i['state'] for i in res['items']}
+        assert states['d 官服.json'] == 'already', states
+        assert states['e 终末地.json'] == 'skip', states     # 缺 roleId
+        assert states['no-token.json'] == 'skip' and states['a-dup 官服.json'] == 'skip', states
+        assert states['bad 官服.json'] == 'fail', states
+
+        # 单号签到：只打这一个号
+        one = signin.run('a 官服.json', log=lambda s: None)
+        assert one['counts'] == {'ok': 1, 'already': 0, 'fail': 0, 'skip': 0}, one['counts']
+
+        # 不存在的账号要报错，而不是悄悄当全局签
+        try:
+            signin.run('不存在.json', log=lambda s: None)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('不存在的账号应该报错')
+    finally:
+        accounts.list_accounts, accounts.token_for = orig_rows, orig_tok
+        signin.skland.Skland, signin.time = orig_sk, orig_time
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+    _isolate_data_root()   # 必须先于一切 core.* 导入（A 组后面 B/C 都会 import）
     print('MAA-PRTS 冒烟测试  %s' % REPO)
     print('-' * 60)
     r = Report()
@@ -1459,6 +1791,8 @@ def main():
         r.check('B21 资源更新校验（sha256/条数）', check_pack_verify)
         r.check('B22 程序自更新（版本比较/安装包/替换边界）', check_app_update)
         r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
+        r.check('B24 抽卡统计（星级归一/保底/池合并/终末地翻页/武器口径/跨游戏隔离）', lambda: check_gacha_stats(tmp))
+        r.check('B25 森空岛签到（两套口径/已签到判定/403/跳过/去重）', lambda: check_signin(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

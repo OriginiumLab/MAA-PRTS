@@ -6,6 +6,8 @@ on:
   push:
     branches:
       - '**'
+  pull_request:
+    # 外部 fork 的 PR 合并前也要有冒烟拦截（#62）
   workflow_dispatch:
 
 permissions:
