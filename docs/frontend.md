@@ -75,6 +75,14 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 | `renderSignin()` | 签到面板：标题写当前账号，「单号签到」卡上写它的游戏 / 区服，全局卡上写「几个号有 token」；两个按钮按「有 token 且没有正在跑」置灰 |
 | `signinRun(scope)` | 签到执行：`scope=all` 全部账号 / `one` 当前账号，`POST /api/signin/run` → 轮询任务日志写进各自那块 `.log-box.sign-log`。用 `S.signBusy` 挡并发（同 token 并发签到会被风控） |
 
+**账号卡（`.hero`）的排版约束**
+
+名字下面那行（区服 · 等级 · 看板 · uid）强制单行：`.hero-sub` 是 `nowrap + ellipsis`，
+名字列 `.hero-id` 有 `min-width: 0`、`.hero-left` 是 `flex: 1 1 auto`——宽度不够时截断而不是折行
+（折行会把整张卡撑高，把下面的模块菜单一起顶下去）。
+右侧四个统计框 `.hero-stats` 是 `flex-wrap: nowrap`，`.stat` 不设 min-width、内边距 `4px 8px`，
+四个总宽约 224px，窄窗口也不会折成 3+1。
+
 **模块菜单**
 
 账号卡下面那行是模块菜单，介于「账号信息」和「搜索框」之间：
