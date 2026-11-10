@@ -333,15 +333,17 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 
 .hero {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 20px;
-  padding: 7px 16px;              /* 压到跟搜索框一个高度 */
+  gap: 14px;
+  padding: 7px 14px;              /* 压到跟搜索框一个高度 */
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: linear-gradient(110deg, rgba(30, 36, 50, 0.68), rgba(18, 22, 32, 0.55));
   box-shadow: var(--shadow);
   flex: 0 0 auto;
 }
-.hero-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hero-left { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1 1 auto; }
+/* 名字 + 副标题的那一列：必须能压缩，副标题才会走省略号而不是折行 */
+.hero-id { min-width: 0; }
 .hero-avatar {
   width: 34px; height: 34px; border-radius: 10px;
   display: grid; place-items: center;
@@ -349,21 +351,34 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   color: #05100f; font-weight: 800; font-size: 14px;
   flex: 0 0 auto;
 }
-.hero-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+.hero-name {
+  font-size: 15px; font-weight: 700; letter-spacing: .2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .hero-avatar.ef { background: linear-gradient(145deg, #a78bfa, #38bdf8); color: #0b1020; }
-.hero-sub { font-size: 11px; color: var(--text-2); margin-top: 1px; }
-.hero-stats { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+/* 区服 · 等级 · 看板 · uid 一行放完：宁可省略号也不折行（折行会把整张卡撑高） */
+.hero-sub {
+  font-size: 11px; color: var(--text-2); margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hero-stats {
+  display: flex; gap: 6px;
+  flex-wrap: nowrap;              /* 四个框永远一行：宁可整体收窄，也不折成 3+1 */
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
 
 .stat {
-  min-width: 64px;
-  padding: 4px 10px;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 4px 8px;
   border-radius: 11px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--line);
   text-align: center;
 }
 .stat b { display: block; font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
-.stat span { font-size: 10px; color: var(--text-3); letter-spacing: .6px; }
+.stat span { font-size: 10px; color: var(--text-3); letter-spacing: .2px; }
 .stat.mint b { color: var(--mint); }
 .stat.amber b { color: var(--amber); }
 .stat.rose b { color: var(--rose); }
