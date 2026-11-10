@@ -747,6 +747,81 @@ def download_content(copilot_id):
     return c
 
 
+# ---------------------------------------------------------------- 加入即预下载
+# 「加入作业集」那一刻就把下载+修正做完（后台单线程排队，对作业站客气点），
+# 点「写入 MAA」时直接取现成的，只剩关 MAA → 备份 → 写配置 → 重启。
+# 缓存只认 copilotId、进程内有效：作业集本身就是前端内存态，两边同生共死；
+# 作业站后来改了作业也用加入那一刻的版本——本来就是按当时的评分挑的。
+_prepare_cv = threading.Condition()
+_prepare_q = []      # 待预取的 cid（FIFO）
+_prepared = {}       # cid → (content, flags, sname, notes)
+_preparing = {}      # cid → 'queued' / 'working'：fetch_prepared 等它出结果
+_failed = set()      # 预取失败过的：写入时现场下载兜底；重新「加入」会再排队
+
+
+def prepare(ids):
+    """把作业排进后台预取队列（去重），返回本次新排队的条数"""
+    n = 0
+    with _prepare_cv:
+        for i in ids:
+            try:
+                cid = int(i)
+            except (TypeError, ValueError):
+                continue
+            if cid in _prepared or cid in _preparing:
+                continue
+            _failed.discard(cid)          # 重新加入算一次重试机会
+            _preparing[cid] = 'queued'
+            _prepare_q.append(cid)
+            n += 1
+        if n:
+            _prepare_cv.notify_all()
+    return n
+
+
+def _prepare_fetch(cid):
+    """下载 + 修正 + 难度标志：预取和写入兜底共用这一段"""
+    content = download_content(cid)
+    content, notes = normalize_for_maa(content)
+    return content, difficulty_flags(content), content.get('stage_name') or '', notes
+
+
+def _prepare_worker():
+    while True:
+        with _prepare_cv:
+            while not _prepare_q:
+                _prepare_cv.wait()
+            cid = _prepare_q.pop(0)
+            _preparing[cid] = 'working'
+        try:
+            row = _prepare_fetch(cid)
+            ok = True
+        except Exception:
+            ok = False
+        with _prepare_cv:
+            if ok:
+                _prepared[cid] = row
+            else:
+                _failed.add(cid)
+            _preparing.pop(cid, None)
+            _prepare_cv.notify_all()      # 叫醒等着取货的写入线程
+
+
+threading.Thread(target=_prepare_worker, daemon=True, name='copilot-prepare').start()
+
+
+def fetch_prepared(cid):
+    """写入 MAA 线程用：优先拿预取结果（还在排队/在途就等它做完），没预取过
+    或预取失败的现场下载——永远有结果，最坏退回没有预取时的老行为"""
+    with _prepare_cv:
+        while cid in _preparing:
+            _prepare_cv.wait()
+        row = _prepared.get(cid)
+        if row is not None:
+            return row + (True,)
+    return _prepare_fetch(cid) + (False,)
+
+
 def detail_opers(content, owned_map=None):
     """详情弹窗用的干员列表：没写练度的按星级补默认要求（带 implied 标记）。
 
