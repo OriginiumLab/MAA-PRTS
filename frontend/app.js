@@ -3108,8 +3108,8 @@ function paintGachaBody() {
   const poolSec = (cur.pools || []).length ? `
     <div class="gacha-sec">
       <div class="gacha-sec-head"><b>按卡池</b><span>${ef
-        ? `按抽数排序${(cur.pools.length > 12) ? `，只列前 12 个（共 ${cur.pools.length} 个）` : ''}`
-        : `抽数最多的 ${Math.min(8, cur.pools.length)} 个`}</span></div>
+        ? `按最近抽卡时间排序${(cur.pools.length > 12) ? `，只列最近 12 个（共 ${cur.pools.length} 个）` : ''}`
+        : `最近的 ${Math.min(8, cur.pools.length)} 个`}</span></div>
       ${ef ? `<div class="pool-list">${poolCards}</div>` : `<div class="six-list">${cur.pools.slice(0, 8).map(p => `
         <div class="six-row">
           <span class="six-name" style="color:var(--text)">${esc(p.poolName)}</span>

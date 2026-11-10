@@ -1494,6 +1494,17 @@ def check_gacha_stats(tmp):
     assert s['rate6'] == 0.6, s['rate6']
     assert [(p['poolName'], p['count'], p['six']) for p in s['pools']] == [
         ('标准寻访', 4, 2), ('限定寻访', 1, 1)], s['pools']
+
+    # 2b) 卡池按最近抽卡时间倒序：抽得少但更近的池子排最上面（不按抽数排）
+    late = [
+        _grec(base + 10000, 'PA', '老池', 3),
+        _grec(base + 20000, 'PA', '老池', 3),
+        _grec(base + 30000, 'PA', '老池', 3),
+        _grec(base + 40000, 'PB', '新池', 4),
+    ]
+    order = [p['poolName'] for p in gacha.summarize(late)['pools']]
+    assert order == ['新池', '老池'], order           # 新池只 1 抽也排前面
+    assert 'lastMs' not in gacha.summarize(late)['pools'][0], '排序字段不该外泄'
     assert s['records'][0]['charName'] == '六星丙', s['records'][0]
     assert s['firstAt'] and s['lastAt'] and s['firstAt'] < s['lastAt'], (s['firstAt'], s['lastAt'])
 

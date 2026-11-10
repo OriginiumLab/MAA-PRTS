@@ -397,15 +397,21 @@ def _now() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec='seconds')
 
 
-def _at(ms) -> str:
-    """13 位毫秒 → 本地 'YYYY-MM-DD HH:MM'（空/坏值返回 ''）"""
+def _ms(ms) -> int:
+    """13 位毫秒 → int（空/坏值返回 0），排序用"""
     try:
         ts = int(str(ms or '').strip()[:13])
-        if ts <= 0:
-            return ''
-        return dt.datetime.fromtimestamp(ts / 1000.0).strftime('%Y-%m-%d %H:%M')
+        return ts if ts > 0 else 0
     except Exception:
+        return 0
+
+
+def _at(ms) -> str:
+    """13 位毫秒 → 本地 'YYYY-MM-DD HH:MM'（空/坏值返回 ''）"""
+    ts = _ms(ms)
+    if not ts:
         return ''
+    return dt.datetime.fromtimestamp(ts / 1000.0).strftime('%Y-%m-%d %H:%M')
 
 
 # ---------------------------------------------------------------- 同步
@@ -533,13 +539,16 @@ def _tally(rs: list) -> dict:
 
 
 def _pools_of(rs: list) -> list:
-    """按卡池分组（升序 rs 进，最新在前的六星挂在池子下）
+    """按卡池分组（升序 rs 进，最新在前的六星挂在池子下，池子本身也最新的在前）
 
     合并口径：
     - 展示按 **池名** 合并——明日方舟的「标准寻访」会拆成好几期，终末地武器
       池的 poolId 还有 `weponbox` / `weaponbox` 两种拼法，按 id 分等于同名刷屏
     - 保底计数仍按 **poolId**——同一期池子跨期保底是连续的，按池名合并后整体
       +1 才对得上游戏里显示的垫抽数
+
+    排序口径：按**最近一次抽卡时间倒序**，正在抽/刚抽完的池子永远在最上面
+    （角色池、武器池同一套）。同一分钟再按抽数多的在前，没有时间的池子垫底。
     """
     pools, counters = {}, {}
     for r in rs:
@@ -548,7 +557,7 @@ def _pools_of(rs: list) -> list:
         counters[pid] = counters.get(pid, 0) + 1
         p = pools.setdefault(pname, {
             'poolId': pid, 'poolName': pname,
-            'count': 0, 'six': 0, 'firstTs': '', 'lastTs': '',
+            'count': 0, 'six': 0, 'firstTs': '', 'lastTs': '', 'lastMs': 0,
             'kind': r.get('kind') or 'char', 'sixItems': [],
         })
         p['count'] += 1
@@ -556,6 +565,7 @@ def _pools_of(rs: list) -> list:
         if at:
             p['firstTs'] = p['firstTs'] or at
             p['lastTs'] = at
+            p['lastMs'] = _ms(r.get('gachaTs'))
         if int(r.get('rarity') or 0) >= 6:
             p['six'] += 1
             p['sixItems'].append({
@@ -568,7 +578,10 @@ def _pools_of(rs: list) -> list:
     for p in pools.values():
         p['rate6'] = round(p['six'] / p['count'], 4) if p['count'] else 0
         p['sixItems'] = list(reversed(p['sixItems']))      # 新的在前
-    return sorted(pools.values(), key=lambda p: (-p['count'], p['poolName']))
+    out = sorted(pools.values(), key=lambda p: (p['lastMs'], p['count']), reverse=True)
+    for p in out:
+        p.pop('lastMs', None)                              # 内部排序用，不给前端
+    return out
 
 
 def _slice_summary(rs: list) -> dict:
