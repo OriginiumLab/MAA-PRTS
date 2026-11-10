@@ -14,6 +14,7 @@ config/
 ├── gamedata.json                资源版本记录（自动生成）
 ├── <昵称> <服务器>.json         ★ 每个角色一份账号配置（练度 + 缺卡 + token 密文）
 ├── _did.json / _removed/        本机随机设备指纹 / 删除账号的备份（自动生成）
+├── gacha/                       抽卡记录缓存：<账号文件名>.json（只增不减，删了重新同步即可）
 ├── 作业站/                       导出「作业站本地导入」格式（API /api/export 生成，界面暂无入口）
 ├── subprof_cache.json           分支中文名缓存（边同步边学）
 └── tokens.json                  旧版密文 token 库：迁移产物 + 只读兜底，不再写入
@@ -73,6 +74,19 @@ schemaVersion 2 快照（`backend/core/updater.py` 的 `build_snapshot`）加一
 `maa.dir` 与 `skd` 同处一个账号文件：一个账号用哪个 MAA、拿哪个 token，
 删文件即整体清除。从 MAA 导入干员识别结果（界面的「从 MAA 导入干员信息」）
 也是改这份文件——只覆盖 `chars/stats/missing/sync`，其余原样保留。
+
+### 终末地账号
+
+同一个森空岛 token 若还绑了《明日方舟：终末地》角色，同步时会额外生成一份
+账号文件（文件名 `<昵称> 终末地.json`），`account` 段多两个字段：
+
+| 字段 | 说明 |
+|---|---|
+| `account.game` | `arknights`（缺省）或 `endfield`；界面按它区分账号、决定是否给「作业获取」 |
+| `account.roleId` | 终末地角色 id（读取抽卡记录用的是 `account.uid`，不是这个） |
+
+终末地账号没有 `chars/stats/missing`（终末地不吃 zonai 的 `player/info`），
+只有身份 + `skd`，用途是抽卡统计（以及后续的签到）。
 
 ### token 加密（skd 段）
 

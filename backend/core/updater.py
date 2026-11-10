@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from . import atomicio, skland
+from . import atomicio, gacha, skland
 from .skland import Skland
 
 SCHEMA_VERSION = 2
@@ -424,8 +424,13 @@ def char_path(accounts_dir, nick, channel, uid):
         n += 1
 
 
-def scan_accounts(accounts_dir):
-    """扫描账号目录（config/），返回 {uid: 文件路径}"""
+def scan_accounts(accounts_dir, game='arknights'):
+    """扫描账号目录（config/），返回 {uid: 文件路径}
+
+    game 按账号的 account.game 过滤（缺省 = 明日方舟）：两个游戏的角色 uid
+    各自独立编号，混在一张 uid→文件 的表里会让同步把对方的文件当成自己的
+    「同名旧文件」去改名/合并。
+    """
     found = {}
     if not os.path.isdir(accounts_dir):
         return found
@@ -438,7 +443,10 @@ def scan_accounts(accounts_dir):
         d = load_json(p)
         if not isinstance(d, dict):    # 数组形等非 dict JSON：跳过（#57）
             continue
-        uid = str(((d.get('account') or {}).get('uid')) or '')
+        acc = d.get('account') or {}
+        if (acc.get('game') or 'arknights') != game:
+            continue
+        uid = str(acc.get('uid') or '')
         if uid:
             found[uid] = p
     return found
@@ -493,8 +501,16 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
 
     sk = Skland(token, log=log)
     bds = [b for b in sk.bindings() if not b.get('isDelete')]
-    if not bds:
-        raise RuntimeError('该 token 未绑定明日方舟角色')
+    # 终末地角色：同一个森空岛 token 可能只绑了终末地（或者两边都有）。
+    # 检测失败不拦明日方舟同步——绑定接口偶发失败时，宁可少建一个终末地
+    # 账号，也不能让整次同步失败。
+    ef_roles = []
+    try:
+        ef_roles = gacha.endfield_roles(token)
+    except Exception as e:
+        log('  ! 终末地角色检测失败（不影响明日方舟同步）：%s' % e)
+    if not bds and not ef_roles:
+        raise RuntimeError('该 token 未绑定明日方舟 / 终末地角色')
 
     ok, fail, files = 0, 0, []
     for b in bds:
@@ -536,7 +552,91 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
         ok += 1
 
     tables.save_sub_names()
+    if ef_roles:
+        try:
+            ef_files = _sync_endfield(ef_roles, token, accounts_dir, log, skd_meta, alias)
+        except Exception as e:
+            log('  ! 终末地账号写入失败（不影响明日方舟账号）：%s' % e)
+            ef_files = []
+        return {'ok': ok, 'fail': fail, 'files': files, 'efFiles': ef_files}
     return {'ok': ok, 'fail': fail, 'files': files}
+
+
+# ---------------------------------------------------------------- 终末地账号
+EF_LABEL = '终末地'
+
+
+def _ef_snapshot(role, token, alias=''):
+    """终末地账号快照：没有练度数据（终末地不走 zonai 的 player/info），
+    只存身份 + token，供抽卡统计/签到这类按角色发请求的功能用。"""
+    return {
+        'schemaVersion': SCHEMA_VERSION,
+        'generator': 'MAA-PRTS/2.5',
+        'account': {
+            'uid': str(role.get('uid') or ''),
+            'game': 'endfield',
+            'roleId': str(role.get('roleId') or ''),
+            'nickName': role.get('nickName') or ('终末地角色 %s' % role.get('uid')),
+            'alias': alias or '',
+            'channelName': role.get('channelName') or '',
+            'channelMasterId': str(role.get('channelMasterId') or ''),
+            'serverId': str(role.get('serverId') or ''),
+            'serverName': role.get('serverName') or '',
+            'level': role.get('level'),
+        },
+        'maa': {'profile': '', 'note': ''},
+        'tags': [],
+        'sync': {
+            'syncedAt': now_iso(),
+            'tokenHint': mask(token),
+            'source': 'binding-api-account-prod.hypergryph.com (endfield)',
+        },
+        'stats': {},
+        'chars': [],
+        'missing': [],
+    }
+
+
+def _sync_endfield(roles, token, accounts_dir, log, skd_meta=None, alias=''):
+    """把 token 绑定的终末地角色写成独立账号文件（左侧列表里单独一张卡）"""
+    existing = {}
+    for name in os.listdir(accounts_dir):
+        if not name.endswith('.json') or name.startswith('_') or name in NON_ACCOUNT_JSON:
+            continue
+        p = os.path.join(accounts_dir, name)
+        d = load_json(p)
+        if not isinstance(d, dict):
+            continue
+        acc = d.get('account') or {}
+        if acc.get('game') == 'endfield' and acc.get('uid'):
+            existing[str(acc['uid'])] = p
+
+    out = []
+    for r in roles:
+        uid = str(r.get('uid') or '')
+        if not uid:
+            continue
+        snap = _ef_snapshot(r, token, alias=alias or '')
+        path = char_path(accounts_dir, snap['account']['nickName'], EF_LABEL, uid)
+        old_path = existing.get(uid)
+        old = load_json(old_path) if old_path else None
+        snap = merge_preserved(snap, old)
+        if skd_meta:
+            snap['skd'] = dict(skd_meta)
+        with atomicio.lock():
+            if old_path and os.path.abspath(old_path) != os.path.abspath(path):
+                os.replace(old_path, path)
+                log('    ~ 重命名 %s → %s' % (os.path.basename(old_path), os.path.basename(path)))
+            dump_json(path, snap)
+        a = snap['account']
+        log('  ✓ [终末地] %s（%s） uid=%s Lv%s' % (
+            a['nickName'], a.get('serverName') or a.get('channelName') or '—',
+            uid, a.get('level') or '?'))
+        log('    → %s' % os.path.basename(path))
+        existing[uid] = path
+        out.append({'file': os.path.basename(path), 'uid': uid,
+                    'nickName': a['nickName'], 'game': 'endfield'})
+    return out
 
 
 def parse_tokens_file(path):

@@ -24,7 +24,14 @@
     </div>
 
     <div class="side-head">
-      <span>账号</span>
+      <div class="game-switch" id="game-switch" role="tablist" aria-label="账号分组">
+        <button class="gswitch active" data-game="arknights" role="tab" aria-selected="true">
+          <span>明日方舟</span><b class="gcount">0</b>
+        </button>
+        <button class="gswitch" data-game="endfield" role="tab" aria-selected="false">
+          <span>终末地</span><b class="gcount">0</b>
+        </button>
+      </div>
       <button class="icon-btn small" id="btn-refresh-all" title="同步全部账号（tokens.txt）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
           <path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>
@@ -63,7 +70,7 @@
     <header class="hero" id="hero">
       <div class="hero-left">
         <div class="hero-avatar" id="hero-avatar">?</div>
-        <div>
+        <div class="hero-id">
           <div class="hero-name" id="hero-name">未选择账号</div>
           <div class="hero-sub" id="hero-sub">用森空岛 token 添加一个账号开始</div>
         </div>
@@ -72,37 +79,118 @@
       <div class="hero-stats" id="hero-stats"></div>
     </header>
 
-    <section class="search-wrap">
-      <div class="search-bar">
-        <div class="search-box">
-          <svg class="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
-          </svg>
-          <input id="search-input" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="输入关卡代号 TL-10，或活动代号 act55side / 活动名 月行水上">
+    <!-- 模块菜单：作业获取 / 抽卡统计 / 森空岛签到（终末地账号只留抽卡统计） -->
+    <nav class="modtabs" id="modtabs" role="tablist">
+      <button class="modtab active" data-mod="copilot" role="tab" title="按关卡搜作业站作业，比对练度写进 MAA">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5.5h7l2 2h7v11H4z"/><path d="M8 12h8M8 15.5h5"/>
+        </svg>
+        作业获取
+      </button>
+      <button class="modtab" data-mod="gacha" role="tab" title="森空岛抽卡记录统计（明日方舟 / 终末地）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3.5 14.8 9l6 .9-4.4 4.2 1.1 6-5.5-3-5.5 3 1.1-6L3.2 9.9l6-.9z"/>
+        </svg>
+        抽卡统计
+      </button>
+      <button class="modtab" data-mod="signin" role="tab" title="森空岛每日签到：明日方舟 + 终末地">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3.5v3M16 3.5v3M3.5 10h17"/>
+          <path d="m9 14.5 2 2 4-4"/>
+        </svg>
+        森空岛签到
+      </button>
+    </nav>
+
+    <section class="module" id="mod-copilot">
+      <section class="search-wrap">
+        <div class="search-bar">
+          <div class="search-box">
+            <svg class="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+            </svg>
+            <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="输入关卡代号 TL-10，或活动代号 act55side / 活动名 月行水上">
+          </div>
+          <select id="algo-select" title="优先作业算法：推荐作业的排序方式，保存在当前账号里">
+            <option value="fewer">少人优先</option>
+            <option value="single">单核优先</option>
+            <option value="rating" selected>好评量优先</option>
+          </select>
+          <button class="search-btn" id="btn-next" disabled title="搜索同一系列、同一难度的下一关">下一关</button>
         </div>
-        <select id="algo-select" title="优先作业算法：推荐作业的排序方式，保存在当前账号里">
-          <option value="fewer">少人优先</option>
-          <option value="single">单核优先</option>
-          <option value="rating" selected>好评量优先</option>
-        </select>
-        <button class="search-btn" id="btn-next" disabled title="搜索同一系列、同一难度的下一关">下一关</button>
-      </div>
-      <div class="quick-row" id="quick-row"></div>
+        <div class="quick-row" id="quick-row"></div>
+      </section>
+
+      <section class="results" id="results">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-art">
+            <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.2">
+              <rect x="18" y="28" width="84" height="64" rx="12" opacity=".35"/>
+              <path d="M34 52h30M34 66h52M34 80h20" opacity=".55" stroke-linecap="round"/>
+              <circle cx="88" cy="46" r="12" opacity=".5"/>
+              <path d="m84 46 3 3 6-7" stroke-linecap="round" opacity=".8"/>
+            </svg>
+          </div>
+          <h3>搜一个关卡开始</h3>
+          <p>选中的账号会自动和作业站的干员要求比对，直接告诉你哪些能抄、哪些要借人。</p>
+        </div>
+      </section>
     </section>
 
-    <section class="results" id="results">
-      <div class="empty-state" id="empty-state">
-        <div class="empty-art">
-          <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.2">
-            <rect x="18" y="28" width="84" height="64" rx="12" opacity=".35"/>
-            <path d="M34 52h30M34 66h52M34 80h20" opacity=".55" stroke-linecap="round"/>
-            <circle cx="88" cy="46" r="12" opacity=".5"/>
-            <path d="m84 46 3 3 6-7" stroke-linecap="round" opacity=".8"/>
-          </svg>
+    <!-- 抽卡统计 -->
+    <section class="module" id="mod-gacha" hidden>
+      <div class="gacha-head">
+        <div class="gacha-title">
+          抽卡统计
+          <span id="gacha-sub">—</span>
         </div>
-        <h3>搜一个关卡开始</h3>
-        <p>选中的账号会自动和作业站的干员要求比对，直接告诉你哪些能抄、哪些要借人。</p>
+        <div class="gacha-tools">
+          <span class="gacha-updated" id="gacha-updated"></span>
+          <button class="ghost-btn" id="btn-gacha-sync">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>
+            </svg>
+            同步最新记录
+          </button>
+        </div>
+      </div>
+      <div class="gacha-scroll">
+        <div id="gacha-body"></div>
+      </div>
+    </section>
+
+    <!-- 森空岛签到：左边全局（所有账号），右边单号（当前账号），各自一块日志 -->
+    <section class="module" id="mod-signin" hidden>
+      <div class="sign-head">
+        <div class="sign-title">森空岛签到<span id="sign-sub">—</span></div>
+        <div class="sign-tools"><span class="sign-tip" id="sign-tip"></span></div>
+      </div>
+      <div class="sign-scroll">
+        <div class="sign-grid">
+          <section class="sign-card">
+            <div class="sign-card-head">
+              <b>全局签到</b>
+              <span id="sign-all-note">所有账号 · 明日方舟 + 终末地</span>
+            </div>
+            <p class="sign-desc">按列表顺序给<b>全部账号</b>签到：每个号用自己存的森空岛 token，同一个 token 下的多个角色只签一次。MAA 导入的账号没有 token，会跳过。</p>
+            <div class="sign-actions">
+              <button class="primary-btn sm" id="btn-sign-all">一键全部签到</button>
+            </div>
+            <div class="log-box sign-log" id="sign-log-all"><span class="sign-idle">点上面的按钮开始签到。</span></div>
+          </section>
+          <section class="sign-card">
+            <div class="sign-card-head">
+              <b>单号签到</b>
+              <span id="sign-one-name">—</span>
+            </div>
+            <p class="sign-desc">只签<b>当前选中的这个账号</b>，用它自己的 token。想签另一个号，先在左侧列表点一下。</p>
+            <div class="sign-actions">
+              <button class="ghost-btn mint" id="btn-sign-one">签到当前账号</button>
+            </div>
+            <div class="log-box sign-log" id="sign-log-one"><span class="sign-idle">点上面的按钮开始签到。</span></div>
+          </section>
+        </div>
       </div>
     </section>
   </main>

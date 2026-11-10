@@ -196,12 +196,27 @@ class Skland:
             'X-Requested-With': 'com.hypergryph.skland',
         }
 
-    def api_get(self, path_query: str, timeout=40):
+    def api_get(self, path_query: str, timeout=40, headers=None):
         p = urllib.parse.urlparse(API + path_query)
+        extra = dict(headers or {})
         # 传函数而不是现成 headers：每次重试都重新签名，时间戳才是新的
         return _http('GET', API + path_query,
-                     lambda: self._sign(p.path, p.query or ''),
+                     lambda: dict(self._sign(p.path, p.query or ''), **extra),
                      timeout=timeout, note=self._note)
+
+    def api_post(self, path: str, body=None, headers=None, timeout=40, retries=3):
+        """带签名的 POST。
+
+        body 为 None 时不发请求体——终末地签到就是这个形态，角色身份写在
+        `sk-game-role: 3_<roleId>_<serverId>` 头里，签名串里 body 段是空的。
+        签到这类一次性的写操作传 retries=1：403 多半是「今天已经签过」，
+        重试只会多喂几次风控。
+        """
+        payload = json.dumps(body, separators=(',', ':')) if body is not None else ''
+        extra = dict(headers or {})
+        return _http('POST', API + path,
+                     lambda: dict(self._sign(path, payload), **extra),
+                     body=body, timeout=timeout, retries=retries, note=self._note)
 
     def _get(self, path_query: str, timeout=40):
         """401/403 视作 cred 过期：重新走一次鉴权链再请求"""

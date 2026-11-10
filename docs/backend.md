@@ -21,6 +21,8 @@
 | `core/updater.py` | token → 账号配置的完整构建（练度、缺卡、统计、增量对比） |
 | `core/operbox.py` | MAA 干员识别数据（`data/OperBoxData.json`）解析 → 账号练度导入 |
 | `core/skland.py` | 森空岛鉴权链：token → grant → cred → 签名请求 → 绑定/角色数据 |
+| `core/gacha.py` | 抽卡记录（明日方舟 / 终末地）：通行证 grant → 角色 token → 记录分页 → 本地增量缓存与统计 |
+| `core/signin.py` | 森空岛每日签到（明日方舟 / 终末地）：两套接口口径，先查状态再签，全局 / 单号两种跑法 |
 | `core/copilot.py` | 作业站接口 + 干员要求匹配算法 |
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
@@ -93,6 +95,9 @@ main()
 | POST | `/api/maa/clear` | 清空某配置的 `Copilot.TaskList`。**预留，无界面入口** |
 | GET | `/api/maa/tasklist?profile=` | 读 MAA 某配置当前的 `TaskList`。**预留，无界面入口** |
 | GET | `/api/task?id=&since=` | 后台任务状态与增量日志（`since` 是日志游标） |
+| GET | `/api/gacha?file=` | 抽卡统计视图：读本地缓存算汇总（总抽数/星级/出率/保底），**不发网络请求** |
+| POST | `/api/gacha/sync` | 从森空岛拉抽卡记录并并入缓存（增量，按 `分类｜池｜干员｜时间戳｜pos` 去重）。返回 `taskId` |
+| POST | `/api/signin/run` | 森空岛签到：`{file}` 为空 = 全部账号（方舟 + 终末地），传账号文件 = 只签这一个。返回 `taskId`（日志在前端面板里刷） |
 | POST | `/api/export` | 导出「作业站本地导入」格式到 `config/作业站/`。**预留，无界面入口**（导出的只有干员练度，不含 token） |
 
 所有响应统一为 `{"ok": true, "data": ...}` 或 `{"ok": false, "error": "..."}`。
@@ -231,6 +236,107 @@ taskkill MAA.exe
 MAA 自己和用户手写的 `.bak` / `.bak-auto` / `.bak-before-xxx` 一律不碰。
 
 MAA 运行时会周期性回写配置文件，所以必须先关进程再改，否则改动会被覆盖。
+
+## 抽卡记录（`gacha.py`）
+
+两条游戏共用同一套通行证，只有「角色 token 之后的最后一段」不一样：
+
+```
+森空岛 token
+  └─ grant  POST as.hypergryph.com/user/oauth2/v2/grant
+            {appCode: be36d44aa36bfb5b, token, type: 1}   ← 两游戏共用，写 endfield 会 400
+      ├─ binding_list?token=<grant>&appCode=arknights|endfield   → 角色 uid
+      └─ u8_token_by_uid {uid, token: grant}                     → 角色 token（u8）
+
+明日方舟：role/login → Set-Cookie ak-user-center
+          → gacha/cate?uid=            分类是动态的，只能查（限定/标准/中坚…）
+          → gacha/history?uid=&category=&size=&pos=&gachaTs=
+          请求头 X-Role-Token + Cookie，两样都要
+
+终末地：  ef-webview.hypergryph.com/api/record/char?token=&lang=zh-cn&server_id=1&pool_type=&seq_id=
+          record/weapon?token=&lang=zh-cn&server_id=1&seq_id=      武器申领（不吃 pool_type）
+```
+
+踩过的坑：
+
+- `gachaTs` 是 **13 位毫秒字符串**，分页游标要 `gachaTs` + `pos` 一起带；
+  `hasMore=false` 才是到底
+- 明日方舟 `size` 只认 1~100，传 500 不报错、直接返回空列表（静默截断）
+- 明日方舟 `rarity` 0 基（3 = 四星）；**终末地是 1 基**（3=三星 … 6=六星），
+  实测分布只出现 4/5/6，套明日方舟那套 +1 会把六星顶成七星——两套归一分开写
+- 终末地必须用绑定的 **uid** 调 `u8_token_by_uid`，传 `roleId` 报 109「角色不存在」
+- 记录只保留最近一段窗口，所以缓存要**只增不减**：每次按
+  `分类｜池｜干员｜时间戳｜pos` 合并，旧记录留在本地
+
+### 终末地分页（2026-11 实测）
+
+- **必须传 `seq_id`**：不带游标时接口永远只返回最新 5 条，`hasMore` 还是 `true`；
+  `size` / `limit` / `pageSize` / `page` / `cursor` 全部被忽略，每页固定 5 条
+- `seq_id` 的语义是「取 seqId **小于**它的最近 5 条」，所以要拿上一页最后一条的
+  `seqId` 当下一页游标一路往前翻
+- 角色池枚举只认 5 个（Standard / Special / Beginner / Joint / Rerun），
+  其它值一律 `40000 Invalid pool_type`；庆典池之类的记录归在其中某一类里
+- 武器申领走 `/api/record/weapon`，**不吃 `pool_type`**（传什么都返回同一批），
+  记录序列空间与角色独立（`seqId` 各自计数），字段是 `weaponId` / `weaponName`
+- 非抽卡记录要过滤：`kind` 除 `draw` 之外还有 `gift_intel_book` 这种赠礼，
+  `rarity` 为空，混进统计会把出率算歪
+- 接口只保留最近窗口（实测老号：角色 400+ 抽、武器 160 抽），更早的拿不到。
+  增量同步用本地已存的最大 `seqId` 当断点（`stop_below`），没新抽卡时 6 个请求就回来
+
+### 统计口径
+
+- 明日方舟：全部记录一套口径
+- 终末地：**角色寻访与武器申领分开算**（角色六星约 1.9%、武器约 5%，混在一起
+  两头都不对）。`summary.char` / `summary.weapon` 各是一份**完整**汇总（卡片数字、
+  星级分布、六星时间线、按卡池、最近记录都在里面），界面按两个 tab 分别整块渲染；
+  顶层 `total` / `sixCount` / `rate6` 等仍是两者之和，给账号卡这种只要一个总数的地方用
+- `summary.weapon` 在没有任何武器记录时是 `null`（前端据此判断要不要给武器池 tab）
+- 终末地记录没有 `pos` 字段，拿 `seqId` 当去重键里的「次序」（存进 `pos`）
+
+缓存落在 `config/gacha/<账号文件名>.json`（不碰账号 json）。统计口径：
+保底按**池子 id** 连续计数、出六星清零；展示按**池名**合并——「标准寻访」
+在记录里会拆成好几期，按 id 分开列等于同一名字刷屏。
+卡池按**最近一次抽卡时间倒序**排——正在抽/刚抽完的池子永远在最上面（角色池、
+武器池同一口径），同一分钟再按抽数多的在前，没有时间的池子垫底
+（`lastMs` 只用于排序，返回给前端前已 pop 掉）。
+
+## 森空岛签到（`signin.py`）
+
+和抽卡一样走 `core/skland.py` 的鉴权链（token → grant → cred → 签名），
+但**两个游戏的签到接口不是同一个**：
+
+```
+明日方舟  GET  /api/v1/game/attendance?uid=<uid>&gameId=1     查今天签没签
+          POST /api/v1/game/attendance  {"uid": "...", "gameId": 1}
+
+终末地    GET  /api/v1/game/endfield/attendance                 查 hasToday
+          POST /api/v1/game/endfield/attendance   （没有请求体）
+                 header  sk-game-role: 3_<roleId>_<serverId>   ← 身份全在头里
+```
+
+踩过的坑：
+
+- 终末地**不吃 uid**：拿 uid 去打 `/api/v1/game/attendance` 一律 **HTTP 403**，
+  必须换成 `/game/endfield/attendance` + `sk-game-role`（`gameId_roleId_serverId`，
+  gameId 就是 binding_list 里给的 3）；签名串里的 body 段是空的
+- 今天签过之后再 POST 返回的是 **HTTP 403**，不是 `code=10001` 这类业务错误。
+  所以先查状态（方舟看 `records[].ts` 有没有今天的日期、终末地看 `data.hasToday`）
+  再决定签不签；真撞上 403 记成「今天已签到」，别当失败吓人
+- 签到链的 403 不重试（`retries=1`）：重试只是多喂几次风控
+- 日期按**上海时区**比，不是「24 小时内」——早上 5 点签完，前一天签的还在窗口里
+- 一个 token 可能绑多个角色（官服 + B 服、方舟 + 终末地），按账号文件逐个签，
+  同一 `(游戏, uid)` 只签一次；同一个 token 只登录一次（坏的 token 也只撞一次）
+
+两种跑法（`run(file)`）：
+
+| 入口 | 范围 | 日志 |
+|---|---|---|
+| 全局签到 | 账号列表里所有账号，方舟 + 终末地一起签 | 每个号一行，最后一行汇总「成功 / 已签到 / 失败 / 跳过」 |
+| 单号签到 | 只签当前选中的这个账号（用它自己的 token） | 同一格式，只有这一个号 |
+
+跳过的三种情况：MAA 导入的账号没有 token、token 跨机器解不开、终末地账号缺 `roleId`/`serverId`
+（老版本建的终末地账号没有这两个字段，重新同步一次账号即可）。
+签到结果不落盘（只活在任务的日志里）——这是每天本来就该点一次的操作，不存历史反而省得纠结。
 
 ## 依赖
 
