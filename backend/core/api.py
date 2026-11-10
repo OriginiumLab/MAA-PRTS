@@ -360,6 +360,12 @@ def api_maa_open(q, body):
     return {'started': maa.launch(_maa_dir_for(q.get('file') or body.get('file')))}
 
 
+def api_copilot_prepare(_q, body):
+    """加入作业集时的隐式预下载：把「下载 + 修正」挪到加入那一刻后台做，
+    点「写入 MAA」时直接取现成的（没预到的现场兜底）"""
+    return {'queued': copilot.prepare((body or {}).get('ids') or [])}
+
+
 def api_maa_apply(_q, body):
     body = body or {}
     items = body.get('items') or []
@@ -530,6 +536,7 @@ ROUTES = {
     '/api/maa/close': api_maa_close,
     '/api/maa/open': api_maa_open,
     '/api/maa/apply': api_maa_apply,
+    '/api/copilot/prepare': api_copilot_prepare,
     '/api/maa/clear': api_maa_clear,
     '/api/maa/tasklist': api_maa_tasklist,
     '/api/task': api_task,

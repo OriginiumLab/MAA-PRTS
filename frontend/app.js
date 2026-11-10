@@ -1053,33 +1053,54 @@ function renderParadoxPanel(root, d, close) {
 }
 
 /* ------------------------------------------------------------ 搜索 */
-/* 输入停约 0.5s 自动搜索：每次键入重置计时，清空输入不搜也不弹提示 */
+/* 输入停约 0.5s 自动搜索：每次键入重置计时，清空输入不搜也不弹提示。
+   搜索落地后顺手在后台预载下一关（见 preloadNext），点「下一关」时秒开。 */
 let searchTimer = 0;
 let searchAbort = null;   // 在途搜索的 AbortController；配合 searchKey 给 doSearch 去重
 let searchKey = '';       // 在途搜索的「账号|关键词」
+let preloaded = null;     // 下一关的后台预载 { key, ac, promise }：只存数据，不碰 UI
 
 /* 立刻作废还在飞行的搜索：中止请求（活动检索后端要跑十几秒，等它跑完再搜新的没意义）。
-   被中止的一方走 doSearch catch 的 aborted 分支安静退场，不碰 UI。 */
+   被中止的一方走 doSearch catch 的 aborted 分支安静退场，不碰 UI。预载一并作废。 */
 function stopSearch() {
   if (searchAbort) { const a = searchAbort; searchAbort = null; searchKey = ''; a.abort(); }
+  if (preloaded) { const p = preloaded; preloaded = null; p.ac.abort(); }
 }
 
+/* 键入即停在途搜索；预载先缓一口气——防抖落地后 doSearch 按新关键词决定认领它
+   （键入的正是预载代号）还是作废它（stopSearch），不白白重发一遍 */
 function queueAutoSearch() {
   clearTimeout(searchTimer);
-  stopSearch();   // 键入即停旧搜索：不等它完成，新一轮防抖接管
+  if (searchAbort) { const a = searchAbort; searchAbort = null; searchKey = ''; a.abort(); }
   searchTimer = setTimeout(() => {
     if ($('#search-input').value.trim()) doSearch();
-    // 旧搜索被作废后输入又清空了：骨架屏不能一直转下去，落回可解释的空态
-    else if ($('#results').dataset.mode === 'loading') {
-      const box = $('#results');
-      box.dataset.mode = '';
-      box.innerHTML = '<div class="empty-state"><h3>已停止检索</h3><p>输入关卡或活动代号，停顿后自动搜索</p></div>';
+    else {
+      stopSearch();   // 输入清空了：预载也没有存在的意义
+      // 旧搜索被作废后输入又清空了：骨架屏不能一直转下去，落回可解释的空态
+      if ($('#results').dataset.mode === 'loading') {
+        const box = $('#results');
+        box.dataset.mode = '';
+        box.innerHTML = '<div class="empty-state"><h3>已停止检索</h3><p>输入关卡或活动代号，停顿后自动搜索</p></div>';
+      }
     }
   }, 500);
 }
 
+/* 后台预拉下一关：结果只挂在 preloaded 上等 doSearch 认领，绝不渲染、不碰输入框。
+   认领 = 点「下一关」或键入同一代号时按 key 命中，接着等同一个在飞请求；
+   命不中就被 stopSearch 中止——预载跟在途搜索一样，被任何新键入打断。 */
+function preloadNext(code, file) {
+  const key = file + '|' + code;
+  if (searchAbort && searchKey === key) return;   // 下一关已在飞（用户抢先键入了同一代号）
+  if (preloaded) { const old = preloaded; preloaded = null; old.ac.abort(); }
+  const ac = new AbortController();
+  const promise = api('/api/search', { file, q: code, pages: 2, limit: 10 }, { signal: ac.signal });
+  promise.catch(() => {});   // 后台失败别当未捕获异常刷屏；真被认领时 await 会正常拿到
+  preloaded = { key, ac, promise };
+}
+
 /* 「下一关」按钮：搜索结果带着 next（同系列同难度的下一关）就亮、带上代号，
-   系列末尾或没搜到就灰。点击 = 填入代号直接搜。 */
+   系列末尾或没搜到就灰。点击 = 填入代号直接搜，下一关通常已预载好、秒出。 */
 function setNextBtn(next) {
   const btn = $('#btn-next');
   if (!btn) return;
@@ -1104,8 +1125,11 @@ async function doSearch() {
   if (!S.current) { toast('先选一个账号', 'warn'); openAddAccount(); return; }
   const key = S.current + '|' + q;
   if (searchAbort && searchKey === key) return;   // 同账号同关键词已在途，别重复发
-  stopSearch();   // 顶掉仍在飞行的旧搜索：Enter / 切号 / 拉黑重搜都走这里
-  const ac = new AbortController();
+  // 预载命中（点了「下一关」，或键入的正是预载代号）：认领这个请求接着等，结果秒出
+  const pre = (preloaded && preloaded.key === key) ? preloaded : null;
+  if (pre) preloaded = null;   // 命中才摘走；没命中留给 stopSearch 中止，别让它漏网白跑
+  stopSearch();   // 顶掉仍在飞行的旧搜索与没认领的预载：Enter / 切号 / 拉黑重搜都走这里
+  const ac = pre ? pre.ac : new AbortController();
   searchAbort = ac;
   searchKey = key;
   const file0 = S.current;      // 发起搜索时的账号：结束时变了要补搜（#59，静默切号不会中止在途搜索）
@@ -1115,12 +1139,16 @@ async function doSearch() {
     <div class="loading-row"><span class="spinner"></span>正在从作业站拉取作业，活动关卡多时可能要十几秒</div>
     <div class="ops-grid">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
   try {
-    const d = await api('/api/search', { file: S.current, q, pages: 2, limit: 10 }, { signal: ac.signal });
+    const d = pre ? await pre.promise
+      : await api('/api/search', { file: S.current, q, pages: 2, limit: 10 }, { signal: ac.signal });
     S.result = d;
     box.dataset.mode = d.mode;
     renderResult(d);
     setNextBtn(d.next);
     box.scrollTop = 0;
+    // 后台预载下一关：输入或账号中途变过就不预了——那是过气结果的下一关
+    if (d.next && d.next.code && $('#search-input').value.trim() === q && S.current === file0)
+      preloadNext(d.next.code, file0);
   } catch (e) {
     if (ac.signal.aborted) return;   // 被新输入 / 新搜索作废：安静退场，UI 由后来者接管
     box.dataset.mode = 'error';   // 留个非空标记：之后切号仍会触发重搜
@@ -1416,6 +1444,7 @@ function renderResult(d) {
   if (all) all.addEventListener('click', () => {
     let n = 0;
     const seen = new Set();
+    const prepareIds = [];   // 一键加入的也走隐式预下载（addToBasket 不经过这条路）
     // 一关真正要打的难度（用户口径）：0-8 普通+突袭、9 标准+突袭、
     // 10-14 只打磨难、15+ 只打险地。简单永远不打；同一关出现磨难/险地行
     // 时普通/标准行就不算「要打的档」了（不擅自降档：磨难行没作业就空着）
@@ -1432,6 +1461,7 @@ function renderResult(d) {
       const key = s.stage.stageId + '|' + (s.stage.variant || '');
       if (seen.has(key) || inBasket(s.best.id, s.stage.variant || undefined)) return;
       seen.add(key);
+      prepareIds.push(s.best.id);
       const dcn = s.best.difficultyCN || '';
       const dlab = diffLabel(dcn, s.stage.variant);
       S.basket.push({
@@ -1446,6 +1476,7 @@ function renderResult(d) {
       });
       n++;
     });
+    if (prepareIds.length) api('/api/copilot/prepare', { ids: prepareIds }).catch(() => { });
     renderBasket();
     toast(n ? `已加入 ${n} 份作业` : '这些作业都已在作业集里', n ? 'ok' : 'warn');
   });
@@ -1578,6 +1609,9 @@ function addToBasket(op, variant, quiet) {
     difficultyCN: dcn,
     variant: v,
   });
+  // 隐式预下载：加入即把作业 json 取好修好（后台排队，失败不吭声，写入时现场兜底），
+  // 点「写入 MAA」时就只剩关 MAA → 写配置 → 重启
+  api('/api/copilot/prepare', { ids: [op.id] }).catch(() => { });
   if (quiet) return true;
   renderBasket();
   const fab = $('#basket-fab');
@@ -1730,7 +1764,7 @@ async function applyToMaa() {
 
   const m = modal(`
     <h3>正在写入 MAA</h3>
-    <div class="sub">关闭 MAA → 备份配置 → 下载 ${items.length} 份作业 → 写回作业列表${payload.autoStart ? ' → 重启 MAA' : ''}</div>
+    <div class="sub">关闭 MAA → 备份配置 → 写入 ${items.length} 份作业（多数已在加入时预下载）${payload.autoStart ? ' → 重启 MAA' : ''}</div>
     <div class="log-box" id="task-log"></div>
     <div class="modal-foot"><button class="btn-plain" data-close>后台执行</button></div>
   `);
