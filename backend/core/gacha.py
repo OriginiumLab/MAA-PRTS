@@ -33,7 +33,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import atomicio, settings, tasks
+from . import applog, atomicio, settings, tasks
+from .net import err_body
 
 # 通行证 appCode：明日方舟与终末地共用同一个（写 'endfield' 会 400：
 # appCode 校验要求十六进制）
@@ -87,8 +88,15 @@ def _http(method, url, data=None, headers=None, timeout=25, retries=3):
                                          method=method or ('POST' if body else 'GET'))
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode('utf-8')), r.headers
-        except urllib.error.HTTPError:
-            raise                      # 4xx/5xx 是明确的业务/接口错误，重试无意义
+        except urllib.error.HTTPError as e:
+            # 4xx/5xx 是明确的业务/接口错误，重试无意义；但响应体（code/msg）
+            # 是排障关键，先落 app.log 再抛。抽卡记录 URL 的 query 带 authkey，
+            # 只记 host+path
+            u = urllib.parse.urlsplit(url)
+            applog.log('[抽卡] HTTP %s %s %s %s' % (
+                e.code, method or ('POST' if body is not None else 'GET'),
+                u.netloc + u.path, err_body(e) or '（无响应体）'))
+            raise
         except (urllib.error.URLError, OSError, ValueError) as e:
             last = e
             if attempt >= retries:

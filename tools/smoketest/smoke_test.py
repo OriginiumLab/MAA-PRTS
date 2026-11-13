@@ -1751,6 +1751,140 @@ def check_signin(_tmp):
         accounts.list_accounts, accounts.token_for = orig_rows, orig_tok
         signin.skland.Skland, signin.time = orig_sk, orig_time
 
+def check_skland_http_body(_tmp):
+    """skland HTTP 错误响应体进任务日志（不联网，假 urlopen）：
+
+    - 可重签名请求的 401：每轮重试行带响应体，重试耗尽抛出前再单记一行
+    - 登录链（dict headers）的 401：不重试，抛出前只记一行响应体
+    - 空响应体：不加 [HTTP] 行，重试行不带尾巴
+    """
+    import io
+    import types
+    import urllib.error
+    from core import skland
+
+    calls, logs = [], []
+    body = b'{"code":10001,"message":"invalid sign"}'
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', {},
+                                     io.BytesIO(body))
+
+    orig_urlopen, orig_time = urllib.request.urlopen, skland.time
+    try:
+        urllib.request.urlopen = fake_urlopen
+        skland.time = types.SimpleNamespace(sleep=lambda s: None)
+
+        # 可重签名请求：重签两轮后抛出，每轮日志都带响应体
+        try:
+            skland._http('GET', 'https://x/api', lambda: {}, note=logs.append)
+        except urllib.error.HTTPError:
+            pass
+        else:
+            raise AssertionError('401 重试耗尽应抛 HTTPError')
+        assert len(calls) == 3, len(calls)
+        assert logs == [
+            '    [签名重试 1/2] HTTP 401 ' + body.decode(),
+            '    [签名重试 2/2] HTTP 401 ' + body.decode(),
+            '    [HTTP 401] ' + body.decode(),
+        ], logs
+
+        # 登录链：dict headers 的 401 直接抛出，只记一行响应体、不重试
+        calls.clear(); logs.clear()
+        try:
+            skland._http('POST', 'https://x/auth', {}, body={'t': 1}, note=logs.append)
+        except urllib.error.HTTPError:
+            pass
+        else:
+            raise AssertionError('登录链 401 应直接抛出')
+        assert len(calls) == 1, len(calls)
+        assert logs == ['    [HTTP 401] ' + body.decode()], logs
+
+        # 空响应体：不加 [HTTP] 行，重试行也不带尾巴
+        def no_body(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', {},
+                                         io.BytesIO(b''))
+        urllib.request.urlopen = no_body
+        logs.clear()
+        try:
+            skland._http('GET', 'https://x/api', lambda: {}, retries=2, note=logs.append)
+        except urllib.error.HTTPError:
+            pass
+        assert logs == ['    [签名重试 1/1] HTTP 401'], logs
+    finally:
+        urllib.request.urlopen = orig_urlopen
+        skland.time = orig_time
+
+
+def check_applog_capture(_tmp):
+    """B27：失败现场落 debug/app.log（core 侧写入端 applog）
+
+    - applog.log 写 settings.LOG_PATH（隔离根下，不碰真实用户数据）
+    - skland HTTP 401：界面任务日志维持 200 截断口径不变，app.log 记
+      完整响应体，且只记 host+path（query 带 uid，不落盘）
+    - 后台任务失败：finish 时摘要 + traceback 落 app.log
+    """
+    import io
+    import types
+    import urllib.error
+    from core import applog, settings, skland, tasks
+
+    def read_log():
+        try:
+            with open(settings.LOG_PATH, encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            return ''
+
+    applog.log('B27 自检标记 xyz123')
+    assert 'B27 自检标记 xyz123' in read_log(), 'applog 没写进 settings.LOG_PATH'
+
+    # skland 401：任务日志 200 截断、app.log 全量
+    long_tail = 'T' * 300
+    body = '{"code":10001,"message":"invalid sign","detail":"' + long_tail + '"}'
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', {},
+                                     io.BytesIO(body.encode('utf-8')))
+
+    logs = []
+    orig_urlopen, orig_time = urllib.request.urlopen, skland.time
+    try:
+        urllib.request.urlopen = fake_urlopen
+        skland.time = types.SimpleNamespace(sleep=lambda s: None)
+        try:
+            skland._http('GET', 'https://x/api/v1/game/player/info?uid=1',
+                         lambda: {}, note=logs.append)
+        except urllib.error.HTTPError:
+            pass
+    finally:
+        urllib.request.urlopen = orig_urlopen
+        skland.time = orig_time
+
+    assert logs and logs[-1].endswith(body[:200]), logs[-1]
+    assert 'T' * 220 not in ''.join(logs), '任务日志不该带完整响应体'
+    filed = read_log()
+    assert '[森空岛] HTTP 401 GET x/api/v1/game/player/info' in filed, 'app.log 缺 401 行'
+    assert body in filed, 'app.log 应记完整响应体（不截 200）'
+    assert 'uid=1' not in filed, 'app.log 不该带 query（账号参数不落盘）'
+
+    # 后台任务失败：摘要 + traceback 落 app.log
+    def boom():
+        raise RuntimeError('炸给 B27 看')
+
+    tid = tasks.create('B27 失败任务', boom)
+    for _ in range(50):
+        st = tasks.get(tid)
+        if st and st['status'] != 'running':
+            break
+        time.sleep(0.1)
+    assert st and st['status'] == 'error', st
+    filed = read_log()
+    assert '[任务失败] B27 失败任务：RuntimeError: 炸给 B27 看' in filed, '缺任务失败摘要'
+    assert 'boom' in filed, '缺 traceback 现场'
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -1793,6 +1927,8 @@ def main():
         r.check('B23 作业黑名单（maa:// 代码归一化 + 出口过滤）', lambda: check_op_blacklist(tmp))
         r.check('B24 抽卡统计（星级归一/保底/池合并/终末地翻页/武器口径/跨游戏隔离）', lambda: check_gacha_stats(tmp))
         r.check('B25 森空岛签到（两套口径/已签到判定/403/跳过/去重）', lambda: check_signin(tmp))
+        r.check('B26 skland HTTP 错误响应体进任务日志（401 鉴别信息）', lambda: check_skland_http_body(tmp))
+        r.check('B27 app.log 失败现场（森空岛响应体全量 + 任务失败摘要/traceback）', lambda: check_applog_capture(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

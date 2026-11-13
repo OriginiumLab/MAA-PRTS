@@ -7,6 +7,8 @@ import time
 import traceback
 import uuid
 
+from . import applog
+
 _tasks = {}
 _lock = threading.Lock()
 _keep = 40
@@ -46,10 +48,19 @@ def finish(tid, result=None, error=None):
         t = _tasks.get(tid)
         if not t:
             return
+        was_running = t['status'] == 'running'
         t['status'] = 'error' if error else 'done'
         t['result'] = result
         t['error'] = error
         t['endedAt'] = time.time()
+    if error and was_running:
+        # 失败任务此前只存在于内存（前端还能看，重启即没）。摘要 + traceback
+        # 落一份到 debug/app.log，排障才有现场——文件 IO 放锁外，别卡任务队列
+        tb = ''
+        if isinstance(result, dict):
+            tb = (result.get('traceback') or '').strip()
+        applog.log(('[任务失败] %s：%s' % (t['title'], error))
+                   + (('\n' + tb) if tb else ''))
 
 
 def log(tid, line: str):

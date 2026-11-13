@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from core import accounts, api, appupdate, settings, tasks, version  # noqa: E402
+from core import accounts, api, applog, appupdate, settings, tasks, version  # noqa: E402
 
 WEB = settings.static_dir()
 LOG_PATH = settings.LOG_PATH
@@ -38,14 +38,7 @@ def log(msg):
             print(line, flush=True)
     except Exception:
         pass
-    try:
-        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-        if os.path.isfile(LOG_PATH) and os.path.getsize(LOG_PATH) > 2 * 1024 * 1024:
-            os.replace(LOG_PATH, LOG_PATH + '.1')
-        with open(LOG_PATH, 'a', encoding='utf-8') as f:
-            f.write(line + '\n')
-    except Exception:
-        pass
+    applog.write(line)   # 落盘/轮转统一走 core.applog，两个独立写端会竞争轮转
 
 
 # ---------------------------------------------------------------- 解除网络锁定
