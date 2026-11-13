@@ -6,9 +6,7 @@ import base64
 import io
 import json
 import os
-import shutil
 import threading
-import time
 
 from . import settings, tasks, updater
 from . import atomicio, paradox
@@ -416,18 +414,9 @@ def start_refresh(token=None, alias=None, with_skins=False, title=None):
     return tid
 
 
-def remove_account(file: str, backup=True):
+def remove_account(file: str):
     path = os.path.join(_accounts_dir(), os.path.basename(file))
     if not os.path.isfile(path):
         raise FileNotFoundError(file)
-    if backup:
-        bak_dir = os.path.join(os.path.dirname(path), '_removed')
-        os.makedirs(bak_dir, exist_ok=True)
-        # 备份名带时间戳：同名新账号再次删除时 move 目标已存在会退化成
-        # 覆盖，旧备份被顶掉（#61）
-        dst = os.path.join(bak_dir, '%s.%s' % (
-            os.path.basename(path), time.strftime('%Y%m%d-%H%M%S')))
-        shutil.move(path, dst)
-    else:
-        os.remove(path)
+    os.remove(path)
     return True

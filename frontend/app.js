@@ -282,6 +282,7 @@ function renderAccounts() {
           <span class="acct-name">${esc(a.nickName)}${ef ? '<i class="acct-tag">终末地</i>' : ''}</span>
           <span class="acct-sub">${sub}</span>
         </span>
+        <span class="acct-del" data-file="${esc(a.file)}" role="button" title="删除这个账号">✕</span>
       </button>`;
   }).join('');
 }
@@ -311,6 +312,9 @@ function bindAccountOrder(box) {
   };
 
   box.addEventListener('click', e => {
+    // 删除 ✕ 先于选号拦截：点的是卡片里的 ✕ 就不该再把账号切成选中
+    const del = e.target.closest('.acct-del');
+    if (del) { deleteAccount(del.dataset.file); return; }
     const b = e.target.closest('.acct');
     if (b) selectAccount(b.dataset.file);
   });
@@ -338,6 +342,50 @@ function bindAccountOrder(box) {
     const r = el.getBoundingClientRect();
     const after = (e.clientY - r.top) > r.height / 2;
     box.insertBefore(dragEl, after ? el.nextSibling : el);
+  });
+}
+
+/* 删除账号：卡片 hover 出 ✕，点后二次确认。删就是删——账号文件直接
+   删除，不留备份（要找回只能重新同步）。 */
+async function deleteAccount(file) {
+  const a = S.accounts.find(x => x.file === file);
+  if (!a) return;
+  const game = gameOf(a);
+  const wasCurrent = S.current === file;
+  modal(`
+    <h3>删除账号</h3>
+    <div class="sub">确定删除「${esc(a.nickName || file)}」？删除后不可恢复，练度数据需要重新同步。</div>
+    <div class="modal-foot">
+      <button class="btn-plain" data-close>取消</button>
+      <button class="btn-solid" id="acct-del-yes">删除</button>
+    </div>`, {
+    onMount(el, close) {
+      $('#acct-del-yes', el).addEventListener('click', async () => {
+        const yes = $('#acct-del-yes', el);
+        yes.disabled = true;
+        try {
+          await api('/api/account/remove', { file });
+          close();
+          const acc = await api('/api/accounts');
+          S.accounts = acc.accounts;
+          if (wasCurrent) {
+            // 换到同栏剩下的第一个；同栏空了就另一栏；全空清掉选中
+            const next = (S.accounts.find(x => gameOf(x) === game) || S.accounts[0] || {}).file || '';
+            if (next) await selectAccount(next, true);
+            else {
+              S.current = ''; S.detail = null; S.sideGame = 'arknights';
+              renderHero();
+              applyModuleAvailability();
+            }
+          }
+          renderAccounts();
+          toast(`已删除「${a.nickName || file}」`);
+        } catch (e) {
+          yes.disabled = false;
+          toast('删除失败：' + e.message, 'err', 5000);
+        }
+      });
+    }
   });
 }
 
@@ -408,7 +456,16 @@ function renderHero() {
     algoSel.disabled = !d || ef;
     if (d) algoSel.value = d.preferAlgo || 'rating';
   }
-  if (!d) return;
+  if (!d) {
+    // 没有选中账号（删光了）：回到 index.html 的初始占位，别残留上一个
+    // 账号的头像/统计
+    $('#hero-name').textContent = '未选择账号';
+    $('#hero-sub').textContent = '用森空岛 token 添加一个账号开始';
+    $('#hero-avatar').textContent = '?';
+    $('#hero-avatar').classList.remove('ef');
+    $('#hero-stats').innerHTML = '';
+    return;
+  }
   const a = d.account || {}, st = d.stats || {};
   const name = a.nickName || '未知账号';
   $('#hero-name').textContent = name;

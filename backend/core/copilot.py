@@ -21,7 +21,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from . import resources, settings
+from . import applog, resources, settings
+from .net import err_body
 
 API = 'https://prts.maa.plus/copilot'
 UA = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MAA-PRTS/1.0'}
@@ -135,6 +136,13 @@ def _http_json(url, timeout=40, retries=3):
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            # 4xx/5xx 不重试；响应体落 app.log 再抛——搜索/预下载报障时
+            # 作业站返回的 code/message 是第一现场
+            u = urllib.parse.urlsplit(url)
+            applog.log('[作业站] HTTP %s GET %s %s' % (
+                e.code, u.netloc + u.path, err_body(e) or '（无响应体）'))
+            raise
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last = e
             if i == retries - 1:
