@@ -21,10 +21,11 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 图标生成到 build/ 而不是仓库里的 resources/assets/app.ico：不同 Pillow
-# 版本产出的 ICO 字节可能不同，每次构建重写被 git 跟踪的文件会让工作树
-# 变脏、易被误提交（#62）。仓库里那份只作为源码资产保留。
-ICON = os.path.join(HERE, 'build', 'app.ico')
+# 图标是纯构建期中间产物：生成到 build/work/ 里，成功后随 work/ 一起删掉，
+# 不在 build/ 顶层留孤儿文件；也不写被 git 跟踪的 resources/assets/app.ico
+# ——不同 Pillow 版本产出的 ICO 字节可能不同，重写会让工作树变脏（#62），
+# 仓库里那份只作为源码资产保留。
+ICON = os.path.join(HERE, 'build', 'work', 'app.ico')
 
 
 def make_icon():
@@ -169,7 +170,6 @@ def count_stale(fresh, pkg):
 
 
 def build():
-    icon = make_icon()
     # 构建只写 build/ 一个目录：work/ 是中间产物（每次全清），PyInstaller 在
     # work/dist/ 出全新包，再合并覆盖到 MAA-PRTS/（发布包本体）。不能让
     # PyInstaller 直接输出到 MAA-PRTS/：--noconfirm 下它会先删掉整个输出
@@ -180,6 +180,9 @@ def build():
     pkg_dir = os.path.join(build_dir, 'MAA-PRTS')
     if os.path.isdir(work_dir):
         shutil.rmtree(work_dir, ignore_errors=True)
+
+    # 图标在 work/ 里，必须等上面清完再生成，否则刚画好就被删了
+    icon = make_icon()
 
     cmd = [
         sys.executable, '-m', 'PyInstaller',
