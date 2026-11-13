@@ -22,6 +22,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import applog
+from .net import err_body
+
 APP_CODE = '4ca99fa6b56cc2ba'
 GRANT_URL = 'https://as.hypergryph.com/user/oauth2/v2/grant'
 CRED_URL = 'https://zonai.skland.com/api/v1/user/auth/generate_cred_by_code'
@@ -117,11 +120,19 @@ def _http(method, url, headers, body=None, timeout=30, retries=3, note=None):
                 return json.loads(raw.decode('utf-8'))
         except urllib.error.HTTPError as e:
             last = e
+            full = err_body(e, limit=4000)      # app.log 记完整响应体
+            body = full[:200]                   # 界面任务日志维持 200 字摘要不变
+            u = urllib.parse.urlsplit(url)      # 只记 host+path：query 可能带 uid 等账号参数
+            applog.log('[森空岛] HTTP %s %s %s %s' % (
+                e.code, method, u.netloc + u.path, full or '（无响应体）'))
             # 401/403 只有「headers 是函数」的可重签名请求才值得重试（时间戳
             # 过期）；登录链的死 token 重试三次只是浪费
             if e.code not in (401, 403) or not callable(headers) or attempt >= retries:
+                if body:
+                    (note or _note)('    [HTTP %s] %s' % (e.code, body))
                 raise
-            (note or _note)('    [签名重试 %d/%d] HTTP %s' % (attempt, retries - 1, e.code))
+            (note or _note)('    [签名重试 %d/%d] HTTP %s%s'
+                            % (attempt, retries - 1, e.code, ' ' + body if body else ''))
             time.sleep(1.0 * attempt)
         except (urllib.error.URLError, socket.timeout, TimeoutError,
                 ConnectionError, OSError) as e:

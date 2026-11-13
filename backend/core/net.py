@@ -17,6 +17,7 @@ check() 摸真可用性。
 """
 from __future__ import annotations
 
+import gzip
 import http.client
 import socket
 import time
@@ -24,6 +25,19 @@ import urllib.error
 import urllib.request
 
 from . import settings
+
+
+def err_body(e, limit=4000) -> str:
+    """HTTPError 响应体摘要（通用工具，不走代理，谁都能用）：4xx/5xx 的
+    JSON code/message 是排障关键。gzip 错误页解压后再截；响应体到这里就
+    被读掉了，调用方别再 e.read()。"""
+    try:
+        raw = e.read() or b''
+        if raw[:2] == b'\x1f\x8b':        # 网关偶发无视 Accept-Encoding 仍压 gzip
+            raw = gzip.decompress(raw)
+        return ' '.join(raw.decode('utf-8', 'replace').split())[:limit]
+    except Exception:
+        return ''
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
