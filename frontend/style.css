@@ -245,6 +245,20 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 }
 .acct-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
 .acct-sub b { color: var(--text-2); font-weight: 500; }
+/* 删除 ✕：平时不占视觉，悬停卡片才出现（span 而非 button——卡片本身
+   是 button，HTML 不允许按钮嵌按钮） */
+.acct-del {
+  flex: 0 0 auto;
+  display: none;
+  width: 20px; height: 20px;
+  border-radius: 6px;
+  place-items: center;
+  font-size: 11px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.acct:hover .acct-del { display: grid; }
+.acct-del:hover { color: var(--rose); background: rgba(255, 122, 138, 0.13); }
 
 .add-account {
   margin-top: 10px;
