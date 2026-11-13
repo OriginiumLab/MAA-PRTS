@@ -21,7 +21,7 @@
 | `paradox.json` | 悖论模拟清单（316 条，约 38 KB，纯 json 不含图片） |
 | `pack-manifest.json` | 给客户端比对的清单：版本 / 指纹 / `sha256` / 下载地址，由 `tools/sync_pack.py` 生成 |
 | `make_pack.py` | 生成 `arknights.json`，CI 与本地共用 |
-| `assets/app.ico` | 程序图标（`tools/build.py` 会用 Pillow 重新画） |
+| `assets/app.ico` | 程序图标源码资产；构建时 `tools/build.py` 用 Pillow 另画一份到 `build/work/`，不回写本文件 |
 
 `paradox.json` 由 `tools/build_paradox_data.py` 生成，字段是
 `charId → {name, pname, stage, elite, level}`；它只用来算「哪些干员能开打悖论」，
