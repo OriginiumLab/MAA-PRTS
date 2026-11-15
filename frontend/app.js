@@ -565,7 +565,7 @@ async function importFromMaa() {
         pr.operboxCount != null ? pr.operboxCount + ' 名干员' : '内容待更新时解析'
       }${pr.operboxSyncTime ? ' · ' + esc(fmtTime(pr.operboxSyncTime)) + ' 识别' : ''}</code></div>
     </div>
-    <div class="onb-hint bad">! 本地识别不含技能、专精、模组数据。更新后作业匹配只比精英化与等级，技能模组一律按已拥有处理，可能推给你实际打不了的作业——抄之前请在 MAA 里确认。</div>
+    <div class="onb-hint bad">! 会覆盖这个账号当前的练度（包括森空岛同步来的）。本地识别不含技能、专精、模组数据，更新后作业匹配只比精英化与等级，技能模组一律按已拥有处理，可能推给你实际打不了的作业——抄之前请在 MAA 里确认。</div>
     <div class="modal-foot">
       <button class="btn-plain" data-close>取消</button>
       <button class="btn-solid" id="btn-import-go">开始更新</button>
@@ -577,7 +577,8 @@ async function importFromMaa() {
         btn.disabled = true;
         btn.textContent = '更新中…';
         try {
-          const r = await api('/api/account/import-maa', { file: S.current });
+          // force：用户在这个弹窗里点了确认，才允许覆盖森空岛同步的练度
+          const r = await api('/api/account/import-maa', { file: S.current, force: true });
           const st = r.stats || {};
           const warns = (r.warnings || []).map(w => `<div class="onb-hint bad">! ${esc(w)}</div>`).join('');
           close();
@@ -2327,22 +2328,6 @@ function openAccountWizard(mode) {
         for (const file of added) {
           if (file) await api('/api/account/maa', { file, patch: { dir } }).catch(() => { });
         }
-        // 新账号顺手导入 MAA 里的干员识别结果（不依赖 token；失败不影响账号添加）
-        if (operboxReady) {
-          for (const file of added) {
-            if (!file) continue;
-            taskLogLine(logBox, `从 MAA 导入干员信息（${file}）…`);
-            try {
-              const r = await api('/api/account/import-maa', { file });
-              importedTotal += r.imported || 0;
-              taskLogLine(logBox, `✓ 已导入 ${r.imported || 0} 名干员${r.skipped ? `（跳过 ${r.skipped} 名）` : ''}，来源 ${r.source === 'yituliu' ? '一图流' : 'MAA 本地识别'}`);
-            } catch (e) {
-              taskLogLine(logBox, `✗ ${file} 干员信息导入失败：${e.message}`, true);
-            }
-          }
-        } else {
-          taskLogLine(logBox, '! 该 MAA 还没有干员识别数据（data/OperBoxData.json），可先在 MAA 小工具里识别一次，之后从森空岛页手动导入', true);
-        }
       }
       const acc = await api('/api/accounts');
       S.accounts = acc.accounts;
@@ -2350,6 +2335,38 @@ function openAccountWizard(mode) {
       renderMaaState();
       const st = await api('/api/settings', {});
       S.settings = st.settings;
+
+      // 用 MAA 识别结果兜底练度，只在「只加了一个号、且它同步后没有练度」时做。
+      // OperBoxData.json 一个 MAA 目录只有一份，就是当时登录在 MAA 里的那个号：
+      // 批量加号时挨个导入，会把所有账号写成同一份练度（2026-11-15 反馈「添加
+      // 两个账号显示同一个练度」）；而 token 同步来的练度含技能/专精/模组，
+      // 被本地识别顶掉是纯降级。需要覆盖时走账号页的手动导入（那里会确认）。
+      if (dir && operboxReady) {
+        const ok = added.filter(Boolean);
+        const one = ok.length === 1 ? ok[0] : '';
+        const hasChars = one
+          && (((S.accounts.find(a => a.file === one) || {}).stats || {}).charCount || 0) > 0;
+        if (one && !hasChars) {
+          taskLogLine(logBox, `从 MAA 导入干员信息（${one}）…`);
+          try {
+            const r = await api('/api/account/import-maa', { file: one });
+            if (r.skippedBy === 'token') {
+              taskLogLine(logBox, `· 跳过 MAA 识别结果：${r.reason || '练度已是森空岛同步的结果'}`);
+            } else {
+              importedTotal += r.imported || 0;
+              taskLogLine(logBox, `✓ 已导入 ${r.imported || 0} 名干员${r.skipped ? `（跳过 ${r.skipped} 名）` : ''}，来源 ${r.source === 'yituliu' ? '一图流' : 'MAA 本地识别'}`);
+            }
+          } catch (e) {
+            taskLogLine(logBox, `✗ ${one} 干员信息导入失败：${e.message}`, true);
+          }
+        } else if (ok.length > 1) {
+          taskLogLine(logBox, '! 一次添加了多个账号，未从 MAA 导入练度——MAA 只有一份识别结果（当时登录的那个号），套到多个账号上会显示同一个练度', true);
+        } else {
+          taskLogLine(logBox, '· 练度已由森空岛同步，未用 MAA 识别结果覆盖（本地识别不含技能/专精/模组；确需替换可在账号页手动导入）');
+        }
+      } else if (dir) {
+        taskLogLine(logBox, '! 该 MAA 还没有干员识别数据（data/OperBoxData.json），可先在 MAA 小工具里识别一次，之后从森空岛页手动导入', true);
+      }
     }
     if (failed.length) {
       toast(`成功 ${added.length} 个，失败 ${failed.length} 个，详见日志`, 'err', 6000);

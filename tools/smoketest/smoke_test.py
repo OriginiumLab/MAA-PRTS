@@ -413,6 +413,31 @@ def check_operbox_parse(tmp):
         and c['skinCount'] == 1, 'MAA 没有的皮肤/信赖该沿用旧值，而不是清零'
     assert snap['skins'] == [{'id': 's1'}] and snap['stats']['skinCount'] == 1
 
+    # 森空岛同步来的练度不许被识别结果顶掉：识别结果每个 MAA 目录只有一份
+    # （当时登录的那个号），批量加号时挨个导入会让所有账号练度一样（2026-11-15）
+    tok_snap = {'account': {'uid': '2', 'nickName': '乙'},
+                'chars': [dict(old_char, charId=six[0], level=80)],
+                'stats': {'charCount': 1},
+                'sync': {'source': 'zonai.skland.com/api/v1/game/player/info'}}
+    with open(os.path.join(cfg, '乙.json'), 'w', encoding='utf-8') as f:
+        json.dump(tok_snap, f, ensure_ascii=False)
+    r = operbox.import_into('乙.json', maa)
+    assert r.get('skippedBy') == 'token' and r.get('imported') == 0, \
+        'token 同步的练度该被拦下，实际：%r' % r
+    assert r.get('reason'), '跳过要给界面一句人话原因'
+    after = json.load(open(os.path.join(cfg, '乙.json'), encoding='utf-8'))
+    assert after['chars'] == tok_snap['chars'], '拦下时不能动现有练度'
+    # 只存了 token、没写 sync.source 的老账号同样受保护（有 token 就是能同步的号）
+    with open(os.path.join(cfg, '丙.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '3'}, 'chars': [dict(old_char, level=70)],
+                   'stats': {}, 'skd': {'data': 'x'}}, f, ensure_ascii=False)
+    assert operbox.import_into('丙.json', maa).get('skippedBy') == 'token'
+    # 账号页手动导入（用户确认过）带 force，必须照旧能覆盖
+    r = operbox.import_into('乙.json', maa, force=True)
+    assert r['imported'] == 1 and 'skippedBy' not in r, 'force 必须放行：%r' % r
+    after = json.load(open(os.path.join(cfg, '乙.json'), encoding='utf-8'))
+    assert after['chars'][0]['charId'] == six[0] and after['sync']['source'] == 'maa-operbox'
+
 
 # ---------------------------------------------------------------- B15 从 MAA 直接建号
 def check_create_from_maa(tmp):

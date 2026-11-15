@@ -154,7 +154,10 @@ def api_account_remove(_q, body):
 def api_account_import_maa(_q, body):
     """从账号绑定的 MAA 目录导入干员识别结果（R2/R3）
 
-    body: {"file": "<账号文件名>"}（可省略，按上次账号→列表首个解析）。
+    body: {"file": "<账号文件名>", "force": true}（file 可省略，按上次账号→
+    列表首个解析）。force 只给「账号页手动导入」用——用户在弹窗里点了确认，
+    才算同意用识别结果覆盖森空岛同步的练度；向导里顺手导入不带 force，
+    会拿到 skippedBy=token 而不动数据。
     同步任务，无 taskId；结果摘要（条数/来源/警告）直接返回给前端。
     """
     body = body or {}
@@ -162,7 +165,8 @@ def api_account_import_maa(_q, body):
     d = _maa_dir_for(file)
     if not d:
         raise ValueError('该账号没有绑定 MAA 目录，也没有设置全局默认')
-    return operbox.import_into(file, d)
+    force = bool(body.get('force'))
+    return operbox.import_into(file, d, force=force)
 
 
 def api_account_create_from_maa(_q, body):

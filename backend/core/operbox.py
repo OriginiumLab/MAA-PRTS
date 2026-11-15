@@ -202,18 +202,47 @@ def _summary(fname, path, data, built, snap):
     }
 
 
-def import_into(file: str, maa_dir: str) -> dict:
+def _token_synced(snap: dict) -> bool:
+    """这份快照的练度是不是森空岛同步来的（真数据，不该被识别结果顶掉）
+
+    判据两道：sync.source 是森空岛的接口，或文件里存着 token（能同步就说明
+    这是 token 账号）。MAA 直接建号/导入的账号 source=maa-operbox，都不命中。
+    """
+    src = str(((snap.get('sync') or {}).get('source')) or '')
+    if 'skland' in src or 'zonai' in src:
+        return True
+    return bool((snap.get('skd') or {}).get('data'))
+
+
+def import_into(file: str, maa_dir: str, force: bool = False) -> dict:
     """把 MAA 干员识别结果写进账号文件，返回导入摘要。
 
     done=false（识别未完成）整单拒绝。chars/stats/missing/sync 被识别结果
     覆盖（皮肤/信赖按 charId 沿用旧值）；account/maa/tags/note/skd/skins
     原样保留（合并语义同 updater.merge_preserved），原子替换落盘。
+
+    force=False 时拒绝覆盖「森空岛同步来的练度」：本地识别没有技能/专精/
+    模组，用它顶掉真数据是纯降级，作业匹配会退回只比等级（B17 的口径）。
+    更要紧的是 OperBoxData.json 每个 MAA 目录只有一份（= 当时登录的那个号），
+    批量加号时挨个导入会把所有账号写成同一份练度（2026-11-15 反馈「加两个
+    账号显示同一个练度」）。账号页的手动导入是用户点确认才走的，传 force。
     """
     path, data, tables, built = _read_operbox(maa_dir)
     # 读旧快照 → 合并 → 写回整段圈进写锁：与后台同步/其他请求并发时
     # 不丢更新（#47）。锁内只有内存合并，没有 IO，拿一会儿没关系。
     with atomicio.lock():
         snap = accounts.get_account(file)
+        if not force and _token_synced(snap):
+            return {
+                'file': os.path.basename(str(file)),
+                'path': path,
+                'skippedBy': 'token',
+                'reason': '该账号的练度已经是森空岛同步的结果，MAA 本地识别不含'
+                          '技能/专精/模组，不覆盖；确需替换请在账号页手动导入',
+                'imported': 0,
+                'stats': snap.get('stats') or {},
+                'sync': snap.get('sync') or {},
+            }
         _apply_chars(snap, built['chars'], tables, path, data)
         accounts.save_account(file, snap)
     return _summary(os.path.basename(str(file)), path, data, built, snap)

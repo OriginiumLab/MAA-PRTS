@@ -64,7 +64,7 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 | `toggleBasket()` | 窄屏抽屉开关（≤1180px），控制 `.basket.show`、遮罩与浮动按钮 |
 | `renderResult()` | 单关卡卡片 / 活动关卡列表两套版式 |
 | `renderBasket()` | 右侧作业集（含拖动排序） |
-| `openAccountWizard(mode)` | 账号向导共用组件（首次引导 `onboard` / 添加账号 `add`）：第 1 页选 MAA 根目录，第 2 页二选一——森空岛 token（一行一个批量导入，成功后自动从 MAA 导入练度）或「直接从选定的 MAA 导入」（不用 token，调 `POST /api/account/create-from-maa` 建本地账号） |
+| `openAccountWizard(mode)` | 账号向导共用组件（首次引导 `onboard` / 添加账号 `add`）：第 1 页选 MAA 根目录，第 2 页二选一——森空岛 token（一行一个批量导入）或「直接从选定的 MAA 导入」（不用 token，调 `POST /api/account/create-from-maa` 建本地账号）。token 那条路**只在「只加了一个号且它同步后没有练度」时**才用 MAA 识别结果兜底：`OperBoxData.json` 每个 MAA 目录只有一份（当时登录的那个号），批量加号挨个导入会把所有账号写成同一个练度，而 token 同步来的练度含技能/专精/模组，被本地识别顶掉是纯降级 |
 | `openOnboarding()` / `openAddAccount()` | 上面的薄包装（引导多一个「稍后设置」，成功后把目录存为全局默认） |
 | `openSettings()` | 设置弹窗 |
 | `pollTask(tid, root, sel)` | 任务日志轮询（同步账号、写入 MAA、同步抽卡、签到共用）。日志容器默认 `#task-log`，签到面板两块日志各有 id，用 `sel` 指过去 |
