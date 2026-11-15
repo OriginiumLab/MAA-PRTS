@@ -245,6 +245,11 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 }
 .acct-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
 .acct-sub b { color: var(--text-2); font-weight: 500; }
+/* 渠道服在账号栏里要一眼分得出来：B 站服用粉色，官服给亮一点的白色。
+   其它渠道（小米/华为…）保持原来的灰，不做区分 */
+.acct-ch { color: inherit; }
+.acct-ch.official { color: #f6f9ff; }
+.acct-ch.bili { color: #ff9dd1; }
 /* 删除 ✕：平时不占视觉，悬停卡片才出现（span 而非 button——卡片本身
    是 button，HTML 不允许按钮嵌按钮） */
 .acct-del {
@@ -972,7 +977,9 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 2px 26px;
+  /* 顶部留白交给 .result-head 的 padding：头部要 sticky，容器再垫 12px 会
+     让它先滑上去 12px 才吸顶，滚动时看着像顿一下 */
+  padding: 0 2px 26px;
   scroll-behavior: smooth;
 }
 
@@ -989,10 +996,24 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); }
 .empty-state p { font-size: 12.5px; color: var(--text-3); max-width: 340px; line-height: 1.7; margin-top: 6px; }
 
+/* 结果头部吸顶：滚到第几关都还能直接点「全部加入」，不用先滚回顶部。
+   底边用 12px 渐变把滚上来的卡片虚化掉，静止时那段渐变落在头部与卡片
+   之间的留白里，等于看不见 */
 .result-head {
+  position: sticky; top: 0; z-index: 14;
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 12px;
-  padding: 4px 4px 14px;
+  /* 负外边距把宽度吃掉左右各 2px 的 .results 内边距，吸顶时不会漏出卡片边 */
+  margin: 0 -2px;
+  padding: 16px 6px 14px;
+  background: rgba(9, 12, 18, 0.95);
+  backdrop-filter: blur(10px);
+}
+.result-head::after {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 100%;
+  height: 12px; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(9, 12, 18, 0.95), rgba(9, 12, 18, 0));
 }
 .result-title { font-size: 16px; font-weight: 650; }
 .result-act {
@@ -1026,9 +1047,11 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .add-split { position: relative; display: inline-flex; }
 .add-split #add-all-best { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .add-caret {
-  padding: 0 8px; border-left: 1px solid rgba(0, 0, 0, 0.35);
+  padding: 0 10px; border-left: 1px solid rgba(0, 0, 0, 0.35);
   border-top-left-radius: 0; border-bottom-left-radius: 0;
-  font-size: 11px;
+  /* 原来 11px 太小，离远了看不清是个下拉；顺带补个最小宽度，别让它比
+     主按钮矮一截 */
+  font-size: 13.5px; min-width: 33px; justify-content: center;
 }
 .add-caret[aria-expanded="true"] { background: rgba(94, 234, 212, 0.09); }
 .add-menu {
@@ -1086,6 +1109,15 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   padding: 2.5px 7px; border-radius: 6px;
   font-weight: 700;
 }
+
+/* 作业详情弹窗：练度不足（橙）与需要借人（紫）——顶部提示条 + 干员名同色 */
+.op-flag { margin-bottom: 9px; padding: 8px 11px; border-radius: 10px; font-size: 12px; line-height: 1.6; border: 1px solid var(--line); }
+.op-flag b { font-weight: 600; }
+.op-flag.borrow { color: #b48cff; background: rgba(148, 108, 255, 0.10); border-color: rgba(148, 108, 255, 0.32); }
+.op-flag.train { color: var(--amber); background: rgba(245, 185, 85, 0.09); border-color: rgba(245, 185, 85, 0.30); }
+.op-name.borrow { color: #b48cff; }
+.op-name.train { color: var(--amber); }
+.op-name em { font-style: normal; font-size: 10.5px; opacity: .85; margin-left: 5px; }
 
 .op-top { display: flex; align-items: center; gap: 9px; padding-right: 44px; }
 .stars { color: var(--star); font-size: 11px; letter-spacing: 1px; white-space: nowrap; }

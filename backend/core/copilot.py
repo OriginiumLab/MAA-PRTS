@@ -39,6 +39,10 @@ MODE_CN = {'ready': '可直接抄', 'borrow': '差一人可借', 'train': '需�
 ALGOS = ('fewer', 'single', 'rating')
 DEFAULT_ALGO = 'rating'
 
+# 「可直接抄」要压过「差一人可借」所需的评分（作业站 0~10 星）。低于这条线
+# 就按评分一起排——低分的全齐作业不该占住最优推荐（见 rank_key / mode_band）
+READY_MIN_RATING = 9
+
 # 少人优先的干员权重：六星逐个记在 resources/oper-weights.json（用户手工调），
 # 六星以外的星级固定——数值大=阵容质量高（排序时取负进键）：
 #   五星 -3、四星 -1、三星 +1、一星/二星 +3（低星作业容易凑、要求低）
@@ -565,20 +569,40 @@ def _item(stage, item, mode, missing, training, total, detail, six=0, weight=0):
     }
 
 
+def mode_band(row) -> int:
+    """练度可行性的分档（越小越靠前），「可直接抄」不再无条件压过借人作业。
+
+    用户规则（2026-11-16）：可直接抄只有在评分 >= READY_MIN_RATING 时才排在
+    「差一人可借」前面。此前 mode 永远第一顺位，导致一格 3 分、一个人都不用借
+    的低质作业占住「最优作业推荐」，而旁边 10 分的作业只要差一个助战就排到后面。
+
+        0  可直接抄 且评分 >= 9   ← 唯一能压过借人作业的一档
+        1  能打的：可直接抄但评分不够 / 差一人可借（同一档里按评分拼）
+        2  需补练度
+        3  打不了
+    """
+    m = row.get('mode')
+    if m == 'ready':
+        return 0 if (row.get('rating') or 0) >= READY_MIN_RATING else 1
+    return MODES.index(m) if m in MODES else len(MODES)
+
+
 def rank_key(row, algo=DEFAULT_ALGO):
-    """推荐排序。练度可行（mode）永远第一；之后按账号选的算法（见 ALGOS 注释）"""
-    mode = MODES.index(row['mode'])
+    """推荐排序。先按 mode_band（可直接抄 9 分以上 > 其余能打的 > 需练度 >
+    打不了），档内再按账号选的算法（见 ALGOS 注释）"""
+    band = mode_band(row)
     if algo == 'fewer':
-        # ready/borrow 同级：都能上场打，少一人（助战顶上）不算劣势。
-        # 人数 0~4 折成同档（再分高下没意义），5 人起按实际人数；
-        # 同档内先比阵容权重均值（大者优先，取负进键），再评分、浏览
-        mode = 0 if mode <= 1 else mode
+        # fewer：能打的那些档位里，少一人（助战顶上）不算劣势，先比人数
+        # （0~4 折成同档，5 人起按实际人数），再比阵容权重均值（大者优先，
+        # 取负进键）、评分、浏览
         t = row['total'] if row['total'] > 4 else 4
-        return (mode, t, -row.get('weight', 0), -row['rating'], -row['views'])
+        return (band, t, -row.get('weight', 0), -row['rating'], -row['views'])
     if algo == 'single':
-        return (mode, 0 if row.get('singleCore') else 1,
+        return (band, 0 if row.get('singleCore') else 1,
                 -row['rating'], -row['views'], row['total'])
-    return (mode, -row['rating'], -row['views'], row['total'])
+    # rating（默认）：评分 → 浏览 → 人数；同分下可直接抄优先于借人
+    return (band, -row['rating'], MODES.index(row['mode']) if row['mode'] in MODES else 9,
+            -row['views'], row['total'])
 
 
 def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=DEFAULT_ALGO):
@@ -831,6 +855,10 @@ def detail_opers(content, owned_map=None):
     注意这是展示用的副本，不往写 MAA 的那份 content 里塞字段。
     owned_map 传了当前账号的练度时，按干员是否真有技能数据决定要不要展示
     技能/模组要求——MAA 导入的账号不看这些维度，展示出来只会误导。
+
+    同一次比对里顺手给出 owned/ok（口径与 match_operation 一致），详情弹窗
+    据此标「练度不够」（橙）与「需要借谁」（紫）；没传 owned_map 时两者都是
+    None，前端不做任何标注（不然整份作业都会被算成缺卡）。
     """
     idx = _char_index()
     out = []
@@ -843,6 +871,10 @@ def detail_opers(content, owned_map=None):
         # 任一侧改名另一侧就静默显示「无特殊要求」（#63）
         o['req'] = effective_req(op, stars, strict_skill=known)
         o['skillKnown'] = known if owned else None
+        o['owned'] = bool(owned) if owned_map is not None else None
+        o['ok'] = (bool(owned) and req_met(op, owned)) if owned_map is not None else None
+        o['elite'] = owned.get('elite') if owned else None
+        o['level'] = owned.get('level') if owned else None
         out.append(o)
     return out
 

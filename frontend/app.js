@@ -271,9 +271,13 @@ function renderAccounts() {
     const ef = a.game === 'endfield';                 // 终末地：没有练度数据，副标题换口径
     const cls = ef ? 'ef' : (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
     const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
+    // 渠道名单独上色：B 站服粉、官服亮白，其它渠道不动（同 style.css .acct-ch）
+    const chName = a.channelName || '官服';
+    const chCls = /bilibili/i.test(chName) ? ' bili' : (/^官服/.test(chName) ? ' official' : '');
+    const chHtml = `<span class="acct-ch${chCls}">${esc(chName)}</span>`;
     const sub = ef
-      ? `${esc(a.channelName || '官服')} · Lv${a.level || '?'}`
-      : `${esc(a.channelName || '官服')} · <b>${st.charCount || 0}</b>/${st.charTotal || 440} 干员`;
+      ? `${chHtml} · Lv${a.level || '?'}`
+      : `${chHtml} · <b>${st.charCount || 0}</b>/${st.charTotal || 440} 干员`;
     return `
       <button class="acct ${a.file === S.current ? 'active' : ''}" data-file="${esc(a.file)}"
         draggable="true" title="点击选中，拖动可排序${ef ? '（终末地账号，不含作业获取）' : ''}">
@@ -1459,7 +1463,7 @@ function renderResult(d) {
           </div>
           <div class="stage-right">
             <span class="badge ${cls}">${MODE_CN[cls]}</span>
-            ${b ? `<button class="mini-btn accent" data-add-id="${b.id}" data-add-variant="${esc(st.variant || '')}" data-stage="${esc(st.stageId)}" data-add-label="加入" data-added-label="已在" ${inBasket(b.id, st.variant) ? 'disabled' : ''}>${inBasket(b.id, st.variant) ? '已在' : '加入'}</button>` : ''}
+            ${b ? `<button class="mini-btn accent" data-add-id="${b.id}" data-add-variant="${esc(st.variant || '')}" data-stage="${esc(st.stageId)}" data-add-label="加入" data-added-label="已在" ${cls === 'blocked' ? 'title="这一关打不了：批量加入会跳过它；点这里是自己手动加进去"' : ''} ${inBasket(b.id, st.variant) ? 'disabled' : ''}>${inBasket(b.id, st.variant) ? '已在' : '加入'}</button>` : ''}
           </div>
         </div>
         <div class="stage-ops">
@@ -1574,13 +1578,17 @@ function importOptions(rows) {
   ];
 }
 
-/* 批量加入：每行取 best，按「关卡 + 难度行」去重，已在作业集的跳过 */
+/* 批量加入：每行取 best，按「关卡 + 难度行」去重，已在作业集的跳过。
+   blocked（打不了）一律不加：一键导入是「照着打一遍」，塞进去也是白写进
+   MAA；想收这份作业的人自己点那一行的「加入」，然后手动调顺序 */
 function addRows(rows, pick, label) {
   let n = 0;
+  let blocked = 0;
   const seen = new Set();
   const prepareIds = [];   // 一键加入的也走隐式预下载（addToBasket 不经过这条路）
   rows.forEach(s => {
     if (!s.best || !pick(s)) return;
+    if (s.best.mode === 'blocked') { blocked++; return; }
     const key = s.stage.stageId + '|' + (s.stage.variant || '');
     if (seen.has(key) || inBasket(s.best.id, s.stage.variant || undefined)) return;
     seen.add(key);
@@ -1601,7 +1609,12 @@ function addRows(rows, pick, label) {
   });
   if (prepareIds.length) api('/api/copilot/prepare', { ids: prepareIds }).catch(() => { });
   renderBasket();
-  toast(n ? `${label}：加入 ${n} 份` : '这些作业都已在作业集里', n ? 'ok' : 'warn');
+  const skipNote = blocked ? `，跳过 ${blocked} 关打不了的` : '';
+  if (!n) {
+    toast(blocked ? `${label}：${blocked} 关都打不了，没有可加的` : '这些作业都已在作业集里', 'warn');
+    return n;
+  }
+  toast(`${label}：加入 ${n} 份${skipNote}`, blocked ? 'warn' : 'ok');
   return n;
 }
 
@@ -1663,6 +1676,14 @@ async function showOpDetail(op, variant) {
       api(opUrl).then(d => {
         const body = d.content || {};
         const shown = visOpers(d.opers);
+        /* 缺谁：owned=false 是没这个人，owned && !ok 是练度不到。
+           只有「差一人可借」这一档才说得出具体的借人对象（助战位只能带一个），
+           其余情况分开列：没的人和练度不够的人不是一回事 */
+        const bad = d.compared ? shown.filter(o => o.owned === false || o.ok === false) : [];
+        const borrowOne = (op.mode === 'borrow' && bad.length === 1) ? bad[0].name : '';
+        const rest = bad.filter(o => o.name !== borrowOne);
+        const lackOwn = rest.filter(o => o.owned === false).map(o => o.name);
+        const lackTrain = rest.filter(o => o.owned !== false).map(o => o.name);
         const rows = shown.map(o => {
           const req = o.req || {};   // 与搜索侧同键名（#63）
           const bits = [];
@@ -1671,13 +1692,23 @@ async function showOpDetail(op, variant) {
           if (req.skill_level != null) bits.push(req.skill_level >= 8 ? ('专' + (req.skill_level - 7) + ' 技能' + (req.skill || 1)) : ('技能 ' + req.skill_level));
           if (req.module) bits.push('模组 ' + req.module);
           if (req.implied) bits.push('老作业未标注，按星级默认');
+          // 名字上色：借的那个人紫、缺练度的橙，跟顶部提示一对
+          const isBorrow = borrowOne && o.name === borrowOne;
+          const cls = isBorrow ? ' borrow' : (o.owned === false || o.ok === false ? ' train' : '');
+          const tail = isBorrow ? '<em>借</em>'
+            : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : ''));
           return `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed rgba(255,255,255,.06);padding:5px 0">
-            <span style="color:var(--text)">${esc(o.name)}</span>
+            <span class="op-name${cls}">${esc(o.name)}${tail}</span>
             <span style="color:var(--text-3);font-size:11.5px">${esc(bits.join(' · ') || '无特殊要求')}</span>
           </div>`;
         }).join('');
+        const flags =
+          (borrowOne ? `<div class="op-flag borrow">需要借 1 人：<b>${esc(borrowOne)}</b>（把助战位留给他就行，MAA 会自动借）</div>` : '') +
+          (lackTrain.length ? `<div class="op-flag train">练度不够：<b>${esc(lackTrain.join('、'))}</b>（按这份作业的要求差了一档，补练度或者换一份）</div>` : '') +
+          (lackOwn.length ? `<div class="op-flag train">还缺 <b>${esc(lackOwn.join('、'))}</b>（助战位只够补一个，这份作业现在打不了）</div>` : '');
         const skillless = shown.some(o => o.skillKnown === false);
         $('#op-detail-body', el).innerHTML =
+          flags +
           (rows || '<div style="color:var(--text-3)">无干员信息</div>') +
           (skillless
             ? '<div class="onb-hint bad" style="margin-top:10px">! 该账号用 MAA 干员识别建号，没有技能 / 专精 / 模组数据：判定只比精英化与等级，技能模组按已拥有处理，实际打之前请在 MAA 里确认。</div>'

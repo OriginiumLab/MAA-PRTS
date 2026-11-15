@@ -298,6 +298,9 @@ def api_op(q, _body):
         'maaCode': 'maa://%s' % cid,
         'title': (content.get('doc') or {}).get('title'),
         'opers': copilot.detail_opers(content, owned),
+        # 没选账号 / 账号没练度数据时 owned 是 None，前端就不标「缺谁」，
+        # 否则整份作业都会被算成缺卡
+        'compared': owned is not None,
         'actions': len(content.get('actions') or []),
         'stageName': content.get('stage_name'),
     }

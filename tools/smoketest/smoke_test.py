@@ -1509,6 +1509,71 @@ def check_mainline_difficulty_variants():
         resources.clear_cache()
 
 
+# ------------------------------------------------- B28 推荐排序与详情缺谁提示
+def check_copilot_rank_band():
+    """推荐排序：只有「可直接抄且评分 >= 9」才压过借人作业。
+
+    用户反馈（2026-11-16）：最优推荐长期被低分全齐作业占住，旁边 10 分只差一个
+    助战的作业反而排在后面。规则改成 mode_band：0 = 可直接抄 9 分以上、
+    1 = 能打的（可直接抄但分不够 / 差一人可借）、2 = 需补练度、3 = 打不了，
+    档内仍按账号选的算法（评分 / 少人 / 单核）。
+
+    顺带断言详情弹窗的数据源：detail_opers 要给出 owned/ok（缺人与缺练度分得开），
+    没传账号练度时两者必须是 None——否则整份作业都会被标成缺卡。
+    """
+    from core import copilot, resources
+
+    def row(mode, rating, **kw):
+        r = {'mode': mode, 'rating': rating, 'views': 0, 'total': 6,
+             'weight': 0.0, 'singleCore': False}
+        r.update(kw)
+        return r
+
+    # 分档：9 分是分水岭
+    assert copilot.mode_band(row('ready', 10)) == 0
+    assert copilot.mode_band(row('ready', 9)) == 0
+    assert copilot.mode_band(row('ready', 8)) == 1, '8 分的全齐作业不该独占第一档'
+    assert copilot.mode_band(row('borrow', 10)) == 1
+    assert copilot.mode_band(row('train', 10)) == 2
+    assert copilot.mode_band(row('blocked', 10)) == 3
+
+    rows = [row('ready', 3, views=9999), row('borrow', 10),
+            row('borrow', 9, views=5), row('ready', 10),
+            row('train', 10), row('blocked', 10)]
+    got = [(r['mode'], r['rating'])
+           for r in sorted(rows, key=lambda r: copilot.rank_key(r, 'rating'))]
+    assert got == [('ready', 10), ('borrow', 10), ('borrow', 9),
+                   ('ready', 3), ('train', 10), ('blocked', 10)], \
+        '评分优先的推荐顺序不对：%r' % (got,)
+
+    # 少人 / 单核两种算法同样守分档：低分 ready 不能跳过一条高分 borrow
+    for algo in ('fewer', 'single'):
+        keys = {m: copilot.rank_key(row(m, 8 if m == 'ready' else 10), algo)[0]
+                for m in ('ready', 'borrow', 'train')}
+        assert keys['ready'] == keys['borrow'] == 1 and keys['train'] == 2, \
+            '%s 算法的分档不对：%r' % (algo, keys)
+
+    # 详情：谁缺练度、谁没有（借人对象），口径与搜索侧一致
+    names = [c['name'] for c in (resources.char_table() or {}).values()
+             if isinstance(c, dict) and int(c.get('rarity') or 0) + 1 == 6][:2]
+    assert len(names) == 2, '资源包里找不到两个六星干员'
+    weak, absent = names
+    content = {'opers': [
+        {'name': weak, 'skill': 1, 'requirements': {'elite': 2, 'level': 90}},
+        {'name': absent, 'skill': 1, 'requirements': {'elite': 2, 'level': 60}},
+    ]}
+    owned = {copilot.norm(weak): {
+        'name': weak, 'rarity': 6, 'elite': 1, 'level': 60, 'mainSkillLevel': 7,
+        'masteryLevels': [0, 0, 0], 'moduleLevels': {}, 'skillKnown': True}}
+    d = copilot.detail_opers(content, owned)
+    assert d[0]['owned'] is True and d[0]['ok'] is False, '练度不够的要标 ok=False'
+    assert d[1]['owned'] is False and d[1]['ok'] is False, '没有的干员要标 owned=False'
+    assert d[0]['req'].get('elite') == 2, '详情里的要求仍按作业原文'
+    d2 = copilot.detail_opers(content, None)
+    assert all(o['owned'] is None and o['ok'] is None for o in d2), \
+        '没传账号练度时不能声称谁缺谁有'
+
+
 # ---------------------------------------------------------------- B23 作业黑名单
 def check_op_blacklist(tmp):
     """作业黑名单：条目按 MAA 代码存（maa://12345），归一化容错（裸数字补全、
@@ -2022,6 +2087,7 @@ def main():
         r.check('B25 森空岛签到（两套口径/已签到判定/403/跳过/去重）', lambda: check_signin(tmp))
         r.check('B26 skland HTTP 错误响应体进任务日志（401 鉴别信息）', lambda: check_skland_http_body(tmp))
         r.check('B27 app.log 失败现场（森空岛响应体全量 + 任务失败摘要/traceback）', lambda: check_applog_capture(tmp))
+        r.check('B28 推荐排序分档 + 详情缺练度/缺人提示', check_copilot_rank_band)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
