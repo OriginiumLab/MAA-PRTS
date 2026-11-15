@@ -235,6 +235,16 @@ def close(maa_dir=None):
     return not is_running()
 
 
+def _path_key(p: str) -> str:
+    """PATH 条目的比较键：大小写、正反斜杠、尾部分隔符都不算区别
+
+    以前只做 normcase，`...\\_internal\\`（带尾斜杠）或 8.3 短名就漏过去了，
+    MAA.exe 照样能从我们包里捞 VCRUNTIME140.dll，然后锁死自动更新
+    （2026-11-15：v2.5.3 更新连装两次失败在 rc=9）。
+    """
+    return os.path.normcase(os.path.normpath(p.strip().strip('"')).rstrip('\\/') or p)
+
+
 def _launch_env():
     """启动 MAA 用的环境：把 PyInstaller 注入 PATH 的包内目录剔掉。
 
@@ -246,9 +256,12 @@ def _launch_env():
     """
     env = os.environ.copy()
     me = os.path.dirname(os.path.abspath(sys.executable))
-    drop = {os.path.normcase(me), os.path.normcase(os.path.join(me, '_internal'))}
+    drop = {_path_key(me), _path_key(os.path.join(me, '_internal'))}
+    meipass = getattr(sys, '_MEIPASS', '') or ''
+    if meipass:
+        drop.add(_path_key(meipass))
     parts = [p for p in env.get('PATH', '').split(os.pathsep)
-             if p and os.path.normcase(p) not in drop]
+             if p and _path_key(p) not in drop]
     env['PATH'] = os.pathsep.join(parts)
     return env
 

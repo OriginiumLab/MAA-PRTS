@@ -71,10 +71,13 @@ Windows 上运行中的 exe 不能覆盖，`_internal/` 里的 DLL 也不能删�
      ↓
 写 <运行根>/update/install.ps1，写 update/pending.json
      ↓                          ← 用户点「重启并安装」
+预检：MAA.exe 在跑就先拦下（它占着 _internal 里的 VCRUNTIME140*.dll）
+     ↓
 无窗口拉起 install.ps1（脱离父进程），主进程退出
      ↓
 PowerShell：按 PID 等旧进程退出（最多 60 秒）→ 备份 exe 到 update/backup/
-     → robocopy /MIR 镜像 _internal → robocopy 覆盖根级文件（exe、version.json）
+     → robocopy /MIR 镜像 _internal（失败重试 4 次）
+     → robocopy 覆盖根级文件（exe、version.json）
      → 校验版本号 → 启动程序 → 清 stage/zip → 自删
 ```
 
@@ -112,11 +115,20 @@ MAA-PRTS/                    ← 程序本体整个换掉
 
 ### 失败怎么办
 
+- **MAA 在跑就别装**：`MAA.exe` 会从我们 `_internal` 里加载 `VCRUNTIME140*.dll`
+  （PyInstaller 把包内目录前插进 PATH，子进程原样继承），此后它反向锁死发布包，
+  `robocopy /MIR` 只能回 `rc=9`。2026-11-15 真机上 v2.5.3 连装两次都栽在这：
+  窗口重启回来还是 2.5.2。所以点「重启并安装」前先跑 `appupdate.precheck()`，
+  MAA 在跑就直接弹提示让用户关掉，不白重启一次；真装的时候脚本还会重试 4 次
+  （间隔 2 秒），仍失败就把 robocopy 点名的文件写进 `install-error.txt`。
 - 替换失败（`robocopy` 返回 ≥ 8、压缩包不完整、版本号没换成功）：脚本先把
-  `update/backup/MAA-PRTS.exe` 还原，写 `update/install-error.txt`（附原因），
-  然后**把旧版本重新拉起来**——不会出现「点了安装，程序没了」；
+  `_internal`、`backup/MAA-PRTS.exe`、`backup/version.json` 一起还原，写
+  `update/install-error.txt`（附原因），然后**把旧版本重新拉起来**——不会出现
+  「点了安装，程序没了」；
 - 成功了但版本没变：`update/pending.json` 不会被清掉，新版本启动时日志记一条
-  `[警告] 上次更新到 X 没生效`，前端第一次启动会弹一次提示。
+  `[警告] 上次更新到 X 没生效`，前端第一次启动会弹一次提示，并把
+  `install-error.txt` 里的原因一起带出来（「：替换 _internal 失败 rc=9」这种，
+  而不是只报一句没生效）。
 
 排查时直接看 `debug/app.log` 里 `程序已更新：2.3.0 → 2.4.0` 或那条警告，
 再看 `update/install.log`。
@@ -139,7 +151,8 @@ MAA-PRTS/                    ← 程序本体整个换掉
 | 一直没红点 | 设置里关了「启动后检查程序新版本」；或 6 小时内已查过；或最新 Release 是预发布而没开开关 |
 | 提示有新版本但「下载并安装」是灰的 | 只拿到了版本号，API 被墙/限流，拿不到下载地址与 sha256。只能「前往下载页」 |
 | 点「重启并安装」弹出黑窗口，然后一直不动 | **≤ v2.4.0 的已知缺陷**：cmd 版 `tasklist \| find` 死锁，安装卡在第一步。v2.4.1 起改成 `install.ps1`。旧版本请手动覆盖安装一次 |
-| 点完「重启并安装」窗口关了但版本没变 | 看 `update/install.log` 与 `install-error.txt`；多半是杀软拦了脚本或 `robocopy` |
+| 点完「重启并安装」窗口关了但版本没变 | 看 `update/install.log` 与 `install-error.txt` |
+| `install-error.txt` 写「替换 _internal 失败 rc=9」 | **MAA.exe 还在跑**：它把 `_internal/VCRUNTIME140*.dll` 加载进了自己的进程，镜像必然失败。关掉 MAA 再点安装；v2.5.4 起点按钮前就会拦下并提示（`precheck()`） |
 | 安装失败后程序自己又起来了，版本没变 | 这是有意设计：失败会回滚 exe 并重新拉起旧版本，不会让你「程序没了」 |
 | 下载很慢或超时 | GitHub 直链慢，会自动退到 `gh-proxy` / `ghfast`；都失败就是网络问题，用下载页手动下 |
 | 源码模式点不了安装 | 正常。源码运行不替换文件，要测请用打包版 |

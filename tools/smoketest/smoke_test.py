@@ -1269,6 +1269,26 @@ def check_app_update():
         assert 'install-error.txt' in text and 'Start-Process' in text, \
             '失败路径要留痕并重新拉起旧版本'
 
+        # 2026-11-15 真机：MAA.exe 把 _internal 里的 VCRUNTIME140*.dll 捞去加载，
+        # robocopy 镜像 rc=9，装到一半回滚，用户看到「更新完还是旧版本」还不知
+        # 道为什么。脚本必须重试，并把 robocopy 点名的文件写进错误提示。
+        assert 'install-robocopy.log' in text, '镜像失败要留下 robocopy 明细，别只剩一个 rc'
+        assert 'for ($i = 1; $i -le 4; $i++)' in text, '_internal 镜像要重试，不能一次失败就回滚'
+        assert 'Start-Sleep -Seconds 2' in text, '重试之间要等占用方释放文件'
+
+        # 7. 安装前预检：MAA 在跑时必须拦下并点名 MAA，别让用户白重启一次
+        #（不去逐个试开 _internal：MAA-PRTS 自己就锁着二十多个，那样恒误报）
+        import inspect as _inspect
+        assert 'precheck()' in _inspect.getsource(A.install), 'install() 必须先跑预检'
+        from core import maa as M
+        was = M.is_running
+        M.is_running = lambda: True
+        try:
+            why = A.precheck()
+            assert 'MAA' in why, 'MAA 在跑时预检必须拦住并点名 MAA，实际：%r' % why
+        finally:
+            M.is_running = was
+
         # 拉起方式：PowerShell + 无窗口，且不能再走 cmd
         import inspect
         src = inspect.getsource(A.launch) + inspect.getsource(A._powershell)

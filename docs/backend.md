@@ -176,9 +176,10 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 | 版本比较 | 按数字比（`2.10 > 2.9`）；预发布 `-beta.N` 永远小于同号正式；解析失败一律不触发 |
 | 下载 | `github.com` 直链 → `gh-proxy` → `ghfast`，校验字节数 + sha256 + zip 内含 `MAA-PRTS.exe` |
 | 解压 | 拒绝绝对路径与 `..`（zip-slip），落到 `<运行根>/update/stage/` |
-| 替换 | 程序退出后由 `update/install.ps1` 执行：按 PID 等进程退出 → 备份 exe → `robocopy /MIR` 镜像 `_internal` → 覆盖根级文件 → 校验版本号 → 重启，失败则回滚并重新拉起旧版 |
+| 预检 | `precheck()`：MAA.exe 在跑直接拒绝（它会把 `_internal/VCRUNTIME140*.dll` 加载进自己进程，镜像必失败）。不逐个试开 `_internal`——MAA-PRTS 自己就锁着二十多个 DLL，那样判定恒误报 |
+| 替换 | 程序退出后由 `update/install.ps1` 执行：按 PID 等进程退出 → 备份 exe → `robocopy /MIR` 镜像 `_internal`（失败重试 4 次，仍失败把点名的文件写进 `install-error.txt`）→ 覆盖根级文件 → 校验版本号 → 重启，失败则整体回滚并重新拉起旧版 |
 | 不动的东西 | `config/`、`debug/`、`resources/`——那是用户数据，脚本里一个字都不出现 |
-| 结算 | 写 `update/pending.json`；新版本启动时版本号对上才算成功，否则日志留警告 |
+| 结算 | 写 `update/pending.json`；新版本启动时版本号对上才算成功，否则日志留警告，并把 `install-error.txt` 的原因带进 `/api/app/status.lastInstall.error` |
 
 `install()` 需要让整个进程退出，而 api 层不能 import main，所以 main 启动时
 把退出函数注册进 `appupdate.set_quit_hook()`。源码模式一律拒绝自动替换。

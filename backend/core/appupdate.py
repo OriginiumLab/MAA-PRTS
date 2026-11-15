@@ -105,6 +105,16 @@ def _read_json(path, default=None):
         return default
 
 
+def _read_text(path, limit=200):
+    """读一段纯文本（安装脚本写的失败原因），读不到就返回 ''"""
+    try:
+        # 脚本用 UTF8 编码写（PS 5.1 的 -Encoding UTF8 带 BOM），utf-8-sig 兼容两边
+        with io.open(path, encoding='utf-8-sig') as f:
+            return f.read().strip()[:limit]
+    except Exception:
+        return ''
+
+
 def _write_json(path, data):
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     tmp = path + '.tmp'
@@ -704,12 +714,41 @@ if (Test-Path -LiteralPath (Join-Path $root '_internal')) {
 }
 Log '已备份 exe / version.json / _internal'
 
-# 4) _internal 用 /MIR：新版本删掉的旧 DLL 也要清掉，否则新旧混装
-& robocopy.exe (Join-Path $pkg '_internal') (Join-Path $root '_internal') /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-$rc = $LASTEXITCODE
-Log ('_internal 镜像完成 rc=' + $rc)
+# 4) _internal 用 /MIR：新版本删掉的旧 DLL 也要清掉，否则新旧混装。
+#    被别的进程打开的 DLL（MAA.exe 常从我们这儿捞 VCRUNTIME140*.dll）会
+#    「拒绝访问」失败——2026-11-15 真机上 v2.5.3 连装两次都栽在这两个 DLL。
+#    所以重试 4 次、间隔 2 秒；仍不行就把 robocopy 点名的文件写进错误提示，
+#    别只留一个 rc=9 让人猜。
+$srcInternal = Join-Path $pkg '_internal'
+$dstInternal = Join-Path $root '_internal'
+$rclog = Join-Path $here 'install-robocopy.log'
+$rc = 0
+for ($i = 1; $i -le 4; $i++) {
+  & robocopy.exe $srcInternal $dstInternal /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP /LOG:$rclog | Out-Null
+  $rc = $LASTEXITCODE
+  Log ('_internal 镜像第 ' + $i + ' 次 rc=' + $rc)
+  if ($rc -lt 8) { break }
+  if ($i -lt 4) { Start-Sleep -Seconds 2 }
+}
 # robocopy：0-7 都是成功（1=有复制、3=有额外文件），8 以上才是真失败
-if ($rc -ge 8) { Fail ('替换 _internal 失败 rc=' + $rc) }
+if ($rc -ge 8) {
+  $why = ''
+  if (Test-Path -LiteralPath $rclog) {
+    # 按 0x 十六进制码挑错误行，不认「错误 / ERROR」这种本地化字样：
+    # robocopy 的日志跟着系统语言走，中文系统写「错误」、英文系统写 ERROR，
+    # 但错误行里的 (0x00000020) 两种语言都一样。读取用 Default（= robocopy
+    # 写日志用的系统 ANSI），否则文件名前后的中文会变成乱码。
+    $bad = @(Get-Content -LiteralPath $rclog -Encoding Default |
+             Where-Object { $_ -match '0x[0-9A-Fa-f]{8}' } | Select-Object -First 3)
+    if ($bad.Count -gt 0) {
+      $why = '（' + (($bad | ForEach-Object { $_.Trim() }) -join '；') + '）'
+    } else {
+      $tail = @(Get-Content -LiteralPath $rclog -Encoding Default | Select-Object -Last 2)
+      if ($tail.Count -gt 0) { $why = '（' + (($tail | ForEach-Object { $_.Trim() }) -join '；') + '）' }
+    }
+  }
+  Fail ('替换 _internal 失败 rc=' + $rc + $why + '；多半是 MAA.exe 或杀毒软件占着这些文件，关掉后重试')
+}
 
 # 5) 根级文件（exe / version.json / README）覆盖复制：不带 /MIR，
 #    目标侧多出来的用户数据不会被删；/XD 把用户数据目录整个排除
@@ -737,6 +776,7 @@ Log '替换完成，启动新版本'
 try { Start-Process -FilePath $exe -WorkingDirectory $root } catch { Log ('启动失败：' + $_.Exception.Message) }
 CleanUp
 Remove-Item -Path (Join-Path $here '*.zip') -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $rclog -Force -ErrorAction SilentlyContinue
 Log '=== 安装结束 ==='
 Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 '''
@@ -775,6 +815,25 @@ def _write_installer(stage_exe: str, version: str = '') -> str:
         return path
     except Exception:
         return ''
+
+
+# ---------------------------------------------------------------- 安装前预检
+# _internal 里的文件被别的进程打开时，robocopy 只回一个 rc=9（连文件名都不给），
+# 脚本为了不留下半新半旧的安装会整体回滚——用户看到的就是「点了重启并安装，
+# 回来还是旧版本，再装还是旧版本」。2026-11-15 真机：MAA.exe 把我们的
+# VCRUNTIME140*.dll 捞去加载了，v2.5.3 连装两次都失败。所以点按钮前先把话
+# 问清楚，别让用户白重启一次。
+#
+# 为什么不去逐个试开 _internal 里的文件：MAA-PRTS 自己就加载着二十多个
+# （python312.dll、webview、pythonnet…），那样判定只会把每次更新都拦下。
+# 真正会长期占住我们文件的只有 MAA.exe，剩下的交给脚本里的重试与明细。
+def precheck() -> str:
+    """替换前检查有没有拦路虎：有问题返回给用户看的文案，没问题返回 ''"""
+    from . import maa  # 局部导入：maa 的依赖链会绕回本模块
+    if maa.is_running():
+        return ('MAA 正在运行，它锁着程序目录里的 VCRUNTIME140*.dll，替换会失败。'
+                '请先关闭 MAA 再安装（MAA-PRTS 自己会退出）')
+    return ''
 
 
 def _powershell() -> str:
@@ -828,6 +887,9 @@ def install() -> dict:
     """一键：解压 → 写脚本 → 拉起 → 让主进程退出（前端会看到窗口关闭）"""
     if not settings.FROZEN:
         return {'ok': False, 'error': '源码模式不支持自动替换，请手动覆盖（真机请用打包版）'}
+    blocked = precheck()
+    if blocked:
+        return {'ok': False, 'error': blocked}
     r = prepare()
     if not r['ok']:
         return r
@@ -887,6 +949,12 @@ def on_start() -> dict:
         'ok': ok,
         'state': 'done' if ok else 'stale',
     }
+    if not ok:
+        # 安装脚本失败时把 rc / 被占用的文件写进 install-error.txt：带出去让
+        # 前端能说清「为什么没成」，否则用户只看到一句「没生效」又重试一遍
+        reason = _read_text(os.path.join(update_dir(), 'install-error.txt'))
+        if reason:
+            info['error'] = reason
     st = _state()
     st['lastInstall'] = info
     _save_state(st)

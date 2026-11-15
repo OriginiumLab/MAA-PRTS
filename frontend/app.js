@@ -754,7 +754,10 @@ async function appAutoCheck(force) {
     const li = st && st.lastInstall;
     if (li && li.state === 'stale' && !S.staleNoticed) {
       S.staleNoticed = true;
-      toast(`上次更新到 ${li.to} 没有生效，可以再试一次`, 'err', 6000);
+      // 安装脚本失败时会留下原因（rc / 被占用的 DLL）：一并说出来，
+      // 用户才知道是「MAA 没关」而不是「更新坏了」
+      const why = li.error ? '：' + li.error : '';
+      toast(`上次更新到 ${li.to} 没有生效${why}`, 'err', 9000);
     }
     return st;
   } catch (e) {
