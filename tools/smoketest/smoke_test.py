@@ -1336,11 +1336,14 @@ def check_mainline_difficulty_variants():
     assert [s['stageId'] for s in r['stages']] == ['main_01-07'] and r['stages'][0]['raid'] is True
     assert r['stages'][0]['difficultyCN'] == ''
 
-    # 系列/活动视图不摆「简单」行，但磨难/险地保留
+    # 系列视图：10-14 章要按简单/标准/磨难分开导入，简单行得看得见；
+    # 9 章及以下仍不摆（0-9 章的导入菜单只分普通/突袭），磨难/险地始终保留
     r = resources.resolve('12-1')
     assert r['mode'] == 'activity'
-    assert not [s for s in r['stages'] if s['difficulty'] == 'easy'], '系列视图不该有简单行'
+    assert [s for s in r['stages'] if s['difficulty'] == 'easy'], '10-14 章系列视图要有简单行'
     assert any(s['difficulty'] == 'tough' for s in r['stages'])
+    assert not [s for s in resources.resolve('9-1')['stages'] if s['difficulty'] == 'easy'], \
+        '0-9 章系列视图不该有简单行'
 
     # 拆行：磨难/简单各一行（variant=normal、不按位标志筛）；险地一行（variant=raid）
     rows = [{'id': 1, 'difficulty': 0, 'mode': 'ready'},   # 位标志没标也照收
@@ -1362,19 +1365,53 @@ def check_mainline_difficulty_variants():
     assert copilot.difficulty_text_for('easy_12-06', 0) == '简单'
     assert copilot.difficulty_text_for('main_01-07', 3) == '通用'
 
-    # 行排序：同代号内 磨难 → 标准（→ 突袭/险地）→ 简单；代号间按主关 id
+    # 行排序：同代号内 磨难 → 标准（→ 突袭/险地）→ 简单；代号间按流程位置
     def pack(sid, diff, variant=None):
         return {'stage': {'stageId': sid, 'difficulty': diff, 'variant': variant}}
     keys = [copilot.row_sort_key(pack(*k)) for k in [
         ('easy_12-06', 'easy', 'normal'), ('tough_12-06', 'tough', 'normal'),
         ('main_12-06', 'normal', 'normal'), ('main_12-06', 'normal', 'raid'),
-        ('main_15-02#s', 'risky', 'raid'), ('main_15-02', 'normal', 'normal'),
-        ('act13side_ex01', 'normal', 'normal')]]
+        ('main_15-02#s', 'risky', 'raid'), ('main_15-02', 'normal', 'normal')]]
     assert keys[1] < keys[2] < keys[3] < keys[0], '磨难→标准→突袭→简单 的顺序不对：%r' % keys
     assert keys[4] < keys[5], '险地是 15+ 章的主难度，应排在普通行前面'
-    assert keys[6][0] == 'act13side_ex01', '活动关的归并 id 不该被改写'
 
-    # 下一关：同系列同难度推进；剧情关空缺跳过；章末返回 None
+    # 流程顺序：关卡按游戏内先后排，TR 教学关插到 stage_table 记的解锁前置关后面
+    def codes(kw):
+        rows = []
+        for s in resources.resolve(kw)['stages']:
+            rows.extend(copilot.stage_variants(s, [], limit=1))
+        rows.sort(key=copilot.row_sort_key)
+        return [r['stage']['code'] for r in rows]
+
+    tl = codes('TL')
+    assert tl[:2] == ['TL-TR-1', 'TL-1'], 'TL-TR-1 应排在 TL-1 前面：%r' % tl[:4]
+    dh = codes('DH')
+    assert dh[0] == 'DH-TR-1', dh[:4]
+    assert dh[dh.index('DH-5') + 1] == 'DH-TR-2', 'DH-TR-2 应紧跟 DH-5：%r' % dh[:10]
+    tr = codes('TR-')
+    assert tr[:3] == ['TR-1', 'TR-2', 'TR-3'], '主线 TR 应按章顺序排：%r' % tr[:8]
+    assert tr.index('TR-11') == tr.index('TR-10') + 1, 'TR-11 位置未知，排在本章最前面即可'
+    assert tr[-3:] == ['TR-26', 'TR-27', 'TR-28'], '15-17 章的 TR 排最后：%r' % tr[-4:]
+    assert tr.index('TR-13') < tr.index('TR-15'), 'TR-13 落在 2 章（S2-7 之后），不该跑到 3 章后面'
+
+    # 主线 S 支线关也是主线关：位置来自 stage_table 的解锁前置关，列表和「下一关」
+    # 都按解锁顺序插进主线（2-1 → S2-1 → 2-2 → S2-2 → S2-3 → S2-4 → 2-3）
+    ch2 = [s['code'] for s in resources.resolve('2')['stages']]
+    assert ch2[:8] == ['TR-11', '2-1', 'S2-1', '2-2', 'S2-2', 'S2-3', 'S2-4', '2-3'], \
+        '搜章节号 2 应按推图顺序带上 S2 和 TR：%r' % ch2[:10]
+    assert ch2[-1] == '2-10' and 'S2-12' in ch2 and 'TR-S-2' in ch2, ch2[-4:]
+    assert len(resources.resolve('S2')['stages']) == 12, 'S2 系列应有 12 关'
+    # 纯章节号（2 / 2-）都能搜，且不夹带别的章 / 活动
+    assert {s['code'] for s in resources.resolve('2-')['stages']} == set(ch2)
+    assert not [s for s in resources.resolve('2')['stages']
+                if s['zoneId'].startswith('act')], '章节视图不该混入活动关'
+    # 主线 S 关必须全部登记解锁位置，漏一条就会掉到列表末尾
+    sub_ids = {s['stageId'] for s in resources._stages()
+               if re.match(r'^S\d+-\d+$', s['code'])}
+    assert sub_ids and not (sub_ids - set(resources.SUB_AFTER)), \
+        '主线 S 关没登记解锁位置：%r' % (sub_ids - set(resources.SUB_AFTER))
+
+    # 下一关：同系列同难度推进；剧情关空缺跳过；章末返回 None；TR 参与推进
     def nxt(sid, diff):
         return resources.next_stage({'stageId': sid, 'difficulty': diff})
     assert nxt('tough_12-06', 'tough') == {
@@ -1392,20 +1429,27 @@ def check_mainline_difficulty_variants():
     assert got and got['code'] == pair[1]['code'], \
         'NL-9 的下一关应是 %s，实际 %r' % (pair[1]['code'], got)
 
-    # TR 教学关默认不参与推进：TL-10（活动主线末关）后面是 TL-TR-1 也不能给，
-    # 序列末尾就是 None；未登记的 TR 自身也推不出下一关
-    assert nxt('act55side_10', 'normal') is None, \
-        'TL-10 的下一关不该是 TL-TR-1（TR 位置未知，默认全跳过）'
-    assert nxt('act13side_tr01', 'normal') is None, '未登记位置的 TR 自身不该有下一关'
-    assert nxt('tr_01', 'normal') is None
-    assert nxt('lt_tr_01', 'normal') is None, '塔的 TR（lt_tr_01）也不该有下一关'
+    # TR 教学关参与推进（位置来自 TR_AFTER）：TL-TR-1 在 TL-1 前面，所以
+    # TL-10 仍是末关；主线 0-1 → TR-1 → 0-2；未登记位置的 TR 排系列最前面
+    assert nxt('act55side_10', 'normal') is None, 'TR 插在 TL-1 前面，TL-10 仍是末关'
+    assert nxt('act13side_tr01', 'normal')['stageId'] == 'act13side_01', \
+        'NL-TR-1 的下一关应是 NL-1'
+    assert nxt('main_00-01', 'normal')['stageId'] == 'tr_01', '0-1 后面紧跟 TR-1'
+    assert nxt('tr_01', 'normal')['stageId'] == 'main_00-02', 'TR-1 后面是 0-2'
+    assert nxt('main_02-01', 'normal')['code'] == 'S2-1', '2-1 后面是 S2-1'
+    assert nxt('sub_02-01', 'normal')['code'] == '2-2', 'S2-1 后面是 2-2'
+    assert nxt('sub_02-04', 'normal')['code'] == '2-3', 'S2-4 打完才开 2-3'
+    assert nxt('tr_13', 'normal')['code'] == '2-5', 'TR-13 后面是 2-5'
+    assert nxt('main_02-10', 'normal') is None, '2-10 是第 2 章末关'
     # TR 判定覆盖全部 id 形态（tr_01 / _tr01 / -tr01 / lt_tr_01）
     for sid in ('tr_01', 'lt_tr_01', 'act55side_tr01', 'act2vmulti-tr01', 'act18side_tr_02'):
         assert resources._is_tr(sid), '%s 应判为 TR' % sid
     for sid in ('act55side_10', 'main_12-06', 'tough_12-06', 'main_15-02#s', 'hard_15-01'):
         assert not resources._is_tr(sid), '%s 不该判为 TR' % sid
-    # TR_AFTER 登记过的 TR 插回锚点后面参与推进（人工维护位置的扩展点）
+    # TR_AFTER 是人工维护的扩展点：改完清一次缓存（flow 懒计算）就该生效
+    old = resources.TR_AFTER.get('act55side_tr01')
     resources.TR_AFTER['act55side_tr01'] = 'act55side_05'
+    resources.clear_cache()
     try:
         got = nxt('act55side_05', 'normal')
         assert got and got['stageId'] == 'act55side_tr01', \
@@ -1413,7 +1457,11 @@ def check_mainline_difficulty_variants():
         got = nxt('act55side_tr01', 'normal')
         assert got and got['code'] == 'TL-6', '登记后的 TR 应能推进到锚点下一关'
     finally:
-        resources.TR_AFTER.pop('act55side_tr01', None)
+        if old is None:
+            resources.TR_AFTER.pop('act55side_tr01', None)
+        else:
+            resources.TR_AFTER['act55side_tr01'] = old
+        resources.clear_cache()
 
 
 # ---------------------------------------------------------------- B23 作业黑名单

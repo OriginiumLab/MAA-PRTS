@@ -92,10 +92,6 @@ def _stages():
             # 「共 0 份 / 打不了」，用户点了也永远没作业）
             if _is_story(st):
                 continue
-            # 剧情关不进搜索，也不参与活动展开（以前每个活动都多出几行
-            # 「共 0 份 / 打不了」，用户点了也永远没作业）
-            if _is_story(st):
-                continue
             zid = st.get('zone') or ''
             if sid.endswith('#s'):
                 diff, diff_cn = 'risky', '险地'
@@ -131,6 +127,17 @@ def _norm(s):
     return re.sub(r'\s+', '', str(s or '')).lower()
 
 
+# 有「简单档」（easy_ 前缀）又要在系列视图里摆出来的章节：9-14 章都有简单档，
+# 但 0-9 章的导入菜单只分普通/突袭，简单行常年 0 份，只有 10-14 章要按
+# 简单/标准/磨难三档分别导入（见 docs/frontend.md「全部导入」菜单）。
+_EASY_CHAPTERS = (10, 11, 12, 13, 14)
+
+
+def _chapter_no(code):
+    m = re.match(r'^(\d+)-', str(code or ''))
+    return int(m.group(1)) if m else -1
+
+
 def resolve(keyword: str) -> dict:
     """把用户输入解析成关卡列表
 
@@ -162,16 +169,35 @@ def resolve(keyword: str) -> dict:
         return {'mode': 'stage', 'title': hit[0]['code'] + ' ' + hit[0]['name'],
                 'keyword': kw, 'stages': hit[:1]}
 
+    # 3. 纯章节号（0 / 2 / 12 / 15-）→ 这一章的全部关卡：普通关、剧情关、
+    #    S 支线关、TR 教学关，按游戏里的推图顺序返回（2-1 → S2-1 → 2-2 →
+    #    S2-2 → S2-3 → S2-4 → 2-3 …）。以前只能搜到「2-1 … 2-10」，S2-x
+    #    和 TR-x 都搜不出来，只能在作业集里一关一关加。
+    m = re.fullmatch(r'(\d{1,2})-?', low)
+    if m:
+        ch = int(m.group(1))
+        flow = _flow()
+        hit = [s for s in stages
+               if (flow.get(_base_sid(s['stageId'])) or (None,))[0] == (0, ch)
+               and (s['difficulty'] != 'easy' or ch in _EASY_CHAPTERS)
+               and not s['stageId'].startswith('lt_')
+               and not s['zoneId'].startswith('tower')]
+        if hit:
+            hit.sort(key=lambda r: flow_key(r['stageId'])[:2])
+            return {'mode': 'activity', 'title': '%d 章（%d 关）' % (ch, len(hit)),
+                    'keyword': kw, 'stages': hit}
+
     # 3. 关卡代号前缀（TR- → 全部 TR 关，排除塔模式重名关）。
-    #    系列/活动视图不摆「简单」难度行：作业站简单作业寥寥（12-7 全章才 3 份），
-    #    挂进来只会让每关多一行「共 0 份」；要看简单请精确搜单关代号
+    #    系列/活动视图一般不摆「简单」难度行：作业站简单作业寥寥（12-7 全章才 3 份），
+    #    挂进来只会让每关多一行「共 0 份」；10-14 章例外——导入菜单要按
+    #    简单/标准/磨难三档分开导，简单行得看得见。要看单章简单请精确搜关卡代号
     hit = [s for s in stages
            if s['code'].lower().startswith(low) and re.search(r'\d', s['code'])
-           and s['difficulty'] != 'easy'
+           and (s['difficulty'] != 'easy' or _chapter_no(s['code']) in _EASY_CHAPTERS)
            and not s['stageId'].startswith('lt_')
            and not s['zoneId'].startswith('tower')]
     if hit:
-        hit.sort(key=lambda r: (len(r['code']), r['code']))
+        hit.sort(key=lambda r: flow_key(r['stageId'])[:2])
         title = '%s 系列（%d 关）' % (kw.upper(), len(hit))
         # 整个系列只属于一个活动时，把活动名带上（SR → 月行水上 · SR 系列）
         gids = {s['stageId'].split('_')[0] for s in hit}
@@ -238,56 +264,389 @@ def _series_key(sid):
 
 
 # TR 教学关（tr_01 / act55side_tr01 / act2vmulti-tr01 三种形态）：关卡表里全
-# 挂在系列末尾，但游戏里实际插在流程各处、位置我们不知道，所以「下一关」
-# 序列默认不带 TR。以后摸清位置了在 TR_AFTER 人工登记（TR 的 stageId → 它
-# 排在哪个 stageId 的难度行之后），登记过的 TR 会自动插回序列参与推进。
-_TR_ID = re.compile(r'(?:^|[._-])tr[_-]?\d+$', re.I)
-TR_AFTER = {}      # 例：{'act55side_tr01': 'act55side_10'}
+# 挂在系列末尾，但游戏里实际插在流程各处。位置来自官方 stage_table 的
+# unlockCondition——TR 的解锁前置关就是它前面那一关，所以这张表是「TR → 它排
+# 在哪一关后面」，不是猜的，游戏大版本更新后用 resources/make_pack.py 同源的
+# 数据重生成一次即可（见 docs/backend.md「TR 教学关位置」）。
+# 表里没有的 TR（多人联机 IG-TR、塔 lt_tr_01、少数早期活动）按「位置未知」处理，
+# 一律排到所在系列最前面，游戏里教学关本来也都挂在活动开头。
+# 三种形态：tr_01（主线）/ act55side_tr01（活动）/ act2vmulti-tr01；
+# 另有综合作战训练 tr_s_1（TR-S-1），也是教学关、表里同样挂在流程中段。
+_TR_ID = re.compile(r'(?:^|[._-])tr(?:[_-]s)?[_-]?\d+$', re.I)
+TR_AFTER = {
+    # ── 活动（act 系列）──
+    'act11d0_tr01': 'act11d0_02',
+    'act12d0_tr01': 'act12d0_02',
+    'act12side_tr01': 'act12side_st01',
+    'act12side_tr02': 'act12side_05',
+    'act13d5_tr01': 'act13d5_01',
+    'act13side_tr01': 'act13side_st01',
+    'act13side_tr02': 'act13side_st02',
+    'act14side_tr01': 'main_01-10',      # 解锁条件是主线 1-10，落到活动开头
+    'act14side_tr02': 'act14side_04',
+    'act15d0_tr01': 'act15d0_01',
+    'act16d5_tr01': 'act16d5_01',
+    'act16side_tr01': 'act16side_03',
+    'act17d0_tr01': 'act17d0_st01',
+    'act18d0_tr01': 'act18d0_01',
+    'act18d3_tr01': 'act18d3_01',
+    'act18side_tr01': 'act18side_st01',
+    'act18side_tr02': 'act18side_st02',
+    'act19side_tr01': 'act19side_02',
+    'act1dp_tr01': 'main_01-10',
+    'act1football_tr01': 'main_01-10',
+    'act1halfidle_tr01': 'main_01-10',
+    'act20side_tr01': 'act20side_02',
+    'act21side_tr01': 'act21side_01',
+    'act22side_tr01': 'act22side_st01',
+    'act22side_tr02': 'act22side_04',
+    'act23side_tr01': 'main_01-10',
+    'act24side_tr01': 'act24side_01',
+    'act25side_tr01': 'act25side_02',
+    'act25side_tr02': 'act25side_06',
+    'act26side_tr01': 'act26side_st01',
+    'act26side_tr02': 'act26side_03',
+    'act27side_tr01': 'act27side_st01',
+    'act27side_tr02': 'act27side_05',
+    'act28side_tr01': 'act28side_01',
+    'act29side_tr01': 'act29side_01',
+    'act29side_tr02': 'act29side_07',
+    'act30side_tr01': 'act30side_st01',
+    'act31side_tr01': 'act31side_01',
+    'act31side_tr02': 'act31side_04',
+    'act32side_tr01': 'act32side_st01',
+    'act33side_tr01': 'act33side_01',
+    'act34side_tr01': 'act34side_01',
+    'act35side_tr01': 'act35side_01',
+    'act36side_tr01': 'act36side_01',
+    'act37side_tr01': 'act37side_01',
+    'act38side_tr01': 'act38side_st01',
+    'act39side_tr01': 'act39side_st01',
+    'act40side_tr01': 'act40side_st01',
+    'act41side_tr01': 'act41side_01',
+    'act42side_tr01': 'act42side_01',
+    'act43side_tr01': 'act43side_st01',
+    'act44side_tr01': 'act44side_st01',
+    'act44side_tr02': 'act44side_04',
+    'act45side_tr01': 'act45side_st01',
+    'act46side_tr01': 'act46side_st01',
+    'act47side_tr01': 'act47side_01',
+    'act48side_tr01': 'act48side_st01',
+    'act49side_tr01': 'act49side_01',
+    'act50side_tr01': 'act50side_02',
+    'act51side_tr01': 'act51side_01',
+    'act52side_tr01': 'act52side_01',
+    'act53side_tr01': 'act53side_01',
+    'act54side_tr01': 'act54side_st01',
+    'act55side_tr01': 'act55side_st01',
+    # ── 主线（0-14 章 + 15-17 章主线 ss）──
+    'tr_01': 'main_00-01',
+    'tr_02': 'main_00-02',
+    'tr_03': 'main_00-03',
+    'tr_04': 'main_00-04',
+    'tr_05': 'main_00-06',
+    'tr_06': 'main_00-07',
+    'tr_07': 'main_00-09',
+    'tr_08': 'main_01-05',
+    'tr_09': 'main_01-06',
+    'tr_10': 'main_01-08',
+    'tr_12': 'main_02-03',
+    'tr_13': 'sub_02-07',                # 解锁条件是 S2-7
+    'tr_14': 'main_02-06',
+    'tr_15': 'main_03-03',
+    'tr_16': 'main_06-07',
+    'tr_17': 'main_07-04',
+    'tr_18': 'st_08-01',                 # 解锁条件是 8 章剧情关
+    'tr_19': 'easy_09-05',
+    'tr_20': 'easy_10-02',
+    'tr_21': 'easy_11-05',
+    'tr_22': 'st_12-01',                 # 解锁条件是 12 章剧情关
+    'tr_23': 'easy_12-06',
+    'tr_24': 'easy_13-05',
+    'tr_25': 'easy_14-01',
+    'tr_26': 'main_15-03',
+    'tr_27': 'main_16-01',
+    'tr_28': 'main_17-01',
+    # 综合作战训练（TR-S-1/2）：解锁前置关是 TR-7 / 2-9，挂着 TR 也能推
+    'tr_s_1': 'tr_07',
+    'tr_s_2': 'main_02-09',
+}
+
+# 主线 S 关（sub_02-01 / S2-1）：关卡表里它们的 code 是 S<章>-<号>、stageId 带
+# 章号，看着像「一章的尾巴」，但游戏里是插在主线中间陆续解锁的——S2-1 打完
+# 2-1 开、S2-2 打完 2-2 开、S3-1 打完 TR-15 开。位置同样来自官方 stage_table
+# 的 unlockCondition，不是猜的：键是 S 关自己，值是它排在谁后面。
+# 活动里的 S 关（act13side_s01）不在表里，按活动内「基础 → EX → S」排。
+SUB_AFTER = {
+    'easy_sub_09-1-1': 'easy_09-11',      # S9-1（9 章简单档）
+    'sub_02-01': 'main_02-01',            # S2-1
+    'sub_02-02': 'main_02-02',            # S2-2
+    'sub_02-03': 'sub_02-02',             # S2-3
+    'sub_02-04': 'sub_02-03',             # S2-4
+    'sub_02-05': 'main_02-04',            # S2-5
+    'sub_02-06': 'sub_02-05',             # S2-6
+    'sub_02-07': 'sub_02-06',             # S2-7
+    'sub_02-08': 'main_02-07',            # S2-8
+    'sub_02-09': 'sub_02-08',             # S2-9
+    'sub_02-10': 'main_02-09',            # S2-10
+    'sub_02-11': 'sub_02-10',             # S2-11
+    'sub_02-12': 'sub_02-11',             # S2-12
+    'sub_03-1-1': 'tr_15',                # S3-1
+    'sub_03-1-2': 'sub_03-1-1',           # S3-2
+    'sub_03-2-1': 'main_03-07',           # S3-3
+    'sub_03-2-2': 'sub_03-2-1',           # S3-4
+    'sub_03-2-3': 'sub_03-2-2',           # S3-5
+    'sub_03-3-1': 'sub_03-2-3',           # S3-6
+    'sub_03-3-2': 'sub_03-3-1',           # S3-7
+    'sub_04-1-1': 'main_04-03',           # S4-1
+    'sub_04-1-2': 'sub_04-1-1',           # S4-2
+    'sub_04-1-3': 'sub_04-1-2',           # S4-3
+    'sub_04-2-1': 'main_04-06',           # S4-4
+    'sub_04-2-2': 'sub_04-2-1',           # S4-5
+    'sub_04-2-3': 'sub_04-2-2',           # S4-6
+    'sub_04-3-1': 'main_04-09',           # S4-7
+    'sub_04-3-2': 'sub_04-3-1',           # S4-8
+    'sub_04-3-3': 'sub_04-3-2',           # S4-9
+    'sub_04-4-1': 'sub_04-3-3',           # S4-10
+    'sub_05-1-1': 'main_05-02',           # S5-1
+    'sub_05-1-2': 'sub_05-1-1',           # S5-2
+    'sub_05-2-1': 'main_05-06',           # S5-3
+    'sub_05-2-2': 'sub_05-2-1',           # S5-4
+    'sub_05-3-1': 'main_05-09',           # S5-5
+    'sub_05-3-2': 'sub_05-3-1',           # S5-6
+    'sub_05-4-1': 'sub_05-3-2',           # S5-7
+    'sub_05-4-2': 'sub_05-4-1',           # S5-8
+    'sub_05-4-3': 'sub_05-4-2',           # S5-9
+    'sub_06-1-1': 'main_06-09',           # S6-1
+    'sub_06-1-2': 'sub_06-1-1',           # S6-2
+    'sub_06-2-1': 'main_06-13',           # S6-3
+    'sub_06-2-2': 'sub_06-2-1',           # S6-4
+    'sub_07-1-1': 'main_07-14',           # S7-1
+    'sub_07-1-2': 'sub_07-1-1',           # S7-2
+    'sub_09-1-1': 'main_09-11',           # S9-1
+    'sub_09-1-2': 'easy_sub_09-1-1',      # S9-2
+    'sub_09-1-3': 'sub_09-1-2',           # S9-3
+    'sub_09-1-4': 'sub_09-1-3',           # S9-4
+}
 
 
 def _is_tr(sid):
     return bool(_TR_ID.search(str(sid or '')))
 
 
+# ---------------------------------------------------------------- 流程顺序
+# 结果列表与「下一关」共用一套顺序：同一章 / 同一活动内按关卡在游戏流程里的
+# 先后（基础关 → EX → S，剧情关紧贴它对应的主关），TR 教学关插到 TR_AFTER
+# 记的前置关后面。跨章 / 跨活动按章号、活动开始时间排，所以搜 TR- 时主线
+# TR-1 → TR-28 是连续的一串，活动 TR 按活动新→旧排。
+_MAIN_HEAD = {'main': 0, 'easy': 0, 'tough': 0, 'st': 0, 'sub': 2, 'hard': 3}
+_ACT_SEG = {'': 0, 'st': 0, 'm': 0, 'ex': 1, 's': 2, 'sp': 3, 'tm': 3, 'h': 3}
+_MAIN_SID = re.compile(r'^(main|easy|tough|st|sub|hard)[_-](\d+)[-_](\d+)(.*)$')
+_NUMSEG = re.compile(r'([a-z]*)(\d+)')
+
+
+def _base_sid(sid):
+    """难度变体归并到主关 id，去掉 #f# / #s 后缀
+
+    easy_12-06 / tough_12-06 → main_12-06（同名的三档共享一个流程位置）；
+    easy_sub_09-1-1（S9-1 的简单档）→ sub_09-1-1。
+    """
+    s = str(sid or '').split('#')[0]
+    if re.match(r'^(?:easy|tough)_sub_\d', s):
+        return s.split('_', 1)[1]
+    m = re.match(r'^(?:easy|tough)_(\d+[-_])', s)
+    if m:
+        return 'main_' + s.split('_', 1)[1]
+    return s
+
+
+def _placement(sid):
+    """(流程桶, 桶内位置键)：桶是「一章」或「一个活动」，只有同桶才比位置
+
+    位置键是若干 (段, 号) 二元组，段决定大类：0 基础关 / 1 EX / 2 S / 3 特殊。
+    基础关段里再分「剧情关(0) 排在同号主关(1) 前面」，所以 st_08-01 就在
+    8-1 前面、act12side_st02 就在 act12side_02 前面——TR 的解锁前置关常常
+    正是这种剧情节点，位置要靠它算。
+
+    主线 S 关（sub_02-01 这种）默认排在基础关之后，但它们在 SUB_AFTER 表里
+    有解锁前置关，`_flow` 会改按锚点插到真实位置；这里的位置键只是兜底。
+    """
+    sid = str(sid or '').split('#')[0]
+    m = _MAIN_SID.match(sid)
+    if m:
+        head, ch, num = m.group(1), int(m.group(2)), int(m.group(3))
+        seg = _MAIN_HEAD.get(head, 0)
+        mark = 0 if head == 'st' else 1
+        return ('m%d' % ch, ((seg, num), (mark, 0)))
+    head = re.split(r'[_-]', sid)[0]
+    toks = [(w, int(n)) for w, n in _NUMSEG.findall(sid[len(head):])]
+    if not toks:
+        return (head, ())
+    w0, n0 = toks[0]
+    rest = tuple((0, n) for _, n in toks[1:])
+    seg = _ACT_SEG.get(w0, 3)
+    mark = 0 if w0 == 'st' else 1
+    return (head, ((seg, n0), (mark, 0)) + rest)
+
+
+def _bucket_rank(bucket):
+    """跨桶排序：主线按章号、活动按开始时间新→旧，其它按名字"""
+    if bucket[:1] == 'm' and bucket[1:].isdigit():
+        return (0, int(bucket[1:]))
+    a = activity_table().get(bucket) or {}
+    return (1, -int(a.get('start') or 0), bucket)
+
+
+def _anchored(sid):
+    """靠「解锁前置关」定位的关：TR 教学关 + 主线 S 关（SUB_AFTER 登记过的）"""
+    if _is_tr(sid):
+        return True
+    s = str(sid or '').split('#')[0]
+    return s in SUB_AFTER or _base_sid(s) in SUB_AFTER
+
+
+def _anchor_of(sid):
+    """这关排在哪一关后面（解锁前置关）；没有登记返回 ''"""
+    s = str(sid or '').split('#')[0]
+    return (SUB_AFTER.get(s) or SUB_AFTER.get(_base_sid(s))
+            or TR_AFTER.get(s) or TR_AFTER.get(_base_sid(s)) or '')
+
+
+def _flow():
+    """{主关 id: (跨桶排序键, 桶内序号, 归属系列)}
+
+    每个桶（一章 / 一个活动）先按 `_placement` 排出骨架（基础关 → EX → S），
+    再把 TR 教学关和主线 S 关按「解锁前置关」插到锚点后面：游戏里 S2-1 打完
+    2-1 才开、S2-2 打完 2-2 才开、TR-13 打完 S2-7 才开，所以列表顺序就是推图
+    顺序（2-1 → S2-1 → 2-2 → S2-2 → S2-3 → S2-4 → 2-3 …）。
+
+    锚点本身也可能是这类关（S2-3 挂在 S2-2 后面），所以按树展开：锚点链一路
+    追到骨架关为止，最多 8 层防表写错成环。序号是展开后的整数下标，不用小数
+    插值——S2-10 这种长链不会因为「+0.1」累积而越过下一关。
+
+    归属系列给 `next_stage` 用，实际推进按桶（同章 / 同活动）判断。
+    """
+    with _lock:
+        if 'flow' in _cache:
+            return _cache['flow']
+        raw = pack().get('stages') or []
+        zone_of = {st['id']: st.get('zone') or '' for st in raw}
+        skel = {}                          # 桶 -> {主关 id: 位置键}
+        for st in raw:
+            sid = st['id']
+            if sid.endswith('#f#') or _anchored(sid):
+                continue
+            b, key = _placement(sid)
+            slot = skel.setdefault(b, {})
+            base = _base_sid(sid)
+            if base not in slot or key < slot[base]:
+                slot[base] = key
+        seqs = {b: sorted(slot, key=lambda k: (slot[k], _nat_key(k)))
+                for b, slot in skel.items()}
+        where = {base: b for b, seq in seqs.items() for base in seq}
+
+        kids = {}                          # (桶, 锚点 id) -> [排它后面的关]
+        front = {}                         # 桶 -> 位置未知的关（排最前）
+        for st in raw:
+            sid = st['id']
+            if sid.endswith('#f#') or not _anchored(sid):
+                continue
+            base = _base_sid(sid)
+            anchor = _base_sid(_anchor_of(sid)) if _anchor_of(sid) else ''
+            b = where.get(anchor) if anchor else None
+            if b is None and anchor:
+                # 锚点本身也要定位：顺着链往上找，直到落进某个骨架关
+                seen, cur = set(), anchor
+                while cur and cur not in seen:
+                    seen.add(cur)
+                    up = _base_sid(_anchor_of(cur)) if _anchor_of(cur) else ''
+                    if up in where:
+                        b = where[up]
+                        break
+                    cur = up
+            if b is None:
+                # 位置未知：排到所在章 / 活动最前面（IG-TR 这类联机教学关）
+                b = _placement(sid)[0]
+                m = re.match(r'main_(\d+)$', zone_of.get(sid) or '')
+                if m:
+                    b = 'm%d' % int(m.group(1))
+                front.setdefault(b, []).append(base)
+                continue
+            kids.setdefault((b, anchor), []).append(base)
+
+        flow = {}
+        for b, seq in seqs.items():
+            final, seen = [], set()
+
+            def emit(base, depth=0):
+                if depth > 12 or base in seen:
+                    return
+                seen.add(base)
+                final.append(base)
+                for c in sorted(kids.get((b, base), []), key=_nat_key):
+                    emit(c, depth + 1)
+
+            for base in sorted(front.get(b, []), key=_nat_key) + seq:
+                emit(base)
+            # 锚点跨桶 / 成环的漏网关：兜底追加到本桶末尾
+            for (kb, _), cs in kids.items():
+                if kb == b:
+                    for c in cs:
+                        if c not in seen:
+                            emit(c)
+            rank = _bucket_rank(b)
+            for i, base in enumerate(final):
+                flow[base] = (rank, float(i), _series_key(base))
+        _cache['flow'] = flow
+        return flow
+
+
+def flow_key(sid):
+    """结果行排序键：(跨桶排序键, 桶内序号)；表里没有的关卡一律排最后"""
+    return _flow().get(_base_sid(sid)) or ((2, 0, ''), 1e9, '')
+
+
 def next_stage(stage):
-    """同系列（章节/活动）、同难度的下一关；系列末尾或未知序列返回 None
+    """同章（同活动）、同难度的下一关；章末或未知序列返回 None
 
     按行的难度视角推进，跟用户推图的习惯一致：磨难行下一关还是磨难
     （tough_12-06 → tough_12-07）、险地行下一关还是险地（main_15-02#s →
     main_15-03#s）、活动关按活动内顺序（TL-2 → TL-3）。
 
-    TR 教学关默认不参与推进（表里顺序不可信，见 TR_AFTER 说明）；登记过
-    位置的 TR 插回锚点后面。当前关本身是未登记的 TR 时返回 None——
-    它在流程里的位置未知，推不出「下一关」是哪。
+    主线按 `_flow` 的推图顺序走，所以 TR 教学关和 S 支线关都在序列里：
+    0-1 的下一关是 TR-1、TR-1 的下一关是 0-2、2-1 的下一关是 S2-1、
+    S2-1 的下一关是 2-2。
     """
     sid = stage.get('stageId') or ''
     diff = stage.get('difficulty') or 'normal'
-    seq = sorted(
-        (s for s in _stages()
-         if _series_key(s['stageId']) == _series_key(sid)
-         and (s.get('difficulty') or 'normal') == diff
-         and (not _is_tr(s['stageId']) or s['stageId'] in TR_AFTER)),
-        key=lambda s: _nat_key(s['stageId']))
-    if diff == 'normal' and TR_AFTER:
-        # 已登记位置的 TR 插到锚点难度行后面（同一锚点挂多个 TR 时按 id 序）
-        rows = {s['stageId']: s for s in _stages()}
-        ordered = []
-        for s in seq:
-            ordered.append(s)
-            for tr, anchor in sorted(TR_AFTER.items()):
-                if anchor == s['stageId'] and tr in rows:
-                    ordered.append(rows[tr])
-        seq = ordered
-    ids = [s['stageId'] for s in seq]
-    if sid not in ids:
+    flow = _flow()
+    cur = flow.get(_base_sid(sid))
+    if not cur:
         return None
-    i = ids.index(sid)
-    if i + 1 >= len(seq):
-        return None
-    nxt = seq[i + 1]
-    return {'code': nxt['code'], 'stageId': nxt['stageId'],
-            'difficulty': nxt.get('difficulty') or 'normal',
-            'difficultyCN': nxt.get('difficultyCN') or ''}
+    rank = cur[0]
+    rows, seen = [], set()
+    for s in _stages():
+        if (s.get('difficulty') or 'normal') != diff:
+            continue
+        k = flow.get(_base_sid(s['stageId']))
+        if not k or k[0] != rank:
+            continue
+        # 同一关的普通行 / 突袭行（variant）只留一条，别把突袭行当「下一关」
+        if s['stageId'] in seen:
+            continue
+        seen.add(s['stageId'])
+        rows.append((k[1], _nat_key(s['stageId']), s))
+    rows.sort(key=lambda x: (x[0], x[1]))
+    for i, (_, _, s) in enumerate(rows):
+        if s['stageId'] != sid:
+            continue
+        if i + 1 >= len(rows):
+            return None
+        nxt = rows[i + 1][2]
+        return {'code': nxt['code'], 'stageId': nxt['stageId'],
+                'difficulty': nxt.get('difficulty') or 'normal',
+                'difficultyCN': nxt.get('difficultyCN') or ''}
+    return None
 
 
 def _act_name(stage_id: str, rows=None) -> str:

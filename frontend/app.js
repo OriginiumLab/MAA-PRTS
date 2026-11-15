@@ -1407,13 +1407,20 @@ function renderResult(d) {
   const readyStages = codes.filter(code => d.stages.some(s =>
     s.stage.code === code && s.best && s.best.mode === 'ready')).length;
   const raidRows = d.stages.filter(s => s.stage.variant === 'raid').length;
+  const opts = importOptions(d.stages);
   const head = `
     <div class="result-head">
       <div class="result-title">${esc(d.title)}
         <span>${codes.length} 关 · ${totalOps} 份作业 · ${readyStages} 关可直接抄${raidRows ? ` · ${raidRows} 个突袭/险地行` : ''}</span>
       </div>
       <div class="result-actions">
-        <button class="ghost-btn mint" id="add-all-best" title="每关只加真正要打的难度：0-8/9 章普通+突袭，10-14 章只加磨难，15 章起只加险地（简单不加；某档没作业就跳过不降档）">全部加入（每关要打的档）</button>
+        <div class="add-split">
+          <button class="ghost-btn mint" id="add-all-best" title="每关只加真正要打的难度：0-8/9 章普通+突袭，10-14 章只加磨难，15 章起只加险地（简单不加；某档没作业就跳过不降档）">全部加入（每关要打的档）</button>
+          <button class="ghost-btn mint add-caret" id="add-all-more" title="按难度 / 关卡类型分开导入" aria-haspopup="true" aria-expanded="false">▾</button>
+          <div class="add-menu" id="add-menu" hidden>
+            ${opts.map((o, i) => `<button class="add-menu-item" data-pick="${i}">${esc(o.label)}</button>`).join('')}
+          </div>
+        </div>
       </div>
     </div>`;
   const rows = d.stages.map(s => {
@@ -1497,46 +1504,101 @@ function renderResult(d) {
     const vr = t.closest('.stage-row');
     if (op) showOpDetail(op, (vr && vr.dataset.variant) || '');
   }));
-  const all = $('#add-all-best');
-  if (all) all.addEventListener('click', () => {
-    let n = 0;
-    const seen = new Set();
-    const prepareIds = [];   // 一键加入的也走隐式预下载（addToBasket 不经过这条路）
-    // 一关真正要打的难度（用户口径）：0-8 普通+突袭、9 标准+突袭、
-    // 10-14 只打磨难、15+ 只打险地。简单永远不打；同一关出现磨难/险地行
-    // 时普通/标准行就不算「要打的档」了（不擅自降档：磨难行没作业就空着）
-    const hasHardRow = {};
-    d.stages.forEach(s => {
-      if (s.stage.difficulty === 'tough' || s.stage.difficulty === 'risky')
-        hasHardRow[s.stage.code] = true;
-    });
-    d.stages.forEach(s => {
-      if (!s.best) return;
-      if (s.stage.difficulty === 'easy') return;
-      if (s.stage.difficulty === 'normal' && hasHardRow[s.stage.code]) return;
-      // 按「关卡 + 难度行」去重：同一关同一档只加一份
-      const key = s.stage.stageId + '|' + (s.stage.variant || '');
-      if (seen.has(key) || inBasket(s.best.id, s.stage.variant || undefined)) return;
-      seen.add(key);
-      prepareIds.push(s.best.id);
-      const dcn = s.best.difficultyCN || '';
-      const dlab = diffLabel(dcn, s.stage.variant);
-      S.basket.push({
-        id: s.best.id, copilotId: s.best.id, title: s.best.title, rating: s.best.rating,
-        mode: s.best.mode, stageCode: s.best.stageCode || '', stageId: s.best.stageId || '',
-        name: dlab ? `${s.best.stageCode || ''}·${dlab}` : '',
-        maaCode: s.best.maaCode,
-        difficulty: Number(s.best.difficulty) || 1,
-        difficultyText: s.best.difficultyText || '普通',
-        difficultyCN: dcn,
-        variant: s.stage.variant || '',
-      });
-      n++;
-    });
-    if (prepareIds.length) api('/api/copilot/prepare', { ids: prepareIds }).catch(() => { });
-    renderBasket();
-    toast(n ? `已加入 ${n} 份作业` : '这些作业都已在作业集里', n ? 'ok' : 'warn');
+  // 一关真正要打的难度（用户口径）：0-8 普通+突袭、9 标准+突袭、
+  // 10-14 只打磨难、15+ 只打险地。简单永远不打；同一关出现磨难/险地行
+  // 时普通/标准行就不算「要打的档」了（不擅自降档：磨难行没作业就空着）
+  const hasHardRow = {};
+  d.stages.forEach(s => {
+    if (s.stage.difficulty === 'tough' || s.stage.difficulty === 'risky')
+      hasHardRow[s.stage.code] = true;
   });
+  const bestPick = s => s.stage.difficulty !== 'easy'
+    && !(s.stage.difficulty === 'normal' && hasHardRow[s.stage.code]);
+  const all = $('#add-all-best');
+  if (all) all.addEventListener('click', () => addRows(d.stages, bestPick, '每关要打的档'));
+  // 倒三角：按难度 / 关卡类型分开导入（选项随结果集变，见 importOptions）
+  const more = $('#add-all-more');
+  const menu = $('#add-menu');
+  if (more && menu) more.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+    more.setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  $$('.add-menu-item', menu).forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const opt = opts[Number(btn.dataset.pick)];
+    menu.hidden = true;
+    if (opt) addRows(d.stages, opt.pick, opt.label);
+  }));
+}
+
+/* 「全部加入」菜单选项：按当前结果集的关卡类型给不同档位
+   活动（TL 这类）按基础 / EX / S 分；主线按章走三套难度体系
+   （0-9 普通+突袭、10-14 简单/标准/磨难、15+ 险地）。选项只影响这次批量
+   导入的范围，逐关「加入」按钮照旧 */
+function stageIsMain(st) { return /^(?:main|easy|tough)_/.test(st.stageId || ''); }
+function stageIsEx(code) { return /-EX-?\d+$/i.test(code || ''); }
+function stageIsS(code) { return /-S-?\d+$/i.test(code || ''); }
+
+function importOptions(rows) {
+  const first = (rows.find(r => r.stage) || {}).stage;
+  if (!first) return [];
+  // 主线结果集里会夹着 TR 教学关 / S 支线关（搜章节号 2 时第一行就是 TR-11），
+  // 章节号得按第一个主线关算，不能直接看第一行，否则会误判成活动、菜单项全错
+  const mainRow = rows.find(r => r.stage && stageIsMain(r.stage));
+  if (mainRow) {
+    const ch = Number((String(mainRow.stage.code).match(/^(\d+)-/) || [])[1]);
+    if (ch >= 10 && ch <= 14) return [
+      { label: '全部导入（简单难度关卡）', pick: s => s.stage.difficulty === 'easy' },
+      { label: '全部导入（标准难度关卡）', pick: s => s.stage.difficulty === 'normal' },
+      { label: '全部导入（磨难难度关卡）', pick: s => s.stage.difficulty === 'tough' },
+    ];
+    if (ch >= 15) return [
+      { label: '全部导入（险地难度关卡）', pick: s => s.stage.difficulty === 'risky' },
+      { label: '全部导入（普通关卡）', pick: s => s.stage.difficulty === 'normal' },
+    ];
+    return [
+      { label: '全部导入（普通关卡）', pick: s => s.stage.difficulty === 'normal' && s.stage.variant !== 'raid' },
+      { label: '全部导入（突袭关卡）', pick: s => s.stage.variant === 'raid' },
+      { label: '全部导入（普通与突袭关卡）', pick: s => s.stage.difficulty === 'normal' },
+    ];
+  }
+  return [
+    { label: '全部导入（基础关卡与 TR）', pick: s => !stageIsEx(s.stage.code) && !stageIsS(s.stage.code) },
+    { label: '全部导入（EX 关卡普通与突袭）', pick: s => stageIsEx(s.stage.code) },
+    { label: '全部导入（S 关卡普通与突袭）', pick: s => stageIsS(s.stage.code) },
+  ];
+}
+
+/* 批量加入：每行取 best，按「关卡 + 难度行」去重，已在作业集的跳过 */
+function addRows(rows, pick, label) {
+  let n = 0;
+  const seen = new Set();
+  const prepareIds = [];   // 一键加入的也走隐式预下载（addToBasket 不经过这条路）
+  rows.forEach(s => {
+    if (!s.best || !pick(s)) return;
+    const key = s.stage.stageId + '|' + (s.stage.variant || '');
+    if (seen.has(key) || inBasket(s.best.id, s.stage.variant || undefined)) return;
+    seen.add(key);
+    prepareIds.push(s.best.id);
+    const dcn = s.best.difficultyCN || '';
+    const dlab = diffLabel(dcn, s.stage.variant);
+    S.basket.push({
+      id: s.best.id, copilotId: s.best.id, title: s.best.title, rating: s.best.rating,
+      mode: s.best.mode, stageCode: s.best.stageCode || '', stageId: s.best.stageId || '',
+      name: dlab ? `${s.best.stageCode || ''}·${dlab}` : '',
+      maaCode: s.best.maaCode,
+      difficulty: Number(s.best.difficulty) || 1,
+      difficultyText: s.best.difficultyText || '普通',
+      difficultyCN: dcn,
+      variant: s.stage.variant || '',
+    });
+    n++;
+  });
+  if (prepareIds.length) api('/api/copilot/prepare', { ids: prepareIds }).catch(() => { });
+  renderBasket();
+  toast(n ? `${label}：加入 ${n} 份` : '这些作业都已在作业集里', n ? 'ok' : 'warn');
+  return n;
 }
 
 /* ------------------------------------------------------------ 作业详情 */
@@ -3420,11 +3482,22 @@ function bindGlobal() {
     finally { btn.disabled = false; }
   });
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { toggleBasket(false); return; }
+    if (e.key === 'Escape') {
+      // 「全部加入」的倒三角菜单开着时先收菜单，别顺手把作业集抽屉也关了
+      const menu = $('#add-menu');
+      if (menu && !menu.hidden) { menu.hidden = true; return; }
+      toggleBasket(false); return;
+    }
     if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
       e.preventDefault();
       $('#search-input').focus();
     }
+  });
+  // 点别处收「全部加入」菜单（结果区每次重绘都换 DOM，用文档级监听 + 类选择器）
+  document.addEventListener('click', e => {
+    if (e.target.closest('#add-menu') || e.target.closest('#add-all-more')) return;
+    const menu = $('#add-menu');
+    if (menu && !menu.hidden) menu.hidden = true;
   });
   // 窄屏抽屉：浮动按钮开关，点遮罩关闭，窗口拖宽后自动收起
   $('#basket-fab').addEventListener('click', () => toggleBasket());

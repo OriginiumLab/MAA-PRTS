@@ -1021,6 +1021,29 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .ghost-btn:disabled { opacity: .45; cursor: not-allowed; }
 .ghost-btn:hover:disabled { border-color: rgba(94, 234, 212, 0.4); background: none; }
 
+/* 「全部加入」+ 倒三角：主按钮照旧走「每关要打的档」，倒三角里按难度 / 关卡
+   类型分开导入（活动分基础/EX/S，主线按章分普通-突袭 / 简单-标准-磨难 / 险地） */
+.add-split { position: relative; display: inline-flex; }
+.add-split #add-all-best { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.add-caret {
+  padding: 0 8px; border-left: 1px solid rgba(0, 0, 0, 0.35);
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  font-size: 11px;
+}
+.add-caret[aria-expanded="true"] { background: rgba(94, 234, 212, 0.09); }
+.add-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 32;
+  min-width: 238px; padding: 6px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: #10141d; box-shadow: 0 18px 40px -18px #000;
+}
+.add-menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 10px; border-radius: 7px;
+  font-size: 12.5px; color: var(--text-2); white-space: nowrap;
+}
+.add-menu-item:hover { background: rgba(94, 234, 212, 0.07); color: var(--mint); }
+
 /* 作业卡片 */
 .ops-grid {
   display: grid;

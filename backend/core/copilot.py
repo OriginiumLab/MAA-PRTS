@@ -645,25 +645,20 @@ def stage_variants(stage, rows, limit=12):
     ]
 
 
-def _base_stage_id(sid):
-    """难度变体归并到同一主关 id 下排序：tough_12-06 / main_15-02#s → main_12-06 / main_15-02"""
-    s = re.sub(r'^(?:easy|tough)_', 'main_', str(sid or ''))
-    return s.split('#')[0]
-
-
 def row_sort_key(packed):
-    """结果行排序：代号间按主关 id；同代号内 磨难/险地 → 普通/标准（→ 突袭）→ 简单
+    """结果行排序：先按关卡在游戏流程里的位置，同关内 磨难/险地 → 普通/标准
+    （→ 突袭）→ 简单
 
+    位置见 resources.flow_key：一章/一个活动内按流程先后，TR 教学关插到它
+    解锁前置关的后面（搜 TL 时 TL-TR-1 在 TL-1 前面，不再是列表末尾）。
     10-14 章磨难、15+ 章险地是用户真正要打的主难度，行置顶；0-9 章的突袭
     变体跟在普通/标准行后面（普通→突袭的习惯顺序）；简单永远垫底。
     """
     st = packed['stage']
-    if st.get('difficulty') == 'risky':        # 险地是 15+ 章的主难度，置顶
-        return (_base_stage_id(st.get('stageId')), 0)
-    rank = {'tough': 0, 'easy': 2}.get(st.get('difficulty'), 1)
+    rank = {'tough': 0, 'risky': 0, 'easy': 2}.get(st.get('difficulty'), 1)
     if st.get('variant') == 'raid':
         rank += 0.5
-    return (_base_stage_id(st.get('stageId')), rank)
+    return (resources.flow_key(st.get('stageId'))[:2], rank)
 
 
 def search(keyword, snap, pages=2, min_rating=0, limit=12):
