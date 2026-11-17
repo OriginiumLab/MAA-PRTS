@@ -2791,6 +2791,46 @@ def check_story_nav(tmp):
     assert stagenav.in_story_page(Shot(b.getvalue())) is False, \
         '左下角有白色功能卡的是主界面，不能判成曲谱页'
 
+    # 3.5) 「乐章收录」网格判据 + 进网格必点「默认进度」。
+    #      这一页会记住上次选的标签：停在「完成进度」时每张卡左上角都盖着
+    #      进度徽章（38/39 那种蓝色菱形），卡片图被改掉一块，模板匹配从 5 分
+    #      涨到 20 分以上——整轮扫描白跑（2026-11-18 用户报 RI 导航失败，
+    #      现场截图正停在「完成进度」）。判据就是顶部三个标签必有一个蓝字。
+    def rgb_box(blue):
+        im = Image.new('RGB', (1920, 1080), (18, 18, 22))
+        dr = ImageDraw.Draw(im)
+        if blue:
+            dr.rectangle([int(0.57 * 1920), int(0.04 * 1080),
+                          int(0.62 * 1920), int(0.085 * 1080)],
+                         fill=(60, 170, 255))
+        b = _io.BytesIO()
+        im.save(b, 'PNG')
+        return Shot(b.getvalue())
+
+    assert stagenav.in_score_grid(rgb_box(True)) is True, \
+        '有蓝色标签的应该是乐章收录网格'
+    assert stagenav.in_score_grid(rgb_box(False)) is False, \
+        '没有蓝色标签的（曲谱时间轴）不该判成网格'
+
+    p = stagenav.points()
+    assert 'tabProgress' in p and len(p['tabProgress']) == 2, \
+        ('要有一个「默认进度」标签的点击点', p.get('tabProgress'))
+    src = inspect.getsource(stagenav.goto_story_activity)
+    assert "p['tabProgress']" in src, '进网格后必须点一下「默认进度」'
+    assert 'in_score_grid' in src, '点完「乐章收录」要确认真的进了网格'
+
+    # 3.6) 扫描要「等画面停稳再截图」：滑动惯性能吃好几秒，中途截到的帧整屏
+    #      带拖影（卡片被拉成两半），匹配分数虚高 → 明明在屏幕上却报没找到。
+    assert hasattr(stagenav, '_settled_shot'), '截图前要先等画面停稳'
+    assert '_settled_shot' in inspect.getsource(stagenav.goto_story_activity), \
+        '扫描循环必须用 _settled_shot 取帧'
+
+    # 3.7) 回顶要甩够（旧写法从列表底部到不了顶，扫描会从中间开始漏上半张表），
+    #      卡片位置缓存读不到时要安静返回 0（不能因为少个 json 就导航不了）。
+    assert hasattr(stagenav, '_scroll_top'), '要有「甩到顶」的辅助函数'
+    assert '_scroll_top' in src, '整页扫之前必须先回顶'
+    assert stagenav._load_card_offset('ZZZ') == 0, '缓存读不到要返回 0'
+
     # 4) 九张老活动的卡片模板都在（少一张就意味着那个活动导航不了）
     for code, name in (('MN-1', 'MN'), ('WD-1', 'WD'), ('DM-1', 'DM'),
                        ('MB-1', 'MB'), ('BI-1', 'BI'), ('TW-1', 'TW'),
@@ -2814,9 +2854,11 @@ def check_story_nav(tmp):
         ('扫描覆盖要够整个曲谱网格', stagenav._MAX_SCREENS, stagenav._SWIPE_STEP)
     assert 200 <= stagenav._SWIPE_STEP <= 460, \
         ('步长太大漏屏、太小翻不完', stagenav._SWIPE_STEP)
-    # 预滚必须存在：卡片图是网络异步加载的，不等加载完就扫会截到黑色占位
-    assert '预滚' in inspect.getsource(stagenav.goto_story_activity), \
-        ('扫描前要先预滚一遍触发卡片图加载',)
+    # 加载竞态必须有兜底：卡片图是网络异步加载的，滚到那屏时可能还是黑色占位
+    # （2026-11-17 实测 DH/GA/GO/HE/MT 稳定 999）。2026-11-18 把「预滚一遍」
+    # 换成了逐屏「整屏无候选就补拍一帧」，代码里必须还留着这道补拍。
+    assert 'wait=0.9' in inspect.getsource(stagenav.goto_story_activity), \
+        ('整屏没有候选时要补拍一帧，兜住缩略图加载竞态',)
 
     # 7) adb 通道自检：地址写错时要能自己换一个，连不上要明确说「连不上」，
     #    而不是让上层一路点空、最后误报「翻了几十屏没找到卡片」。

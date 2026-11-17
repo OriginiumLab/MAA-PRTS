@@ -84,6 +84,12 @@ DEFAULT_POINTS = {
     'tabStory': [280, 673],
     # 曲谱页右上「乐章收录」：切成一格一格的网格视图
     'scoreBook': [1102, 89],
+    # 网格视图顶部的第一个标签「默认进度」（另外两个是「奖励进度」「完成进度」）。
+    # **进网格后必须点一下**：这个页面记住上次选的标签，停在「完成进度」时每张
+    # 卡片左上角都会盖一层进度徽章（38/39 这种蓝色菱形），卡片图被改得面目全非，
+    # 模板匹配直接从 5 分掉到 20 分以上（2026-11-18 用户报 RI 导航失败，现场
+    # 截图停在「完成进度」就是这个原因）。实测点击位置 1920 口径 (1111,67)。
+    'tabProgress': [741, 45],
     # 活动详情页右下「进入活动」
     'enterActivity': [1140, 616],
     # 活动地图右下角那个圆形的「EX」按钮：点一下从普通关切到 EX 关（再点
@@ -133,6 +139,10 @@ _STORY_SKIP_MAX = 0.55     # 「跳过▶」字形掩码 XOR 占比：剧情页 
 _STORY_SKIP_TPL = None
 _WAKEUP_MAX = 25.0         # 「开始唤醒」按钮模板阈值：登录页 0.0，其它页 ≥36.5
 _WAKEUP_TPL = None
+# 两帧差值低于这个数按「画面没动」算（判断网格「滚到底了」用）。网格上的
+# 卡片有呼吸/闪光动画，同一位置连拍两帧也有 1.76 的差（2026-11-18 实测），
+# 所以不能定得比它小。惯性衰减实测：+0.5s 22.0 / +1.4s 3.8 / +2.2s 1.6。
+_SETTLE_THR = 2.5
 
 
 def _nav_tpl(name):
@@ -303,15 +313,19 @@ class Touch:
         return ok
 
     def swipe(self, x1, y1, x2, y2, ms=400):
-        """1280×720 口径的滑动"""
+        """1280×720 口径的滑动
+
+        **不发 ``_release()``**：滑动自带抬起动作，不会像 ``input tap`` 那样
+        把左键留在按下状态；而每次补发要两条 adb 命令（雷电要
+        ``sendevent /dev/input/event6``），一条 0.25s，翻十几屏就是十几秒白烧
+        （2026-11-18 实测：一次滑动 0.77s，其中 0.5s 是补的两条 sendevent）。
+        """
         w, h = self.size()
         sx = lambda v: str(int(round(v * w / 1280.0)))
         sy = lambda v: str(int(round(v * h / 720.0)))
-        ok = self._run(['shell', 'input', 'swipe',
-                        sx(x1), sy(y1), sx(x2), sy(y2),
-                        str(int(ms))]) is not None
-        self._release()
-        return ok
+        return self._run(['shell', 'input', 'swipe',
+                          sx(x1), sy(y1), sx(x2), sy(y2),
+                          str(int(ms))]) is not None
 
     def _release(self):
         """每次点击/滑动后补一发鼠标抬键（雷电踩过的坑，见 ``heal()``）
@@ -711,17 +725,18 @@ _CARD_MAX_SCORE = 12.0
 
 # 提前结束的阈值：低于这个分数才认为「肯定是它」
 _EARLY_STOP = 6.0
-# 曲谱网格最多翻几屏。整张表（主线 + 各 Story Line 分组 + 未归组的新活动）
-# 实测约 15 屏（步长 540 时代）、12000px 高。240 步长（720 口径）每屏只滚
-# 360px，48 屏 = 17280px（1080 口径）有近一倍余量：以后活动变多也不会半路放弃。
-_MAX_SCREENS = 48
+# 曲谱网格最多翻几屏。整张表（顶部「主题曲」EP 网格 + 各 Story Line 分组
+# + 未归组的新活动）2026-11-18 实测约 15 屏、5400px（1080 口径）；这里留
+# 56 屏的余量只是兜底上限——正常情况下「连着两屏画面没动」就判定到底提前
+# 退出了，不会真扫 56 屏。
+_MAX_SCREENS = 56
 # 每屏往下滑多少（1280 口径）。**别为了快把这个调大**：560 那版实测会漏屏
 # ——玛莉娅·临光（MN）正好落在两次截图之间，翻完 34 屏报「没找到」，而它其实
 # 在屏幕上掠过过（2026-11-17 用 360 重扫，第 5 屏 1.0 分命中）。
 # 360 仍会**截断卡片**：网格行高（1080 口径）约 280px，540 的步长下滑时
 # 约一半的行停在「上下各截一半」的相位上，截断卡的匹配分会从 4 分涨到
 # 19 分，直接掉出 12 分阈值（2026-11-17 傍晚：DH/GO/IW 全栽在这）。
-# 240（1080 口径 360px）保证每行至少有一屏基本完整；整表 23 屏，34 屏够。
+# 240（1080 口径 360px）保证每行至少有一屏基本完整；整表 15 屏，够。
 _SWIPE_STEP = 240
 # 粗扫（1/4 尺度）分数高于这个值就不做全分辨率精修了：滚动时绝大多数屏
 # 都是无关卡片，省下来的时间够多扫好几屏。真卡粗扫不会超过 20 分。
@@ -746,24 +761,15 @@ def tpl_path_of(stage_code):
     return ''
 
 
-def find_card(touch, tpl_file, max_score=_CARD_MAX_SCORE):
-    """在当前画面上找模板卡片，返回 ``(像素x, 像素y, 分数)``
+def find_card_bytes(data, tpl_file, max_score=_CARD_MAX_SCORE):
+    """在**一张截图字节**里找模板卡片，返回 ``(像素x, 像素y, 分数)``
 
-    找不到时 x/y 为 0。分数越小越像，``max_score`` 以内才算命中。
-
-    做法：**先粗扫再精修**。
-    1. 粗扫：整屏缩到 1/4，按 4 像素步长（≈16 实际像素）扫一遍，记住最像的
-       那个格子。1/4 尺度下 480×270，候选 120×67 ≈ 8000 个，但真正做逐像素
-       比对的是 C 层的 ``ImageChops``，一遍 0.3 秒左右。
-    2. 精修：在最像的格子周围 ±5 像素（1/4 尺度）穷举，拿到准确位置。
-
-    **为什么不再用「行/列投影预筛」**：那套只取前 5 行候选，遇到上下两头都
-    很暗、行均值几乎没起伏的卡片（比如 孤岛风云 MB）会把真位置整个筛掉，最后
-    返回一个 20 多分的假位置。真卡自匹配是 6 分，差得远，但代码不知道。
+    和 :func:`find_card` 同一套算法，区别只是不自己去截图——扫描循环要先
+    等画面停稳、再拿那一帧去匹配（见 :func:`_settled_shot`），否则会对着
+    滑动动画中的模糊帧匹配，分数虚高直接判「没找到」。
     """
     from PIL import Image, ImageChops, ImageStat
 
-    data = touch.shot()
     if not data:
         return 0, 0, 999.0
     try:
@@ -841,6 +847,24 @@ def find_card(touch, tpl_file, max_score=_CARD_MAX_SCORE):
     if not bw or not bh:
         return 0, 0, score
     return x + bw // 2, y + bh // 2, score
+
+
+def find_card(touch, tpl_file, max_score=_CARD_MAX_SCORE):
+    """在**当前画面**上找模板卡片，返回 ``(像素x, 像素y, 分数)``
+
+    找不到时 x/y 为 0。分数越小越像，``max_score`` 以内才算命中。
+
+    做法：**先粗扫再精修**。
+    1. 粗扫：整屏缩到 1/4，按 4 像素步长（≈16 实际像素）扫一遍，记住最像的
+       那个格子。1/4 尺度下 480×270，候选 120×67 ≈ 8000 个，但真正做逐像素
+       比对的是 C 层的 ``ImageChops``，一遍 0.3 秒左右。
+    2. 精修：在最像的格子周围 ±5 像素（1/4 尺度）穷举，拿到准确位置。
+
+    **为什么不再用「行/列投影预筛」**：那套只取前 5 行候选，遇到上下两头都
+    很暗、行均值几乎没起伏的卡片（比如 孤岛风云 MB）会把真位置整个筛掉，最后
+    返回一个 20 多分的假位置。真卡自匹配是 6 分，差得远，但代码不知道。
+    """
+    return find_card_bytes(touch.shot(), tpl_file, max_score)
 
 
 def is_extra(stage_code):
@@ -956,6 +980,33 @@ def in_story_page(touch):
         return False
 
 
+def in_score_grid(touch):
+    """是不是「乐章收录」的卡片网格（曲谱右上「乐章收录」切过去那一页）
+
+    判据只看顶部那排标签「默认进度 / 奖励进度 / 完成进度」：网格视图里三选一
+    必然有一个是**蓝字 + 蓝色下划线**，曲谱时间轴同一片区域是纯暗背景
+    （2026-11-18 实测蓝像素占比：网格 0.035，时间轴 0.000，阈值 0.008）。
+
+    为什么要判：点完「乐章收录」如果没进去（按钮挪位置 / 切页动画没吃完），
+    后面就要在时间轴页上翻四十屏找卡片，最后报「模板过期」，把人往错的方向带。
+    """
+    try:
+        from PIL import Image
+        data = touch.shot()
+        if not data:
+            return False
+        im = Image.open(io.BytesIO(data)).convert('RGB')
+        w, h = im.size
+        px = list(im.crop((int(0.55 * w), int(0.03 * h),
+                           int(0.80 * w), int(0.10 * h))).getdata())
+        n = len(px) or 1
+        blue = sum(1 for q in px
+                   if q[2] > 150 and q[2] - q[0] > 50) / n
+        return blue > 0.008
+    except Exception:
+        return False
+
+
 def in_story_dialog(touch):
     """当前是不是剧情对话 / CG 回放页（右上角有「自动 OFF 跳过▶」）
 
@@ -1023,6 +1074,25 @@ def _moved(a, b, thr=3.0):
         return ImageStat.Stat(ImageChops.difference(ia, ib)).mean[0] > thr
     except Exception:
         return True
+
+
+def _settled_shot(touch, wait=2.2):
+    """滑动后等画面停稳再截图
+
+    2026-11-18 实测：``input swipe`` 之后画面要 1.8~2.2s 才真正停住（惯性
+    逐帧差 22 → 11 → 3.8 → 2.1 → 1.6），1.4s 时截到的还是拖影帧：卡片被
+    拉成两半、顶部多一条半透明标题带，拿去匹配分数虚高，于是「卡片明明在
+    屏幕上」却报没找到，用户看到的就是「有几张卡认不出来 / 导航失败」。
+
+    **为什么不再连拍两帧比差**：卡片图有呼吸/闪光动画，同一位置连拍两帧也
+    有 1.76 的差，判「停稳」的阈值只能定到 2.5 左右，跟真实惯性的尾部（2.1）
+    几乎重叠，结果几乎每屏都要多等一轮——每屏多花 1.5s，扫完整页白烧 20 秒。
+    现在固定等 2.2s 拍一帧；万一撞上拖影帧，靠两件事兜：步长 240 小于卡片在
+    屏内的可见高度，同一张卡在相邻 3~4 屏里都会完整出现；整屏一个候选都没有
+    （999）时扫描循环会补拍一帧复核（多半是缩略图还没加载出来）。
+    """
+    time.sleep(wait)
+    return touch.shot()
 
 
 def _find_check_btn(touch):
@@ -1121,6 +1191,64 @@ def _skip_story_replay(touch, log, rounds=40):
     return 'stuck'
 
 
+def _scroll_top(touch, steps=12):
+    """把网格甩到最顶（快速拖拽，过冲的回弹无害）
+
+    为什么要甩而不是精确滑：这页现在有「主题曲 EP 网格 + 各 Story Line 分组」，
+    总高约 5400px（1080 口径），16×440 的旧写法只走 10560px 的 720 口径……
+    从列表底部出发根本到不了顶，扫描就从中间开始，上半部分的卡永远扫不到
+    （密林悍将归来 RI 就在第 12 屏左右，正是半路起点最容易漏的深度）。
+    14 下 × 800 = 11200（720 口径）足够盖住整页。
+    """
+    for _ in range(steps):
+        touch.swipe(20, 180, 20, 980, 240)
+        time.sleep(0.35)
+
+
+def _navcache_file():
+    """打开记录文件路径（config/navcache.json，用户配置目录，升级不覆盖）"""
+    try:
+        from .settings import CONFIG_DIR
+        return os.path.join(CONFIG_DIR, 'navcache.json')
+    except Exception:
+        return ''
+
+
+def _load_card_offset(prefix):
+    """上次这张卡在第几像素（1080 口径，从网格顶部算）；没有返回 0"""
+    try:
+        f = _navcache_file()
+        if not f or not os.path.exists(f):
+            return 0
+        with open(f, encoding='utf-8') as fh:
+            data = json.load(fh) or {}
+        return int((data.get('cardOffset') or {}).get(prefix) or 0)
+    except Exception:
+        return 0
+
+
+def _save_card_offset(prefix, px):
+    """记下这张卡的位置，下次直接翻过去（活动顺序一变就会验不过，自动回退全扫）"""
+    try:
+        f = _navcache_file()
+        if not f or not prefix or px <= 0:
+            return
+        data = {}
+        if os.path.exists(f):
+            with open(f, encoding='utf-8') as fh:
+                data = json.load(fh) or {}
+        data.setdefault('cardOffset', {})[prefix] = int(px)
+        with open(f, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def _prefix_of(stage_code):
+    m = re.match(r'^([A-Za-z][A-Za-z0-9]*)-', stage_code or '')
+    return m.group(1).upper() if m else ''
+
+
 def goto_story_activity(touch, stage_code, log=None, tpl=None):
     """老故事集：主界面 → 曲谱 → 乐章收录 → 网格找卡片 → 进入活动
 
@@ -1176,8 +1304,10 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
 
     restarted = False
     login_taps = 0
+    home = False
     for i in range(10):
-        if really_home():
+        home = really_home()
+        if home:
             break
         # 每轮先补一发「鼠标抬起」：注入被打断会让按键卡在按下状态，之后
         # 所有 tap 全被吃掉（2026-11-17 真机踩过，keyevent 却好使，极具迷惑性）
@@ -1225,7 +1355,13 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
             log('重启后仍不在主界面，点左上角「<」')
             touch.tap(*p['backCorner'])
         time.sleep(STEP_DELAY)
-    if not really_home():
+    if not home:
+        # 循环里最后一次判定和这里隔了好几百毫秒，页面可能刚好在切页动画中间；
+        # 再确认一次，别把「刚回到主界面」误判成「卡在弹窗里」——2026-11-18
+        # 实测 RI 导航就这么被自己判失败过一次（日志 4 秒就 FAIL，游戏其实在主界面）。
+        time.sleep(1.2)
+        home = really_home()
+    if not home:
         return False, '回不到主界面（可能卡在某个弹窗里）'
 
     # 1) 主界面 → 曲谱。
@@ -1253,62 +1389,115 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
         if not to_story():
             return False, '进不去曲谱页（界面结构可能变了）'
 
-    # 2) 右上「乐章收录」→ 网格。已经在网格模式时这里是「默认进度」标签，
-    #    点一下没有副作用，所以不需要先判断当前是哪种视图。
-    touch.tap(*p['scoreBook'])
-    time.sleep(MAP_DELAY)
+    # 2) 右上「乐章收录」→ 网格。
+    #    **进去后必须点一下「默认进度」**：这一页会记住上次选的标签，停在
+    #    「完成进度」/「奖励进度」时每张卡左上角都盖着进度徽章（38/39 那种
+    #    蓝色菱形 + 勾），卡片图被改掉一大块，模板匹配从 5 分直接涨到 20 分
+    #    以上，后果是整轮扫描白跑、报「翻了 56 屏没找到」（2026-11-18 用户
+    #    报密林悍将归来 RI 导航失败，现场截图正停在「完成进度」）。
+    for i in range(2):
+        touch.tap(*p['scoreBook'])
+        time.sleep(MAP_DELAY)
+        if in_score_grid(touch):
+            break
+        log('点了「乐章收录」还没进网格（第 %d 次）' % (i + 1))
+    if not in_score_grid(touch):
+        return False, ('进不去「乐章收录」网格（点右上角「乐章收录」没反应，'
+                       '界面结构可能变了）')
+    touch.tap(*p['tabProgress'])
+    time.sleep(STEP_DELAY)
+    log('切到「默认进度」标签（保证卡片上没有进度徽章）')
 
     # 3) 先看当前这一屏：网格会记住上次浏览的位置，用户刚看过这个活动的话
     #    一次就中，省掉「滚到顶 + 翻十几屏」那一两分钟。
     best = (999.0, 0, 0)
-    x, y, sc = find_card(touch, tpl)
+    prefix = _prefix_of(stage_code)
+
+    def _scan(start=0):
+        """从当前位置一屏一屏往下找，返回 ``(分数, x, y, 绝对屏号)``
+
+        ``start`` 是「从网格顶部已经翻了几屏」，只影响日志和位置缓存的记录。
+        步长 240（720 口径）< 卡片在屏内的可见高度，同一张卡在相邻 3~4 屏里
+        都会完整出现，偶尔一屏糊了不影响。
+        """
+        prev_frame = None
+        still = 0
+        hit = (999.0, 0, 0, -1)
+        for i in range(_MAX_SCREENS - start):
+            # **等画面停稳再截图**：滑动惯性要 1.8~2.2s 才停，中途截到的帧
+            # 整屏带拖影（卡片被拉成两半），匹配分数虚高 → 明明在屏幕上却报没找到。
+            frame = _settled_shot(touch)
+            x, y, sc = find_card_bytes(frame, tpl)
+            if sc >= 999.0:
+                # 整屏连一个候选都没有：多半是缩略图还没加载出来（黑占位）。
+                # 补拍一帧，图到了就有分。
+                x, y, sc = find_card_bytes(_settled_shot(touch, wait=0.9), tpl)
+                if sc < 999.0:
+                    log('第 %d 屏补拍后有了候选（%.1f 分）' % (start + i + 1, sc))
+            if x and sc < hit[0]:
+                hit = (sc, x, y, start + i)
+                log('第 %d 屏更新最佳：%.1f' % (start + i + 1, sc))
+            if sc <= _EARLY_STOP:
+                break
+            # 到底了就停：连着两屏「画面没动」说明滑不动了。以前靠固定 56 屏
+            # 兜底，到了底还在原地空转 40 屏（一屏 4 秒，白烧三分钟）。
+            if prev_frame is not None and not _moved(prev_frame, frame, thr=3.0):
+                still += 1
+                if still >= 2:
+                    log('滚到底了（第 %d 屏）' % (start + i + 1))
+                    break
+            else:
+                still = 0
+            prev_frame = frame
+            # 滑动要**慢**：滑快了惯性会把整屏带过去，也会被判成点击。
+            # 起点必须在**最左边缘**（20）的空白/时间轴圆点上：起点压在卡片上
+            # 会被游戏当成点击，直接跳进那个活动的详情页——2026-11-17 就是
+            # 这么「扫着扫着进了覆潮之下详情页，之后几十屏分数一动不动」。
+            touch.swipe(20, 660, 20, 660 - _SWIPE_STEP, 700)
+            time.sleep(0.4)
+        return hit
+
+    # 3) 先看当前这一屏：网格会记住上次浏览的位置，用户刚看过这个活动的话
+    #    一次就中，省掉「滚到顶 + 翻十几屏」那一两分钟。
+    x, y, sc = find_card_bytes(_settled_shot(touch), tpl)
     if x and sc <= _CARD_MAX_SCORE:
         best = (sc, x, y)
         log('当前这一屏就找到了（%.1f 分）' % sc)
     else:
-        # 4) 滚到顶，然后一屏一屏往下找。
-        #    x 必须落在最左的空白处（20）：压在卡片上会被游戏当成点击，
-        #    直接跳进那个活动的详情页，后面几十屏就全白跑了。
-        for _ in range(16):
-            touch.swipe(20, 200, 20, 640, 600)
-            time.sleep(0.45)
+        # 4) 滚到顶。这一步必须做：整页约 15 屏（顶部还有「主题曲」EP 网格），
+        #    从列表底部出发到不了顶，扫描就会从中间开始、上半部分的卡永远扫不到。
+        _scroll_top(touch)
 
-        # 4.5) **预滚一遍全列表再正式扫**：卡片图是网络异步加载的，滚到
-        #      卡片那屏时图可能还没下来（黑色占位），find_card 整屏 999，
-        #      单向翻屏只截一次，卡片就永远错过了（2026-11-17 傍晚实测：
-        #      DH/GA/GO/HE/MT 稳定 999、OR/LE 真机 19 分而离线重放 4 分，
-        #      全是这个竞态）。先快速滚到底 + 滚回顶，等图加载完再细扫。
-        for _ in range(28):
-            touch.swipe(20, 660, 20, 660 - _SWIPE_STEP, 400)
-            time.sleep(0.3)
-        time.sleep(3)
-        for _ in range(30):
-            touch.swipe(20, 200, 20, 640, 400)
-            time.sleep(0.3)
-        time.sleep(3)
-
-        # **全程只记最像的那一屏**，最后再点。不能「先看到低于阈值就点」：
-        # 有几张卡（覆潮之下这种整幅都是暗夜海面的）跟空白底噪很像，随便
-        # 一片黑就能拿到 12 分，而真卡其实是 3 分。扫完再挑，代价是慢十几秒，
-        # 换来不会点错活动。
-        for i in range(_MAX_SCREENS):
-            x, y, sc = find_card(touch, tpl)
-            if x and sc < best[0]:
+        # 4.2) 上次扫到过这张卡的话，直接翻到它附近往下扫（活动加新的会把顺序
+        #      挤动，所以只当提示用；一路扫到底都没有就回顶老实重扫一遍）。
+        #      少翻一屏：回顶后的第一下拖拽常被顶部回弹吃掉一点，实测差一屏。
+        cached = _load_card_offset(prefix)
+        n = (max(0, int(round(cached / (_SWIPE_STEP * 1.5))) - 1)
+             if cached else 0)
+        if n >= 1:
+            n = max(0, int(round(cached / (_SWIPE_STEP * 1.5))) - 1)
+            log('按上次记录直接翻到第 %d 屏' % (n + 1))
+            for _ in range(n):
+                touch.swipe(20, 660, 20, 660 - _SWIPE_STEP, 700)
+                time.sleep(0.5)
+            sc, x, y, idx = _scan(start=n)
+            if x and sc <= _CARD_MAX_SCORE:
                 best = (sc, x, y)
-                log('第 %d 屏更新最佳：%.1f' % (i + 1, sc))
-            if sc <= _EARLY_STOP:
-                break
-            # 滑动要**慢**：滑快了惯性会把整屏带过去，也会被判成点击。
-            # 起点必须在**最左边缘**（20）的空白/时间轴圆点上：起点压在卡片
-            # 上会被游戏当成点击，直接跳进那个活动的详情页——2026-11-17 就是
-            # 这么「扫着扫着进了覆潮之下详情页，之后几十屏分数一动不动」。
-            touch.swipe(20, 660, 20, 660 - _SWIPE_STEP, 600)
-            time.sleep(1.4)
+                _save_card_offset(prefix, idx * _SWIPE_STEP * 1.5)
+            else:
+                log('缓存位置往下扫到底也没有（%.0f 分），回顶重扫' % sc)
+                _scroll_top(touch)
+
+        if best[0] > _CARD_MAX_SCORE:
+            sc, x, y, idx = _scan(0)
+            if x and sc <= _CARD_MAX_SCORE:
+                best = (sc, x, y)
+                _save_card_offset(prefix, idx * _SWIPE_STEP * 1.5)
 
     sc, x, y = best
     if not x or sc > _CARD_MAX_SCORE:
-        return False, ('翻了 %d 屏都没找到这张卡片（最像 %.0f 分，模板可能过期了）'
-                       % (_MAX_SCREENS, sc))
+        return False, ('把整张「乐章收录」网格翻到底都没找到这张卡片（最像 %.0f 分，'
+                       '模板可能过期了）' % sc)
     log('找到卡片（相似度 %.1f），点进去' % sc)
     shot_grid = touch.shot()
     touch.tap_px(x, y)
