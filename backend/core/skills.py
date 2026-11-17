@@ -605,7 +605,7 @@ def _run_fight_batch(batch, params, file, log, done):
 SKILLS = {
     'wakeup':    ('唤醒游戏到主界面（可选按尾号切号）', skill_wakeup),
     'navigate':  ('从主界面导航到指定活动',            skill_navigate),
-    'fight':     ('自动战斗：编队/借助战/吃理智药/开打', skill_fight),
+    'fight':     ('自动战斗：预检练度/前置 → 编队/借人/开打', skill_fight),
     'skip_story': ('过剧情关卡（ST 关）',              skill_skip_story),
     'signin':    ('森空岛签到（单号/全部）',            skill_signin),
     'weekly':    ('周目编排：剧情+战斗按序全自动',      skill_weekly),
