@@ -719,7 +719,14 @@ def run_core(spec, tid=None, timeout=None):
 
     conn = _connection(d, spec.get('profile'))
     log('连接 %s（%s）…' % (conn['address'], conn['config']))
-    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, log, tid))
+    # 抄作业时 MAA 每换一份作业就发一条 CopilotListLoadTaskFileSuccess，
+    # 文件名是我们自己按代号存的（BB-S-3_10531.json）。记下来就能知道
+    # 「跑到第几关、卡在哪一关」——预检说打不了的和实际卡住的才能对上。
+    cp_rows = spec.get('copilotList') or []
+    by_file = {os.path.basename(r.get('filename') or ''): r.get('stage_name')
+               for r in cp_rows if r.get('filename')}
+    state = {'stage': '', 'trail': [], 'by_file': by_file}
+    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, log, tid, state))
     try:
         eng.open()
         log('MaaCore %s 已加载' % eng.version())
@@ -848,15 +855,21 @@ def run_core(spec, tid=None, timeout=None):
                 % '、'.join(c['chain'] for c in stopped[:4]))
         for c in bad:
             log('[失败] %s %s' % (c['chain'], c.get('why') or ''))
+        failed_stage = state['stage'] if bad else ''
+        failed_why = next((c.get('why') for c in bad if c.get('why')), '') if bad else ''
         return {'ok': finished and not bad,
                 'tasks': len(seq),
                 'chains': eng.chains,
+                'timed_out': not finished,
+                'failed_stage': failed_stage,
+                'failed_why': failed_why,
+                'stage_trail': state['trail'],
                 'error': '; '.join(eng.errors) or eng.error or ''}
     finally:
         eng.close()
 
 
-def _on_core_event(ev, log, tid):
+def _on_core_event(ev, log, tid, state=None):
     """把引擎事件转成任务日志（跑机面板实时能看到）"""
     kind = ev.get('kind')
     if kind == 'error':
@@ -871,7 +884,13 @@ def _on_core_event(ev, log, tid):
         what = ev.get('what')
         data = ev.get('data') or {}
         if what == 'CopilotListLoadTaskFileSuccess':
-            log('换作业：%s' % _nav_of(data))
+            code = _stage_of_file(data, state)
+            if code:
+                log('换作业：%s' % code)
+                if state is not None:
+                    state['stage'] = code
+                    if code not in state['trail']:
+                        state['trail'].append(code)
         elif what == 'StageDrops':
             items = data.get('stats') or []
             if items:
@@ -898,6 +917,19 @@ def _nav_of(data):
     if fn:
         return fn.rsplit('_', 1)[0] or fn
     return data.get('nav_name') or data.get('stage_name') or ''
+
+
+def _stage_of_file(data, state=None):
+    """作业文件名 → 关卡代号（预检说打不了的和实际卡住的要能对上）
+
+    优先查 ``spec['copilotList']`` 的 filename→stage_name 映射（准确）；
+    没有映射时退回文件名前半段（``BB-S-3_10531.json`` → ``BB-S-3``）。
+    """
+    fn = os.path.basename(str(data.get('file_name') or ''))
+    table = (state or {}).get('by_file') or {}
+    if fn and fn in table:
+        return table[fn]
+    return (_nav_of(data) or '').strip()
 
 
 def _wait_chain(eng, chain, log, timeout=300):

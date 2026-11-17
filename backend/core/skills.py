@@ -31,6 +31,7 @@ from . import accounts
 from . import maaplan
 from . import resources
 from . import settings
+from . import stageplan
 from . import stagenav
 from . import tasks
 
@@ -223,7 +224,11 @@ def skill_navigate(params, log, tid=None):
 def _prepare_ops(stages, file, log):
     """mode=copy：把关卡代号列表变成 MaaCore 的 copilotList
 
-    每个 stage 按代号搜作业站，取第一个作业下载落盘（prepare_copilot）。
+    每个 stage 按代号搜作业站，挑**这号能抄的**那份下载落盘（prepare_copilot）。
+    以前直接拿 ``ops[0]``——那是按评分排的，不管练度，于是经常挑到「缺三个
+    干员」的作业，MAA 编队阶段就失败，用户只看到「跑了 8 分钟 0/1」。
+    现在优先 ready（可直接抄）→ borrow（借一人）→ 其它，并如实告警。
+
     没有 copilotList 的 spec 里 Copilot 任务会被 core_tasks 直接 continue——
     队列就只剩强制补的 StartUp，noNav 一摘就「没有可执行的任务」
     （2026-11-17 用户实测：直跑模式报 ValueError）。
@@ -234,9 +239,10 @@ def _prepare_ops(stages, file, log):
         snap = accounts.get_account(file)
     except Exception:
         pass
+    band = {'ready': 0, 'borrow': 1, 'train': 2, 'blocked': 3}
     ops = []
     for st in stages:
-        res = copilot.search(st, snap or {}, pages=1, limit=3)
+        res = copilot.search(st, snap or {}, pages=1, limit=6)
         packed = None
         for p in (res.get('stages') or []):
             if ((p.get('stage') or {}).get('code') or '').upper() == st.upper():
@@ -244,10 +250,18 @@ def _prepare_ops(stages, file, log):
                 break
         if packed is None:
             packed = (res.get('stages') or [None])[0]
-        if not packed or not packed.get('ops'):
+        candidates = [p for p in (packed.get('ops') or [])] if packed else []
+        if not candidates:
             raise ValueError('%s 没搜到能用的作业（换 mode=fight 纯刷关，'
                              '或自己去作业站挑一份）' % st)
-        op = packed['ops'][0]
+        candidates.sort(key=lambda o: (band.get(o.get('mode'), 9),
+                                       -(o.get('rating') or 0)))
+        op = candidates[0]
+        mode = op.get('mode')
+        if mode not in ('ready', 'borrow'):
+            log('注意：%s 只搜到「%s」的作业（%s），照排有可能打不过'
+                % (st, {'train': '练度不足', 'blocked': '缺干员'}.get(mode, mode),
+                   '、'.join((op.get('missing') or []) + (op.get('training') or []))[:40]))
         log('%s：用作业 #%s《%s》' % (st, op.get('copilotId'),
                                      (op.get('title') or '')[:36]))
         ops.append({'copilotId': op['copilotId'], 'stageCode': st,
@@ -256,12 +270,20 @@ def _prepare_ops(stages, file, log):
 
 
 def skill_fight(params, log, tid=None):
-    """skill 5：自动战斗——编队 / 借助战 / 吃理智药 / 开打
+    """skill 5：自动战斗——开打前预检 / 编队 / 借助战 / 吃理智药 / 开打
 
-    stages 是关卡列表（一次 MAA 任务全挂上）；mode：
+    stages 是关卡列表；mode：
       copy   按作业站作业逐关抄（缺作业的关报错）
       fight  纯刷关（MAA 自己的编队/理智，不抄作业）
     编队（formation）/ 借助战（support）/ 吃理智药（sanityPotion）默认全开。
+
+    **开打前先预检**（``precheck=True``，默认开，见 stageplan）：把关卡按游戏
+    顺序排、补齐前置关，再拿作业要求比对账号练度。练度不够 / 缺干员 / 没作业
+    的关卡**不排队**，只在日志和返回值里说明原因——用户实测过的坑：练度不够
+    还硬挂 S1~S4，MAA 跑 8 分钟第一关就过不去，后面三关根本没解锁。
+
+    要打 S3 但 S1、S2 没打时，预检会把 S1、S2 一起补进计划（``autoPrereq``，
+    默认开）：不打前置，目标关在地图上是灰的。
 
     **默认不唤醒、不导航**（noNav 直跑）：调用前界面在哪，Copilot 就从哪
     接手（当期活动 MAA 自己认路；老活动请先用 navigate skill 或手动到位）。
@@ -279,6 +301,30 @@ def skill_fight(params, log, tid=None):
     cop = params.get('copilot') or {}
     # wakeup/navigate 显式给了才走全套；默认直跑（2026-11-17 用户要求）
     with_nav = bool(params.get('wakeup') or params.get('navigate'))
+
+    # ---- 开打前预检：能打哪几关、哪几关打不了、为什么 ----
+    plan = None
+    if params.get('precheck', True):
+        # autoPrereq：默认 'auto' = 只补 EX / S / MO 的前置（这几关才是「没通
+        # 就锁着」的高频场景，且最多 8 关）；True = 基础关也一起补；False = 不补。
+        # **纯刷关（fight）默认不补**：那是「刷 S-3 的材料」，补上前置就变成
+        # 每关打一遍，理智全花在已经通关的关上。
+        auto = params.get('autoPrereq', 'auto')
+        with_pre = (auto is not False) and (mode == 'copy' or auto is True)
+        try:
+            plan = stageplan.review(
+                stages, file, mode=mode, log=log,
+                with_prereq=with_pre, fill_base=auto is True)
+        except Exception as e:                  # noqa: BLE001 预检不能拖垮开打
+            log('预检没做成（%s），按原计划直接打' % e)
+            plan = None
+        else:
+            stageplan.log_report(plan, log)
+            if not plan['playable']:
+                raise ValueError('这号一关都打不了：\n' + '\n'.join(
+                    stageplan.details(plan)) + '\n' + '\n'.join(plan['notes']))
+            stages = plan['playable']
+
     spec = {
         'tasks': ['startup', 'copilot' if mode == 'copy' else 'fight'],
         'stages': stages,
@@ -292,15 +338,19 @@ def skill_fight(params, log, tid=None):
         },
         'profile': params.get('profile') or '',
     }
-    # 抄作业必须有作业文件：要么调用方直接给 ops / copilotList，要么按
-    # stages 自动搜。不给的话队列里 Copilot 会被 core_tasks 跳过（见
-    # _prepare_ops 注释），noNav 模式下直接空队列报错。
+    # 抄作业必须有作业文件：预检挑好的 ops 直接用（省一轮作业站查询），
+    # 没有预检结果时再按 stages 现搜。不给的话队列里 Copilot 会被
+    # core_tasks 跳过（见 _prepare_ops 注释），noNav 模式下直接空队列报错。
     if mode == 'copy':
+        pre_ops = (plan or {}).get('ops') or {}
         if params.get('copilotList'):
             spec['copilotList'] = params['copilotList']
         elif params.get('ops'):
             spec['copilotList'] = maaplan.prepare_copilot(
                 params['ops'], _default_maa_dir(), log=log)
+        elif pre_ops and all(s.upper() in pre_ops for s in stages):
+            spec['copilotList'] = maaplan.prepare_copilot(
+                [pre_ops[s.upper()] for s in stages], _default_maa_dir(), log=log)
         else:
             log('搜作业…')
             spec['copilotList'] = _prepare_ops(stages, file, log)
@@ -312,9 +362,40 @@ def skill_fight(params, log, tid=None):
             '（要全套流程就说「带唤醒」）')
     if tail:
         log('切号名：%s' % tail)
-    maaplan.run_core(spec, tid=tid, timeout=params.get('timeout') or None)
-    return {'ok': True, 'mode': mode, 'stages': stages, 'account': file,
-            'noNav': not with_nav}
+    # 兜底超时：MAA 卡在编队/加载界面时不会自己停（用户实测挂过 480 分钟），
+    # 两小时还没跑完就停下，别让整个任务僵尸化。
+    r = maaplan.run_core(spec, tid=tid,
+                         timeout=params.get('timeout') or 2 * 60 * 60)
+
+    # ---- 收尾结算：实际打到第几关、卡在哪 ----
+    failed = (r or {}).get('failed_stage') or ''
+    trail = (r or {}).get('stage_trail') or []
+    trail_u = [str(x).upper() for x in trail]
+    rest = [s for s in stages if str(s).upper() not in trail_u]
+    if failed:
+        raw_why = (r or {}).get('failed_why') or ''
+        why = stageplan.explain_failure(raw_why)
+        log('卡在 %s：%s' % (failed, why or 'MAA 没给原因，看上面的报错'))
+        if rest:
+            log('后面 %s 没打（前一关没过，这些关在游戏里还没解锁）'
+                % '、'.join(rest))
+    elif trail:
+        log('打完了：%s' % '、'.join(trail))
+    elif (r or {}).get('timed_out'):
+        log('跑满 %d 分钟还没结束，已停下%s'
+            % (int((params.get('timeout') or 2 * 60 * 60) // 60),
+               ('；最后一关是 %s' % trail[-1]) if trail else ''))
+    elif not (r or {}).get('ok', True):
+        log('一关都没打到就失败了：%s'
+            % ((r or {}).get('error') or '看上面的报错')[:120])
+    return {'ok': bool((r or {}).get('ok', True)), 'mode': mode, 'stages': stages,
+            'account': file, 'noNav': not with_nav,
+            'played': trail, 'failed': failed,
+            'failedReason': stageplan.explain_failure((r or {}).get('failed_why') or ''),
+            'notPlayed': rest,
+            'blocked': (plan or {}).get('blocked') or [],
+            'precheck': plan,
+            'summary': (plan or {}).get('summary') or ''}
 
 
 # ---------------------------------------------------------------- skip_story
@@ -399,19 +480,29 @@ def skill_signin(params, log, tid=None):
 # ---------------------------------------------------------------- weekly 编排
 
 def _cycle_sort_key(code):
-    """周目排序键：ST-N 最前，普通关按号，EX 最后（MN-ST-1 < MN-1…7 < MN-ST-2
-    < MN-8 < MN-EX-1…，正好是用户给的周目顺序）"""
+    """周目排序键：ST-N 最前，然后 TR 教学 → 普通关按号 → EX → S → MO
+    （MN-ST-1 < MN-1…7 < MN-ST-2 < MN-8 < MN-EX-1…，正好是用户给的周目顺序；
+    S / MO 排在 EX 之后，BB 这种「EX 打完开 S、最后 MO」的活动才不会乱序）"""
     up = (code or '').upper()
     m = re.match(r'^[A-Z0-9]+-ST-(\d+)$', up)
     if m:
         return (0, int(m.group(1)))
+    m = re.match(r'^[A-Z0-9]+-TR-?(\d+)$', up)
+    if m:
+        return (1, 0)
     m = re.match(r'^[A-Z0-9]+-EX-?(\d+)$', up)
     if m:
-        return (2, int(m.group(1)))
+        return (3, int(m.group(1)))
+    m = re.match(r'^[A-Z0-9]+-S-?(\d+)$', up)
+    if m:
+        return (4, int(m.group(1)))
+    m = re.match(r'^[A-Z0-9]+-MO-?(\d+)$', up)
+    if m:
+        return (5, int(m.group(1)))
     m = re.match(r'^[A-Z0-9]+-(\d+)$', up)
     if m:
-        return (1, int(m.group(1)))
-    return (3, 0)
+        return (2, int(m.group(1)))
+    return (6, 0)
 
 
 def _cycle_rows(prefix):
@@ -453,6 +544,7 @@ def skill_weekly(params, log, tid=None):
     log('周目计划（%d 关）：%s' % (len(rows), ' '.join(r['code'] for r in rows)))
 
     done, batch = [], []
+    cur_kind = None
     for r in rows:
         code, story = r['code'], r['story']
         if story:
@@ -465,7 +557,15 @@ def skill_weekly(params, log, tid=None):
                               'accountName': params.get('accountName')}, log)
             done.append(code)
         else:
+            # **跨分区必须断批**：基础关和 EX 是两张地图，MAA 的 Copilot 只认
+            # 当前地图上的关卡名，中间不重新导航就会「找不到 BB-EX-1」。
+            # 以前只按 ST 关断批，活动没有 ST 时整个活动挤成一批，EX 全废。
+            k = stageplan.kind_of(code)
+            if batch and k != cur_kind:
+                _run_fight_batch(batch, params, file, log, done)
+                batch = []
             batch.append(code)
+            cur_kind = k
     if batch:
         _run_fight_batch(batch, params, file, log, done)
     return {'ok': True, 'stages': done, 'account': file}
@@ -488,6 +588,16 @@ def _run_fight_batch(batch, params, file, log, done):
                      'mode': params.get('mode') or 'copy',
                      'accountName': params.get('accountName')}, log)
     done.extend(r.get('stages') or [])
+    # 打不了就停，别把后面的批次继续排下去：周目是按解锁顺序走的，这一关
+    # 过不去，后面同活动的 EX / S 全是灰的，排了也是白跑（用户实测 8 分钟
+    # 0/1）。原因原样抛给上层，助手要把「哪几关打不了、为什么」讲清楚。
+    blocked = r.get('blocked') or []
+    if blocked:
+        raise RuntimeError('这些关打不了，周目停下：' + '；'.join(
+            '%s %s' % (b['code'], b['reason']) for b in blocked))
+    if r.get('failed'):
+        raise RuntimeError('卡在 %s，后面的关没打（%s）'
+                           % (r['failed'], '、'.join(r.get('notPlayed') or []) or '无'))
 
 
 # ---------------------------------------------------------------- 调度

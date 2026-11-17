@@ -350,7 +350,11 @@ TOOLS = [
     _tool('skill_fight',
           '自动战斗：编队 / 借助战 / 吃理智药 / 开打，一次挂一组关。'
           'stages 传关卡代号列表（如 ["MN-1","MN-2"]），mode=copy 抄作业 / '
-          'fight 纯刷关。**默认不唤醒不导航**——界面在哪就从哪直接开打；'
+          'fight 纯刷关。**开打前会自动预检**：按游戏顺序排、把没打的前置关'
+          '补进计划（如要 BB-S-3 会先打 BB-S-1、BB-S-2），再拿作业要求比对'
+          '这号的练度——练度不够/缺干员/没作业的关**不会排队**，结果里的 '
+          'precheck 会列出哪几关打不了、为什么。'
+          '**默认不唤醒不导航**——界面在哪就从哪直接开打；'
           '用户还在主界面 / 游戏没开时要先 skill_navigate 或 skill_wakeup，'
           '或传 wakeup=true 走全套。**调用前先跟用户确认要打哪些关**。'
           '返回 taskId。',
@@ -358,6 +362,10 @@ TOOLS = [
            'mode': {'type': 'string', 'enum': ['copy', 'fight']},
            'wakeup': {'type': 'boolean',
                       'description': 'true=连唤醒+导航一起跑（默认 false 直跑）'},
+           'autoPrereq': {'type': 'boolean',
+                          'description': 'true=基础关的前置也一起补。默认只自动补 '
+                                         'EX/S/MO 的前置；mode=fight 纯刷关默认一关'
+                                         '都不补（刷材料时补上就是白烧理智）'},
            'account': _ACC}, ['stages']),
     _tool('skill_weekly',
           '**周目编排（一站式）**：把一个活动从头打到尾——ST 剧情关自动过、'
@@ -1078,26 +1086,90 @@ def _tool_skill_signin(args, session=None):
             'note': '签到在后台跑，日志里有每个号的结果。'}
 
 
+def _precheck_fight(args):
+    """开打前同步预检（几秒，只问作业站 + 比对账号干员）
+
+    用户实测踩过的坑（2026-11-18）：助手直接挂 BB-S-1~4，账号练度不够，
+    MAA 跑 8 分钟第一关就过不去，后面三关根本没解锁，用户只看到「0/1」。
+    所以这里在**摆确认卡之前**就把结论拿到手：哪几关能打、哪几关打不了、
+    为什么（缺练度 / 缺干员 / 没作业 / 前置没通），确认卡上也写清楚。
+
+    返回 ``{'text', 'playable', 'blocked', 'rep'}``；预检本身出错就返回
+    ``None``（不能因为作业站抽风就不让打）。
+    """
+    from . import stageplan
+    from . import skills as sk
+    stages = [s for s in (args.get('stages') or []) if s]
+    if not stages:
+        return None
+    file = ''
+    try:
+        file = sk._account_file(args.get('account') or '')
+    except Exception:                       # noqa: BLE001 没账号就当匿名预检
+        file = ''
+    try:
+        auto = args.get('autoPrereq', 'auto')
+        mode = args.get('mode') or 'copy'
+        # 纯刷关默认不补前置（补上就变成每关打一遍，理智白花在已通关的关上）
+        rep = stageplan.review(stages, file, mode=mode,
+                               with_prereq=(auto is not False) and
+                               (mode == 'copy' or auto is True),
+                               fill_base=auto is True)
+    except Exception as e:                  # noqa: BLE001
+        return {'text': '预检没做成（%s），按原计划打' % e,
+                'playable': stages, 'blocked': [], 'rep': None}
+    lines = stageplan.details(rep)
+    notes = [n for n in (rep.get('notes') or []) if n]
+    text = '\n'.join(['预检：' + (rep.get('summary') or '')] + lines + notes)
+    return {'text': text, 'playable': rep['playable'],
+            'blocked': rep['blocked'], 'rep': rep}
+
+
 def _skill_via_guard(name, args, session):
     """fight / skip_story / weekly 共用：先摆确认卡，点了才跑后台任务
 
     确认重入的标记是 args 里的 _confirmed：pending 存的 args 带上它，用户
     点「确认执行」再进来时直接跑，不会再摆一次卡。
+
+    自动战斗在摆卡**之前**先做一次预检（见 _precheck_fight），把「这号打
+    不了哪几关」写进确认卡；一关都打不了就直接返回结果，不摆卡也不开打。
     """
     if args.get('_confirmed'):
         tid = skills.run_skill(name, {k: v for k, v in args.items()
                                       if not str(k).startswith('_')})
-        return {'started': True, 'taskId': tid,
-                'note': '已在后台跑。任何一步失败会停并写明卡在哪关，'
-                        '主动告诉用户卡在哪、该怎么处理。'}
+        out = {'started': True, 'taskId': tid,
+               'note': '已在后台跑。任何一步失败会停并写明卡在哪关，'
+                       '主动告诉用户卡在哪、该怎么处理。'}
+        if args.get('_precheckNote'):
+            out['precheck'] = args['_precheckNote']
+        return out
+    args = dict(args)
     desc = {'fight': '自动战斗', 'skip_story': '过剧情关',
             'weekly': '周目编排'}.get(name, name)
-    what = args.get('stages') or args.get('stage') or ''
+    raw = args.get('stages') or args.get('stage') or ''
+    what = '、'.join(raw) if isinstance(raw, (list, tuple)) else str(raw)
+    note = ''
+    if name == 'fight' and not args.get('_prechecked'):
+        chk = _precheck_fight(args)
+        if chk:
+            note = chk['text']
+            if not chk['playable']:
+                return {'error': '这号一关都打不了，没有排队',
+                        'precheck': note,
+                        'note': '把打不了的关和原因原样告诉用户，不要开打；'
+                                '可以建议换作业（find_ops）或先补练度。'}
+            args = dict(args, stages=chk['playable'], _prechecked=True,
+                        _precheckNote=note)
+            what = '、'.join(chk['playable'])
+    summary = '%s：%s' % (desc, what)
+    if note:
+        summary += '\n' + note
     blocked = _guard(session, 'skill_' + name,
-                     dict(args, _skill=name, _confirmed=True),
-                     '%s：%s' % (desc, what))
+                     dict(args, _skill=name, _confirmed=True), summary)
     if blocked:
         blocked['skill'] = name
+        if note:
+            blocked['precheck'] = note
         return blocked
     return _skill_via_guard(name, dict(args, _confirmed=True), session)
 
@@ -1321,6 +1393,14 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
 再对 account_progress 看该账号实际情况，给出优先级。说明这是按作业站使用频率推的。
 
 ## 硬规矩
+- **打关先看预检，别硬挂**：skill_fight 开打前会按顺序补前置关、拿作业要求
+  比对这号练度。返回里有 `precheck` 且列了「练度不足 / 缺干员 / 前置未通」时，
+  **必须先把「哪几关打不了、为什么」原样告诉用户**（练度不够要点出差哪个干员），
+  再说能打的几关已在后台跑。一关都打不了时工具会直接返回 error，别改口说"开打了"。
+- **别把没解锁的关排进队列**：前一关没通，后面的关在地图上是灰的（用户实测：
+  S1/S2 没打，S3 连解锁都不行，排下去只是白等 8 分钟）。用户点名要 S3 时，
+  skill_fight 会自动把 S1、S2 补进计划；只想打指定的那关就传 autoPrereq=false，
+  并在回话里说清「这关可能还没解锁」。
 - **活动代号一律查，不许凭记忆换算**：用户说「孤星」就搜 search_stages("孤星")
   或直接把中文名交给 skill_navigate，**不要自己猜成 SV**（孤星=CW，
   覆潮之下=SV，愚人号=SN，不义之财=CV）。猜错一次就是几轮白跑。

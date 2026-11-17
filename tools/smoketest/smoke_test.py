@@ -2943,6 +2943,138 @@ def check_story_nav(tmp):
     assert len([f for f in os.listdir(tpldir) if f.endswith('.png')]) >= 40
 
 
+# ---------------------------------------------------------------- B36 打关预检
+def check_stage_precheck(tmp):
+    """B36：开打前预检（前置关 / 练度 / 连锁 / 卡在哪一关）
+
+    2026-11-18 用户实测：练度不够还硬挂 BB-S-1~4，MAA 跑 8 分钟 0/1，
+    第一关就打不过，后面三关根本没解锁。预检必须做到：
+      1) 按游戏流程排，目标关的前置关自动补进计划；
+      2) 练度不够 / 缺干员的关不排队；
+      3) 前面的关打不了，后面的关标「前置未通」（不是「能打」）；
+      4) 一关都打不了时，skill_fight 直接报错，不碰设备；
+      5) 真开打了要知道卡在哪一关（作业文件名 → 代号）。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import stageplan, skills, maaplan
+
+    # 1) 顺序与分区：代号后缀决定类型，同活动同类型按序号排
+    assert stageplan.kind_of('BB-S-3') == 's'
+    assert stageplan.kind_of('MN-EX-1') == 'ex'
+    assert stageplan.kind_of('OF-EX1') == 'ex', '火蓝之心没有横杠也要认'
+    assert stageplan.kind_of('BB-MO-1') == 'mo'
+    assert stageplan.kind_of('BB-1') == 'base'
+    assert stageplan.chain('BB-S-3') == ['BB-S-1', 'BB-S-2', 'BB-S-3']
+    assert stageplan.chain('BB-EX-3') == ['BB-EX-1', 'BB-EX-2', 'BB-EX-3']
+    # 主线不展开（一章十几关，用户没这个预期）
+    assert stageplan.chain('1-7') == ['1-7']
+
+    # 2) 要打 S3 时 S1、S2 自动补进计划，并标成「前置」而不是用户点名
+    plan = stageplan.expand(['BB-S-3'])
+    assert [(p['code'], p['prereq']) for p in plan] == [
+        ('BB-S-1', True), ('BB-S-2', True), ('BB-S-3', False)], plan
+    # 跨分区按游戏顺序：EX 在 S 前面
+    codes = [p['code'] for p in stageplan.expand(['BB-S-1', 'BB-EX-2'])]
+    assert codes == ['BB-EX-1', 'BB-EX-2', 'BB-S-1'], codes
+    # 基础关默认**不**补前置（刷 BB-7 的材料不该顺手排 BB-1~BB-6），
+    # 但计划里必须出现「没补前置」的提示；显式 fill_base=True 才补。
+    assert [p['code'] for p in stageplan.expand(['BB-7'])] == ['BB-7']
+    assert len(stageplan.expand(['BB-7'], fill_base=True)) == 7
+    assert any('没补前置' in n for n in stageplan.review(['BB-7'], mode='fight')['notes'])
+
+    # 3) 练度判定 + 前置连锁（不联网，直接喂 lookup 结果）
+    orig = stageplan._lookup
+    try:
+        stageplan._lookup = lambda code, snap, **kw: {
+            'state': 'train' if code == 'BB-S-2' else 'ready',
+            'reason': '练度不足' if code == 'BB-S-2' else '',
+            'notes': ['缺 精二 60'] if code == 'BB-S-2' else [],
+            'op': {'copilotId': 1, 'stageCode': code, 'variant': 'normal'},
+            'rating': 9, 'title': 'x'}
+        rep = stageplan.review(['BB-S-4'], '', use_cache=False)
+        states = [(i['code'], i['state']) for i in rep['plan']]
+        assert states == [('BB-S-1', 'ready'), ('BB-S-2', 'train'),
+                          ('BB-S-3', 'locked'), ('BB-S-4', 'locked')], states
+        assert rep['playable'] == ['BB-S-1'], rep['playable']
+        assert [b['code'] for b in rep['blocked']] == ['BB-S-2', 'BB-S-3', 'BB-S-4']
+        assert 'BB-S-2' in rep['blocked'][0]['reason'] or \
+            rep['blocked'][0]['reason'] == '练度不足'
+    finally:
+        stageplan._lookup = orig
+
+    # 4) 一关都打不了：直接报错，绝不能把空队列交给 MAA
+    orig_rev = stageplan.review
+    orig_acc = skills._account_file
+    try:
+        stageplan.review = lambda stages, *a, **k: {
+            'plan': [], 'playable': [], 'blocked': [{'code': 'BB-S-1',
+                                                     'reason': '练度不足',
+                                                     'notes': []}],
+            'ops': {}, 'notes': ['练度不够'], 'summary': '能打 0 关'}
+        skills._account_file = lambda n: 'x.json'
+        try:
+            skills.skill_fight({'stages': ['BB-S-1']}, lambda *_: None)
+        except ValueError as e:
+            assert '一关都打不了' in str(e), e
+        else:
+            raise AssertionError('一关都打不了还继续排队了')
+
+        # 4.1) 纯刷关（fight）默认不补前置：刷 S-3 的材料不该顺手打 S-1、S-2
+        cap = {}
+
+        def fake_review(stages, *a, **k):
+            cap.update(k)
+            return {'plan': [], 'playable': [], 'blocked': [],
+                    'ops': {}, 'notes': [], 'summary': 'x'}
+        stageplan.review = fake_review
+        try:
+            skills.skill_fight({'stages': ['BB-S-3'], 'mode': 'fight',
+                                'account': 'x.json'}, lambda *_: None)
+        except ValueError:
+            pass
+        assert cap.get('with_prereq') is False, cap
+        cap.clear()
+        try:
+            skills.skill_fight({'stages': ['BB-S-3'], 'mode': 'copy',
+                                'account': 'x.json'}, lambda *_: None)
+        except ValueError:
+            pass
+        assert cap.get('with_prereq') is True, cap
+    finally:
+        stageplan.review = orig_rev
+        skills._account_file = orig_acc
+
+    # 5) 卡在哪一关：作业文件名 → 代号（MAA 只给文件路径）
+    assert maaplan._stage_of_file({'file_name': r'C:\x\BB-S-3_10531.json'}) == 'BB-S-3'
+    assert maaplan._stage_of_file(
+        {'file_name': 'BB-S-3_10531.json'},
+        {'by_file': {'BB-S-3_10531.json': 'BB-S-3'}}) == 'BB-S-3'
+    assert 'failed_stage' in inspect.getsource(maaplan.run_core), \
+        'run_core 要回报卡在哪一关'
+
+    # 6) 失败原因要翻译成人话（认不出来就原样返回，不许瞎猜）
+    assert '解锁' in stageplan.explain_failure('关卡未解锁')
+    assert '练度' in stageplan.explain_failure('未达到三星')
+    assert stageplan.explain_failure('') == ''
+
+    # 7) 助手侧：确认卡里必须先写清「哪几关打不了」，一关都打不了就别摆卡
+    from core import agent
+    orig_rev2 = stageplan.review
+    try:
+        stageplan.review = lambda *a, **k: {
+            'plan': [{'code': 'BB-S-1', 'state': 'train', 'reason': '练度不足',
+                      'notes': ['星熊 需 精二 60 级'], 'prereq': False,
+                      'kind': 's', 'story': False}],
+            'playable': [], 'blocked': [{'code': 'BB-S-1', 'reason': '练度不足',
+                                         'notes': []}],
+            'ops': {}, 'notes': [], 'summary': '能打 0 关'}
+        out = agent._skill_via_guard('fight', {'stages': ['BB-S-1']}, None)
+        assert out.get('error') and 'precheck' in out, out
+        assert '练度不足' in out['precheck'], out['precheck']
+    finally:
+        stageplan.review = orig_rev2
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -2995,6 +3127,7 @@ def main():
         r.check('B33 任务编排（GUI 队列剔除 Copilot/直连序列/档案隔离）', lambda: check_maaplan(tmp))
         r.check('B34 活动关导航（区域行号/页面判别/主线关不点）', lambda: check_stagenav(tmp))
         r.check('B35 老故事集导航（曲谱入口/卡片模板/EX 切换）', lambda: check_story_nav(tmp))
+        r.check('B36 打关预检（前置关/练度/连锁/卡在哪关）', lambda: check_stage_precheck(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
