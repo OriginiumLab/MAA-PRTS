@@ -33,7 +33,8 @@ from . import resources
 
 # 代号后缀 → 分区类型。EX 与数字之间可能没有横杠（火蓝之心 OF-EX1）。
 # HX 是 EX 分区里的另一批关（GT-EX / GT-HX 共用 ``act13d2_zone2``），归一成 ex。
-_KIND_RE = re.compile(r'-(EX|HX|MO|ST|TR|S)-?(\d+)$')
+# F 是火蓝之心第二区那批（OF-F1~4），自己一个分区、不并进 EX 的链。
+_KIND_RE = re.compile(r'-(EX|HX|MO|ST|TR|F|S)-?(\d+)$')
 
 # 作业站一次查询的缓存：同一 (账号, 关卡) 十分钟内不重复问。
 # 预检和真正下载作业各查一次的话，4 关就是 8 次网络请求，纯浪费。

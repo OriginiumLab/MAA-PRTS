@@ -73,13 +73,39 @@ y=(y-38)÷1.5（38 是窗口标题栏高度，截图带标题栏时）。
 写好后跑 `python tools/smoketest/smoke_test.py`，B35 会检查图标数量、坐标
 范围和左右间距。
 
-内置已标定 17 个活动（2026-11-18 从真机截图分两批标定）：DM / WD / BB / GO /
-GA / HE / MT / BI / RS / PV / MN / NL / HS / OR / CW / DV / MB。没标定的活动：
-EX 退回老的单点 `exSwitch`，S / MO 会明确报错让你补坐标——**别让它瞎点**。
+内置已标定 35 个活动（2026-11-18 从真机截图分三批标定）：DM / WD / BB / GO /
+GA / HE / MT / BI / RS / PV / MN / NL / HS / OR / CW / DV / MB，以及第三批的
+SV / BP / EP / TW / LE / ZT / FC / EA / OF / RI / DH / IC / SL / AS / AT /
+CB / CV / AD。没标定的活动：EX 退回老的单点 `exSwitch`，S / MO 会明确报错让你
+补坐标——**别让它瞎点**。
 
 其中 CW 只标了前 2 格（未来将至 / 过往未尽）：第 3 格「紧握当下」那套 UI 不是
 常规战斗列表，MAA 跑不了 CW-S，标了反而会把它点开，所以故意留空并让
 `goto_subzone` 报「只标了 2 个」。
+
+第三批里有几种长得不一样的界面，都按「图标中心」量，下标含义不变：
+
+| 界面长相 | 活动 | 说明 |
+|---|---|---|
+| 一排圆形/菱形徽记 | TW / ZT / DH / IC / SL / AS / AT | 一格一个分区，选中会亮 |
+| 左边活动横牌 + 右边 EX | SV / BP / EP / EA / RI / AD / LE / FC | 横牌 = 基础区，也当一格点（归位用） |
+| 「地区切换」小面板 | OF | 三个小方块 ①②EX，OF-F 在第 2 格 |
+| 城区 / 区域选项卡 | CB / CV | 两个大页签，第 2 个是 EX 那批 |
+
+#### zoneRowByCode：界面格数和资源库分区数对不上时硬指
+
+`zone_rows_of()` 默认按资源库 `zoneId` 排序算「第几格」。有两个例外：
+
+| 代号前缀 | 指到 | 为什么 |
+|---|---|---|
+| `SV-EX` | 1 | SV 复刻过，资源库里同时收着原版 `act10d5_zone1` 和复刻的 `act11sre_zone1`，同一活动排出 3 个 zone，EX 被算成第 3 格，界面上只有两格 |
+| `IC-P` | 0 | IC-P-1 / IC-P-2 在资源库里自成一区（zone4 / zone5），界面上仍挂在基础区那张图里 |
+
+```json
+{"zoneRowByCode": {"SV-EX": 1, "IC-P": 0}}
+```
+
+前缀按**整段**匹配（`IC-P` 认 `IC-P-1`，不认 `IC-PX-1`）。
 
 #### exSwitchByEvent：只有「基础区 + 一个 EX 按钮」的活动
 

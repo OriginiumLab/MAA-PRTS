@@ -2873,7 +2873,17 @@ def check_story_nav(tmp):
                     ('NL-EX-1', 3), ('NL-S-1', 3),
                     ('HS-EX-1', 3), ('HS-S-1', 3), ('HS-MO-1', 3),
                     ('OR-EX-1', 3), ('OR-S-1', 3), ('OR-MO-1', 3),
-                    ('CW-EX-1', 2), ('DV-EX-1', 2), ('MB-EX-1', 2)):
+                    ('CW-EX-1', 2), ('DV-EX-1', 2), ('MB-EX-1', 2),
+                    # 2026-11-18 第三批（老故事集剩下这批，用户逐活动截图标的）
+                    ('SV-EX-1', 2), ('BP-EX-1', 2), ('EP-EX-1', 2),
+                    ('TW-EX-1', 3), ('TW-MO-1', 3), ('LE-EX-1', 2),
+                    ('ZT-EX-1', 3), ('ZT-S-1', 3), ('FC-EX-1', 2),
+                    ('EA-EX-1', 2), ('OF-EX1', 3), ('OF-F1', 3),
+                    ('RI-EX-1', 2), ('DH-EX-1', 3), ('DH-S-1', 3),
+                    ('IC-EX-1', 3), ('IC-S-1', 3), ('SL-EX-1', 3),
+                    ('SL-MO-1', 3), ('AS-EX-1', 3), ('AS-S-1', 3),
+                    ('AT-EX-1', 3), ('AT-S-1', 3), ('CB-EX1', 2),
+                    ('CV-EX-1', 2), ('AD-EX-1', 2)):
         pts = stagenav.zone_icons_of(code)
         assert len(pts) == n, '%s 应该标定了 %d 个分区图标，实际 %d' % (code, n, len(pts))
         for x, y in pts:
@@ -2886,9 +2896,32 @@ def check_story_nav(tmp):
     # 分区栏式活动：序号要落在资源库算出来的那一格上（错了就点到隔壁分区）
     for code, want in (('NL-EX-1', 1), ('NL-S-1', 2), ('HS-EX-1', 1),
                        ('HS-MO-1', 2), ('OR-EX-1', 1), ('OR-MO-1', 2),
-                       ('CW-EX-1', 1), ('DV-EX-1', 1), ('MB-EX-1', 1)):
+                       ('CW-EX-1', 1), ('DV-EX-1', 1), ('MB-EX-1', 1),
+                       # 第三批
+                       ('SV-EX-1', 1), ('BP-EX-1', 1), ('EP-EX-1', 1),
+                       ('TW-EX-1', 1), ('TW-MO-1', 2), ('LE-EX-1', 1),
+                       ('ZT-EX-1', 1), ('ZT-S-1', 2), ('FC-EX-1', 1),
+                       ('EA-EX-1', 1), ('OF-EX1', 2), ('OF-F1', 1),
+                       ('RI-EX-1', 1), ('DH-EX-1', 1), ('DH-S-1', 2),
+                       ('IC-EX-1', 1), ('IC-S-1', 2), ('SL-EX-1', 1),
+                       ('SL-MO-1', 2), ('AS-EX-1', 1), ('AS-S-1', 2),
+                       ('AT-EX-1', 1), ('AT-S-1', 2), ('AT-MO-1', 2),
+                       ('CB-EX1', 1), ('CV-EX-1', 1), ('AD-EX-1', 1)):
         assert stagenav.zone_rows_of(code) == want, \
             ('分区序号错了：%s → %s' % (code, stagenav.zone_rows_of(code)))
+
+    # OF 是「地区切换」面板：①基础 / ②OF-F / EX，三格都是按钮
+    assert stagenav.zone_kind('OF-F1') == 'f', stagenav.zone_kind('OF-F1')
+    assert stagenav.zone_kind('OF-EX1') == 'ex'
+    # SV 复刻过，资源库里两套基础区都收着，EX 排出来会是第 3 格；界面上只有
+    # 两格，靠 zoneRowByCode 硬指。IC-P-1/P-2 同理（自成一区，界面挂在基础区）。
+    assert stagenav.zone_rows_of('SV-EX-1') == 1, stagenav.zone_rows_of('SV-EX-1')
+    assert stagenav.zone_rows_of('SV-1') == 0
+    assert stagenav.zone_rows_of('IC-P-1') == 0, stagenav.zone_rows_of('IC-P-1')
+    # 前缀要按整段匹配：'TW-S' 不能把 TW-ST-1 也算进去，'IC-P' 不能认 IC-PX
+    assert stagenav._row_override('TW-S-1') is None
+    assert stagenav._row_override('IC-P-1') == 0
+    assert stagenav._row_override('IC-PX-1') is None
 
     # 只有「基础区 + 一个 EX 按钮」的活动：不进 zoneIcons，按活动覆盖单点。
     # 这类界面上右边那块是活动名/副标题，不是格子，硬按分区栏下标点会点空。

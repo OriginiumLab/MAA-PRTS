@@ -132,6 +132,54 @@ DEFAULT_POINTS = {
         'DV': [[1067, 608], [1191, 608]],
         # MB 超狱计划（基础） / 狱中生活（EX）
         'MB': [[1008, 608], [1170, 608]],
+        # ---- 2026-11-18 第三批（老故事集，用户逐活动截图标注）----
+        # SV 荒败盐风（基础横牌） / ⤬-EX
+        'SV': [[1033, 608], [1153, 608]],
+        # BP 信标投放 / EX 防线巩固
+        'BP': [[1010, 613], [1175, 613]],
+        # EP 盐漠开航 / 穿越骸礁（EX）
+        'EP': [[1030, 613], [1179, 613]],
+        # TW 议事高塔 / 沉寂边陲（EX） / 冬灵栈道（MO）
+        'TW': [[880, 611], [1027, 611], [1151, 611]],
+        # LE 夕照大厅 / 小巷深处（EX）
+        'LE': [[1039, 609], [1193, 609]],
+        # ZT 朝见双塔 / 恩典永恒（EX） / 权威无情（S）
+        'ZT': [[901, 623], [1053, 623], [1195, 623]],
+        # FC 荒烟林沼 / 记忆灰烬（EX）
+        'FC': [[1020, 606], [1163, 606]],
+        # EA 摧朽的影（基础横牌） / 将熄的火（EX）
+        'EA': [[933, 621], [1163, 621]],
+        # OF 地区切换面板：① 基础 / ② OF-F / EX
+        'OF': [[1013, 612], [1099, 612], [1181, 612]],
+        # RI 大酋长之路（基础横牌） / 嘉维尔足迹（EX）
+        'RI': [[970, 616], [1157, 616]],
+        # DH 基础（蓝菱形横牌） / 粉 EX / 雪耻（S·MO）
+        'DH': [[993, 609], [1120, 609], [1220, 609]],
+        # IC 后院工坊（黄三角） / EX（蓝三角） / 塔（S·MO）
+        'IC': [[930, 615], [1040, 615], [1177, 615]],
+        # SL 温泉假日（基础横牌） / EX / 塔（S·MO）
+        'SL': [[985, 610], [1080, 610], [1217, 610]],
+        # AS 市民花园 / 丰获集会（EX） / 藏珍宝库（S·MO）
+        'AS': [[980, 619], [1087, 619], [1193, 619]],
+        # AT 不夜街区（基础横条） / 锻冶旧迹（EX） / 绝缘石阶（S·MO）
+        'AT': [[867, 594], [1100, 594], [1207, 594]],
+        # CB 两个城区选项卡：D 下城区 / E 东部郊区（EX）
+        'CB': [[1000, 586], [1200, 586]],
+        # CV 两个 AREA 选项卡：AREA 1 苍白平台 / AREA 2 黑色艏舰（EX）
+        'CV': [[933, 607], [1150, 607]],
+        # AD 演出开始（基础横牌） / EX 为戏剧，为永恒
+        'AD': [[953, 613], [1153, 613]],
+    },
+    # 个别关卡的界面位置和资源库的 zoneId 排序对不上时，按代号前缀硬指到第几格
+    # （0 起）。前缀按「整段」匹配：'SV-EX' 认 SV-EX-1，不认 SV-EXFOO。
+    'zoneRowByCode': {
+        # SV 是复刻过的老活动，资源库里同时收了原版 act10d5_zone1 和复刻的
+        # act11sre_zone1，同一活动的 zone 排出来有 3 个，EX 被算成第 3 格；
+        # 界面上只有「基础 / EX」两格。
+        'SV-EX': 1,
+        # IC-P-1 / IC-P-2 在资源库里自成一区（zone4 / zone5），界面上还是挂在
+        # 基础区那张图里，按第 1 格走。
+        'IC-P': 0,
     },
     # 老的单点（EX 在最右边的活动）：没有分区图标表的活动退回这里
     'exSwitch': [1199, 620],
@@ -636,18 +684,42 @@ def zone_rows_of(stage_code):
 
     主线关返回 None：``1-7`` 这类纯数字开头，或 ``S4-1`` / ``R8-2`` 这种
     「1 个字母 + 章节号」——那不是活动关，MAA 自己能找。
+
+    第 0 步是 ``zoneRowByCode`` 硬指：资源库的 zone 排序对个别活动不靠谱
+    （复刻活动会把原版的基础区再收一份进来，界面上根本没这一格），那种情况
+    按代号前缀直接指定第几格，别再算。
     """
     from . import resources
 
     if not stage_code:
         return None
+    hit = _row_override(stage_code)
+    if hit is not None:
+        return hit
     try:
         rows = resources._stages(True)
     except Exception:
         rows = []
 
     sid = next((s['stageId'] for s in rows if s.get('code') == stage_code), None)
+    mine = next((s.get('zoneId') for s in rows if s.get('code') == stage_code), None)
+    # 按 **zoneId 的前缀**分组，不按 stageId：老活动（火蓝之心）的 stageId 是
+    # ``a003_ex01`` 这种，和 zoneId ``act11d7_zone3`` 对不上，按 stageId 分组
+    # 会直接滑到兜底分支（OF-EX 因此被算成第 2 格）。zoneId 前缀才是同一个
+    # 活动区域列表的归属。
+    # 主线 / 主线磨难关要当主线处理：它们的 stageId 是 ``main_15-02`` /
+    # ``hard_15-01``，但 zoneId 写作 ``act2mainss_zone1``（第二部主线），
+    # 按 zoneId 分组会把 15-3 算成「活动第 1 区」——那就不是主线了。
+    if sid and str(sid).startswith(('main', 'hard')):
+        return None
+    if mine and str(mine).startswith('act') and re.match(r'^[A-Za-z]', stage_code):
+        act = str(mine).split('_')[0]
+        zones = sorted({s.get('zoneId') for s in rows
+                        if str(s.get('zoneId') or '').startswith(act + '_')})
+        if zones and mine in zones:
+            return zones.index(mine)
     if sid and str(sid).startswith('act'):
+        # 兜底（正常走不到）：zoneId 缺失的老数据，退回按 stageId 分组
         act = str(sid).split('_')[0]
         zones = []
         for s in rows:
@@ -656,10 +728,10 @@ def zone_rows_of(stage_code):
             z = s.get('zoneId')
             if z and z not in zones:
                 zones.append(z)
-        mine = next((s.get('zoneId') for s in rows if s.get('stageId') == sid), None)
-        if zones and mine:
+        mine2 = next((s.get('zoneId') for s in rows if s.get('stageId') == sid), None)
+        if zones and mine2:
             try:
-                return sorted(zones).index(mine)
+                return sorted(zones).index(mine2)
             except ValueError:
                 pass
 
@@ -678,10 +750,31 @@ def zone_rows_of(stage_code):
     rest = stage_code[len(m.group(1)):].lstrip('-').upper()
     if rest.startswith('EX') or rest.startswith('HX'):
         return 1
+    if re.match(r'^F\d', rest):        # OF-F1：第二个「地区切换」页
+        return 1
     if rest.startswith('S-') or rest == 'S':
+        return 2
+    if rest.startswith('MO'):
         return 2
     if re.match(r'^\d', rest):
         return 0
+    return None
+
+
+def _row_override(stage_code):
+    """``zoneRowByCode`` 硬指：``'SV-EX'`` 认 ``SV-EX-1``，不认 ``SV-EXFOO``
+
+    按「整段前缀」匹配（前缀后必须是结尾或 ``-``），否则 ``'TW-S'`` 会把
+    ``TW-ST-1`` 也算进去。
+    """
+    upper = (stage_code or '').upper()
+    for key, idx in (points().get('zoneRowByCode') or {}).items():
+        k = str(key).upper()
+        if upper == k or upper.startswith(k + '-'):
+            try:
+                return int(idx)
+            except (TypeError, ValueError):
+                pass
     return None
 
 
@@ -922,17 +1015,17 @@ def is_extra(stage_code):
     return bool(re.search(r'(?:EX|HX)[-_]?\d', (stage_code or '').upper()))
 
 
-# 活动内分区类型：EX 挑战关 / S 特别关 / MO（终局）关 / ST 剧情关 / 基础关。
+# 活动内分区类型：EX 挑战关 / S 特别关 / MO（终局）关 / ST 剧情关 / F 额外关 / 基础关。
 # 代号三种写法都要认：``DM-EX-1``（主流）、``OF-EX1``（火蓝之心那种）、
-# ``BB-S-1``、``DM-MO-1``、``MN-ST-1``。
+# ``BB-S-1``、``DM-MO-1``、``MN-ST-1``、``OF-F1``（火蓝之心的第二区）。
 # HX 是 EX 分区的另一批关（GT-EX-1~3 与 GT-HX-1~3 同属 ``act13d2_zone2``，
 # 界面上共用一个「EX」图标），所以归一成 ``ex``——按 ``ex`` 走完分区图标的
 # 下标和排序都对，只有日志里少一个字母。
-_ZONE_KIND_RE = re.compile(r'-(EX|HX|MO|S|ST)-?\d+$', re.I)
+_ZONE_KIND_RE = re.compile(r'-(EX|HX|MO|ST|S|F)-?\d+$', re.I)
 
 
 def zone_kind(stage_code):
-    """代号 → 分区类型：``ex`` / ``s`` / ``mo`` / ``st`` / ``base``
+    """代号 → 分区类型：``ex`` / ``s`` / ``mo`` / ``st`` / ``f`` / ``base``
 
     这一层只负责「是什么分区」，具体在界面上的第几格由
     :func:`zone_rows_of` 按资源库的 zoneId 排序给出（游戏里那排图标
