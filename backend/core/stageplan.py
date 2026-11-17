@@ -255,13 +255,19 @@ def _lookup(code, snap, acct='', use_cache=True):
                 if best is None or _band(op) < _band(best_op):
                     best, best_op = p, op
             if best_op:
-                state, reason, notes = _op_verdict(best_op, best_op.get('total') or 0)
+                payload = {'copilotId': best_op.get('copilotId'),
+                           'stageCode': code.upper(),
+                           'variant': (best.get('stage') or {}).get('variant')}
+                if snap:
+                    state, reason, notes = _op_verdict(best_op,
+                                                       best_op.get('total') or 0)
+                else:
+                    # 没账号快照就没法判练度。**不能当成「缺干员」**——那会把
+                    # 所有关都判成打不了，用户明明有号却连开打都被拦住。
+                    state, reason, notes = 'unknown', '没账号快照，练度未校验', []
                 out.update(state=state, reason=reason, notes=notes,
                            rating=best_op.get('rating') or 0,
-                           title=best_op.get('title') or '',
-                           op={'copilotId': best_op.get('copilotId'),
-                               'stageCode': code.upper(),
-                               'variant': (best.get('stage') or {}).get('variant')})
+                           title=best_op.get('title') or '', op=payload)
     if use_cache:
         with _CACHE_LOCK:
             _CACHE[key] = (time.time(), out)

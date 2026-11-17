@@ -3044,6 +3044,26 @@ def check_stage_precheck(tmp):
         stageplan.review = orig_rev
         skills._account_file = orig_acc
 
+    # 4.2) 没账号快照时不能把「缺干员」当结论：那会把所有关都拦住
+    from core import copilot as cp
+    orig_search = cp.search
+    try:
+        cp.search = lambda *a, **k: {
+            'mode': 'stage',
+            'stages': [{'stage': {'code': 'BB-S-1', 'variant': 'normal'},
+                        'ops': [{'copilotId': 1, 'mode': 'blocked',
+                                 'missing': ['甲', '乙', '丙'], 'training': [],
+                                 'total': 11, 'rating': 9, 'title': 'x'}],
+                        'best': {'copilotId': 1, 'mode': 'blocked',
+                                 'missing': ['甲', '乙', '丙'], 'training': [],
+                                 'total': 11, 'rating': 9, 'title': 'x'}}]}
+        rep = stageplan.review(['BB-S-1'], '', use_cache=False)
+        assert rep['playable'] == ['BB-S-1'], rep
+        assert not rep['blocked'], rep['blocked']
+        assert rep['plan'][0]['state'] == 'unknown'
+    finally:
+        cp.search = orig_search
+
     # 5) 卡在哪一关：作业文件名 → 代号（MAA 只给文件路径）
     assert maaplan._stage_of_file({'file_name': r'C:\x\BB-S-3_10531.json'}) == 'BB-S-3'
     assert maaplan._stage_of_file(
