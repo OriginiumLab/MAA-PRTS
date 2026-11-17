@@ -71,7 +71,7 @@ def build(src, generated_at='', source_commit=''):
     chars = load_json(ct)
     print('悖论模拟关卡 %d 条，干员表 %d 条' % (len(stages), len(chars)))
 
-    out, no_name, no_stage, dup = {}, [], [], {}
+    out, no_name, no_stage, dup, bad_unlock = {}, [], [], {}, []
     for cid, row in sorted(stages.items()):
         stage = row.get('stageId') or ''
         if not stage:
