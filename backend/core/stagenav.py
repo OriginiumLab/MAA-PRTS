@@ -92,11 +92,34 @@ DEFAULT_POINTS = {
     'tabProgress': [741, 45],
     # 活动详情页右下「进入活动」
     'enterActivity': [1140, 616],
-    # 活动地图右下角那个圆形的「EX」按钮：点一下从普通关切到 EX 关（再点
-    # 一下切回去，按钮上的字会变成「STORY」）。
-    # 2026-11-17 在 MN 上实测：1920 口径 (1799,930) → /1.5。
-    # 老故事集的 EX 关都靠这一个按钮，位置一样；万一某个活动挪了位置，
-    # 用 config/nav.json 覆盖，或者按活动前缀写 exSwitchByEvent。
+    # 活动地图右下角那一排「分区图标」：**不是一个 EX 开关，是 2~4 个分区**
+    # （基础关 / EX / S / MO），点哪个就切到哪个分区，选中的那个会亮起来。
+    # 以前只记了一个点（exSwitch），默认活动里 EX 恰好在最右边那个位置才蒙对；
+    # 三图标的（DM / BB / MT / PV）EX 在中间，按单点会点到基础区或 S 区。
+    # 表里按活动前缀给**一串点**，下标就是分区序号（与 zone_rows_of 的
+    # zoneId 排序一致）：第 0 个基础关、第 1 个 EX、第 2 个 S/MO……
+    # 坐标是 2026-11-18 从用户真机截图（1920×1080，去掉 38px 标题栏）量的：
+    # 图标横坐标用「列方向灰度标准差」定位（图标是花纹密集的徽记，背景是
+    # 平滑插画），纵坐标统一 1920 口径 y≈950（图标行高度一样，徽记高约
+    # 110px，落在 900~1000 都能点中）。1280 口径 = x·2/3，y = (950-38)·2/3。
+    # 某个活动挪了位置：往这里加/改一行即可，也可以在 config/nav.json 里
+    # 用同名的 zoneIcons 覆盖（用户配置优先）。
+    'zoneIcons': {
+        'DM': [[923, 608], [1026, 608], [1143, 608]],
+        'WD': [[1063, 608], [1191, 608]],
+        'BB': [[935, 608], [1075, 608], [1209, 608]],
+        'GO': [[1029, 608], [1169, 608]],
+        'GA': [[1011, 608], [1135, 608]],
+        'HE': [[1013, 608], [1142, 608]],
+        'MT': [[944, 608], [1031, 608], [1191, 608]],
+        'BI': [[1048, 608], [1209, 608]],
+        'RS': [[1046, 608], [1201, 608]],
+        'PV': [[816, 608], [1002, 608], [1198, 608]],
+        # MN 2026-11-17 单点实测有效（EX 在右数第一个）：补上基础区那个点，
+        # 让「先归位再切」的流程也能用
+        'MN': [[1019, 608], [1199, 608]],
+    },
+    # 老的单点（EX 在最右边的活动）：没有分区图标表的活动退回这里
     'exSwitch': [1199, 620],
     'exSwitchByEvent': {},
 }
@@ -666,9 +689,12 @@ def _navtpl_dirs():
                                  '_internal', 'backend', 'core', 'navtpl'))
     return [d for d in dirs if d and os.path.isdir(d)]
 
-# 关卡代号形态：CW-1 / MN-EX-1 / 15-3 / TR-1。导航只吃这种形态，别的
-# （活动 id、中文活动名）得先在调用侧换掉，见 skills.norm_stage。
-_STAGE_CODE_RE = re.compile(r'^(?:\d{1,2}|[A-Za-z][A-Za-z0-9]*)(?:-[A-Za-z]+)?-\d+')
+# 关卡代号形态：CW-1 / MN-EX-1 / OF-EX1 / 15-3 / TR-1。导航只吃这种形态，
+# 别的（活动 id、中文活动名）得先在调用侧换掉，见 skills.norm_stage。
+# **`EX` 和数字之间的横杠是可选的**：大部分活动写成 ``MN-EX-1``，火蓝之心
+# （OF）和喧闹法则（CB）写成 ``OF-EX1``——少了这个 ``-?``，这两个活动的 EX
+# 会在形态闸就被判「不是关卡代号」（2026-11-18 查出来）。
+_STAGE_CODE_RE = re.compile(r'^(?:\d{1,2}|[A-Za-z][A-Za-z0-9]*)(?:-[A-Za-z]+)?-?\d+')
 
 # 活动总表：代号 → 中文名。**这是导航功能的底账**（2026-11-17 用真机把
 # 「乐章收录」整个网格扫了一遍：48 张卡片逐个导航进图，读落图上的关卡前缀
@@ -872,6 +898,45 @@ def is_extra(stage_code):
     return bool(re.search(r'EX[-_]?\d', (stage_code or '').upper()))
 
 
+# 活动内分区类型：EX 挑战关 / S 特别关 / MO（终局）关 / ST 剧情关 / 基础关。
+# 代号三种写法都要认：``DM-EX-1``（主流）、``OF-EX1``（火蓝之心那种）、
+# ``BB-S-1``、``DM-MO-1``、``MN-ST-1``。
+_ZONE_KIND_RE = re.compile(r'-(EX|MO|S|ST)-?\d+$', re.I)
+
+
+def zone_kind(stage_code):
+    """代号 → 分区类型：``ex`` / ``s`` / ``mo`` / ``st`` / ``base``
+
+    这一层只负责「是什么分区」，具体在界面上的第几格由
+    :func:`zone_rows_of` 按资源库的 zoneId 排序给出（游戏里那排图标
+    正好是「基础关 → EX → S/MO」这个顺序）。
+    """
+    m = _ZONE_KIND_RE.search((stage_code or '').upper())
+    return m.group(1).lower() if m else 'base'
+
+
+def zone_icons_of(stage_code):
+    """代号 → 该活动分区图标的坐标列表（1280 口径），下标 = 分区序号
+
+    配置优先：``config/nav.json`` 里的 ``zoneIcons`` 覆盖内置表。返回空列表
+    表示「这个活动还没标定过」，调用方要如实报错或者退回老的单点逻辑。
+    """
+    p = points()
+    tbl = p.get('zoneIcons') or {}
+    m = re.match(r'^([A-Za-z][A-Za-z0-9]*)', stage_code or '')
+    if not m:
+        return []
+    v = tbl.get(m.group(1).upper()) or tbl.get(m.group(1))
+    out = []
+    for it in (v or []):
+        if isinstance(it, (list, tuple)) and len(it) >= 2:
+            try:
+                out.append((int(it[0]), int(it[1])))
+            except Exception:
+                continue
+    return out
+
+
 def ex_point(stage_code):
     """EX 切换按钮的位置；按活动前缀可以单独覆盖"""
     p = points()
@@ -885,6 +950,153 @@ def ex_point(stage_code):
     if isinstance(v, list) and len(v) == 2:
         return v[0], v[1]
     return 1199, 620
+
+
+def _icon_profile(im, y_hint_1280):
+    """图标行那一横带的「逐列灰度标准差」剖面（灰度 PIL 图，返回 ``(w, x0, prof)``）
+
+    图标是花纹密集的徽记 → 列方差高；背景是平滑插画 → 接近 0。分区图标都在
+    画面右侧，所以从 0.48w 开始算。返回值里 ``x0`` 是剖面起点（1920 原始
+    像素），下标 i 对应的横坐标是 ``x0 + i``。
+    """
+    w, h = im.size
+    cy = int(round(y_hint_1280 * h / 720.0))
+    half = int(h * 0.11)
+    y0, y1 = max(0, cy - half), min(h, cy + half)
+    if y1 - y0 < 20:
+        return w, 0, []
+    x0 = int(w * 0.48)
+    band = im.crop((x0, y0, w, y1))
+    bw, bh = band.size
+    px = band.load()
+    step = max(1, bh // 70)
+    prof = []
+    for x in range(bw):
+        vals = [px[x, y] for y in range(0, bh, step)]
+        m = sum(vals) / len(vals)
+        prof.append((sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5)
+    k = 9
+    sm = [sum(prof[max(0, i - k):min(bw, i + k + 1)]) /
+          len(prof[max(0, i - k):min(bw, i + k + 1)]) for i in range(bw)]
+    return w, x0, sm
+
+
+def _icon_peaks_im(im, y_hint_1280):
+    """在灰度图上找图标列的峰（1920 原始像素），供 ``_icon_peaks`` 和标定工具用"""
+    w, x0, sm = _icon_profile(im, y_hint_1280)
+    bw = len(sm)
+    if bw < 40:
+        return []
+    mx = max(sm)
+    if mx <= 0:
+        return []
+    gap = int(w * 0.055)
+    cand = [(i + x0, sm[i]) for i in range(10, bw - 10)
+            if sm[i] == max(sm[max(0, i - 8):i + 9]) and sm[i] > 0.30 * mx]
+    cand.sort(key=lambda t: -t[1])
+    keep = []
+    for x, v in cand:
+        if all(abs(x - p) > gap for p, _ in keep):
+            keep.append((x, v))
+    keep.sort()
+    return [x for x, _ in keep]
+
+
+def _icon_peaks(frame, y_hint_1280):
+    """在一帧截图字节里找「分区图标」的横坐标（1920 原始像素），做图像识别用
+
+    做法：取图标行所在的横带，逐列算灰度标准差再平滑，图标是花纹密集的
+    徽记 → 列方差的高峰；背景是平滑插画 → 低谷。找局部极大、最小间距
+    图标宽度的 0.7 倍，丢掉低于最大值 30% 的。
+
+    只用来**校正/校验**配置里的坐标，不用它决定分区顺序：哪一格是 EX 是
+    资源库算出来的（见 :func:`zone_rows_of`），这里只回答「图标在哪」。
+    """
+    from PIL import Image
+    if not frame:
+        return []
+    try:
+        im = Image.open(io.BytesIO(frame)).convert('L')
+    except Exception:
+        return []
+    return _icon_peaks_im(im, y_hint_1280)
+
+
+def _icon_half(icons, idx):
+    """图标校正窗口的半宽（1280 口径）：相邻图标间距的一半再打点折
+
+    窗口开太大会把隔壁图标也算进质心——MT 的「谒见神祇」离左边只有 87px
+    （1280 口径），用默认 ±58 的窗口质心会偏 32px。没有邻居（单图标活动）
+    时返回 None，让 :func:`_snap_icon` 用默认值。
+    """
+    gaps = []
+    if idx > 0:
+        gaps.append(icons[idx][0] - icons[idx - 1][0])
+    if idx + 1 < len(icons):
+        gaps.append(icons[idx + 1][0] - icons[idx][0])
+    if not gaps:
+        return None
+    return max(24, min(gaps) * 0.45)
+
+
+def _snap_icon(frame, point, log=None, half_1280=None):
+    """确认配置里的图标点在这一屏上真的是图标（返回 1280 口径点）
+
+    这是「固定位置 + 图像识别」里的识别那一半，职责只有两个：
+
+    1. **确认**配置点落在图标上——图标是一整块花纹密集的徽记，逐列灰度
+       标准差很高；背景是平滑插画，接近 0。判据：窗口内最大列标准差 ≥ 15。
+    2. **兜底重定位**——那个地方什么都没有时，整段找一遍图标列；只有整体
+       挪位超过 6% 屏宽（≈115px / 1920）才接受，否则保持配置点。
+
+    **为什么不做「微调」**：拿质心/找峰去修正一个本来准确的坐标时，图标
+    花纹不对称会带来 20~35px 的系统偏差（2026-11-18 用 10 个活动的真机
+    截图验过），微调只会把点击带偏，不如认准实测坐标。
+    """
+    from PIL import Image
+    log = log or (lambda *_: None)
+    if not frame:
+        return point
+    try:
+        im = Image.open(io.BytesIO(frame)).convert('L')
+    except Exception:
+        return point
+    w, h = im.size
+    want = point[0] * w / 1280.0
+    cy = int(round(point[1] * h / 720.0))
+    band_h = int(h * 0.11)
+    y0, y1 = max(0, cy - band_h), min(h, cy + band_h)
+    if y1 - y0 < 20:
+        return point
+    half = int((half_1280 or 58) * w / 1280.0)   # 1920 口径默认 ±87px
+    x0, x1 = max(0, int(want - half)), min(w, int(want + half))
+    if x1 - x0 < 20:
+        return point
+    band = im.crop((x0, y0, x1, y1))
+    bw, bh = band.size
+    px = band.load()
+    step = max(1, bh // 60)
+    prof = []
+    for x in range(bw):
+        vals = [px[x, y] for y in range(0, bh, step)]
+        m = sum(vals) / len(vals)
+        prof.append((sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5)
+    mx = max(prof) if prof else 0
+    if mx >= 15:
+        # 配置位置上有花纹密集的东西：就是图标。不动（见上面的偏差说明）
+        return point
+    # 这一段太平：图标行可能整体挪了。整段搜一遍，只在漂移很大时才改点。
+    peaks = _icon_peaks(frame, point[1])
+    if not peaks:
+        log('分区图标位置看不出图标（纹理 %.0f），按配置点走' % mx)
+        return point
+    near = min(peaks, key=lambda x: abs(x - want))
+    if abs(near - want) < w * 0.032:
+        return point
+    nx = int(round(near * 1280.0 / w))
+    log('分区图标行整体挪位：x %d → %d（配置可能过期了，建议重新标定）'
+        % (point[0], nx))
+    return (nx, point[1])
 
 
 def at_home(touch):
@@ -1532,19 +1744,83 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
             return False, '跳过剧情后落在了主界面，不在活动关卡地图'
 
 
-    # 要的是 EX 关：进地图后点右下角那个圆按钮切过去（点一下切换形态，
-    # 再点一下切回普通关，所以只点一次，别写循环）
-    if is_extra(stage_code):
-        nx, ny = ex_point(stage_code)
-        log('切 EX 关：点右下角 EX 按钮')
-        touch.tap(nx, ny)
-        time.sleep(MAP_DELAY)
-        if not _moved(shot_map, touch.shot()):
-            return False, ('EX 按钮没反应（这个活动的 EX 切换点可能不在右下角，'
-                           '往 config/nav.json 的 exSwitchByEvent 写一个）')
-        return True, '已进入该活动的 EX 关卡地图'
+    # 要的是 EX / S / MO 关：进地图后还要切「分区」。这一步**独立**成
+    # goto_subzone，普通关（第 1 个分区）在这里直接返回，主流程零改动。
+    ok, why = goto_subzone(touch, stage_code, log)
+    if not ok:
+        return False, why
+    return True, why
 
-    return True, '已进入该活动的关卡地图'
+
+def goto_subzone(touch, stage_code, log=None):
+    """把活动地图切到目标关卡所在的分区（EX / S / MO）
+
+    活动地图右下角是**一排分区图标**（2~4 个：基础关 / EX / S / MO），
+    点哪个切哪个，不是以前以为的「一个 EX 开关点一下翻面」。哪一格对应
+    哪个分区由资源库的 zoneId 排序决定（见 :func:`zone_rows_of`），坐标
+    由 :func:`zone_icons_of` 给（用户截图量的，config/nav.json 可覆盖）。
+
+    进入方式固定成「**先点第 1 格归位，再点目标格**」：游戏会记住上次停在
+    哪个分区，只点目标格的话，「本来就在」和「点空了」都表现为画面不变，
+    判不清。所以**连普通关也要归位**——上一次导航停在 EX 分区的话，紧接着
+    导航 `DM-1` 不归位就会去 EX 分区里找基础关，必然找不到。
+
+    坐标不是硬信：点之前用 :func:`_snap_icon` 确认配置位置真的是图标（顺序
+    由资源库算，不靠识别），点完用画面变化 + 再点一次的稳定性确认。
+    """
+    log = log or (lambda *_: None)
+    idx = zone_rows_of(stage_code)
+    kind = zone_kind(stage_code)
+    icons = zone_icons_of(stage_code)
+    label = {'ex': 'EX', 's': 'S', 'mo': 'MO', 'st': 'ST'}.get(kind, kind.upper())
+
+    if not icons:
+        # 没标定过这个活动：EX 退回老的单点（历史行为），S/MO 只能如实报错，
+        # 因为老的单点根本没有它们的位置。
+        if kind == 'ex' and idx:
+            nx, ny = ex_point(stage_code)
+            log('「%s」没有分区图标表，退回老的单点 EX (%d,%d)' % (stage_code, nx, ny))
+            before = _settled_shot(touch)
+            touch.tap(nx, ny)
+            time.sleep(MAP_DELAY)
+            if not _moved(before, _settled_shot(touch)):
+                return False, ('EX 按钮没反应（这个活动的分区图标位置可能不同，'
+                               '往 config/nav.json 的 zoneIcons 里补一组坐标）')
+            return True, '已进入该活动的 EX 关卡地图'
+        if idx:
+            return False, ('「%s」是%s关（活动第 %d 个分区），但这个活动还没标定'
+                           '分区图标坐标，没法自动切；用 tools/zone_calib.py 量一张'
+                           '截图写进 config/nav.json 的 zoneIcons（见 docs/config.md）'
+                           % (stage_code, label, idx + 1))
+        return True, '已进入该活动的关卡地图'
+
+    if len(icons) <= idx:
+        return False, ('「%s」要切到第 %d 个分区，但 %s 的分区图标只标了 %d 个；'
+                       '补一下 zoneIcons（见 docs/config.md）'
+                       % (stage_code, idx + 1, stage_code.split('-')[0], len(icons)))
+
+    # 1) 归位到第 1 个分区。已经在那儿的话画面不会变，属于正常——不校验。
+    shot = _settled_shot(touch)
+    base = _snap_icon(shot, icons[0], log, _icon_half(icons, 0))
+    touch.tap(*base)
+    time.sleep(MAP_DELAY)
+    if not idx:
+        return True, '已进入该活动的关卡地图（基础关分区）'
+
+    # 2) 点目标分区。坐标现确认一次（活动加内容 / 换分辨率都会偏几十像素）。
+    shot = _settled_shot(touch)
+    target = _snap_icon(shot, icons[idx], log, _icon_half(icons, idx))
+    touch.tap(*target)
+    time.sleep(MAP_DELAY)
+    if not _moved(shot, _settled_shot(touch)):
+        # 两种可能：本来就停在目标分区（归位后点同一格），或者点空了。
+        log('点了第 %d 个分区图标画面没变，偏移 10px 再试一次' % (idx + 1))
+        touch.tap(target[0] + 10, target[1])
+        time.sleep(MAP_DELAY)
+        if not _moved(shot, _settled_shot(touch)):
+            log('还是没变：判定本来就停在%s分区' % label)
+            return True, '已在第 %d 个（%s）分区' % (idx + 1, label)
+    return True, '已切到第 %d 个（%s）分区' % (idx + 1, label)
 
 
 

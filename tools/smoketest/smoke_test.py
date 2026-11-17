@@ -2837,13 +2837,56 @@ def check_story_nav(tmp):
                        ('RI-1', 'RI'), ('SV-1', 'SV'), ('WR-1', 'WR')):
         assert stagenav.tpl_path_of(code), '缺卡片模板：%s' % name
 
-    # 5) EX 关识别与切换点（老故事集的 EX 关全靠地图右下角那个圆按钮）
+    # 5) EX / S / MO 关识别与「分区图标」坐标
+    #    活动地图右下角不是「一个 EX 开关」，是 2~4 个分区图标（基础 / EX /
+    #    S / MO），点哪个切哪个；EX 也不总在最右边（DM/BB/MT/PV 在中间）。
     assert stagenav.is_extra('MN-EX-1') is True
     assert stagenav.is_extra('MN-EX-8') is True
     assert stagenav.is_extra('MN-7') is False
     assert stagenav.is_extra('TL-S-1') is False
     assert stagenav.ex_point('MN-EX-1') == (1199, 620), stagenav.ex_point('MN-EX-1')
     assert stagenav.ex_point('WD-EX-3') == (1199, 620)
+
+    # 分区类型：EX / S / MO / ST / 基础
+    assert stagenav.zone_kind('DM-EX-1') == 'ex', stagenav.zone_kind('DM-EX-1')
+    assert stagenav.zone_kind('OF-EX1') == 'ex', '火蓝之心是 EX1 写法'
+    assert stagenav.zone_kind('BB-S-1') == 's', stagenav.zone_kind('BB-S-1')
+    assert stagenav.zone_kind('MT-S-2') == 's'
+    assert stagenav.zone_kind('DM-MO-1') == 'mo', stagenav.zone_kind('DM-MO-1')
+    assert stagenav.zone_kind('MN-ST-1') == 'st', stagenav.zone_kind('MN-ST-1')
+    assert stagenav.zone_kind('DM-1') == 'base'
+
+    # 分区序号 = 资源库 zoneId 排序（基础 0 / EX 1 / S、MO 2），和界面上
+    # 那排图标的左右顺序一致——这是「不用 OCR 也能选对格子」的根据。
+    for code, want in (('DM-1', 0), ('DM-EX-1', 1), ('DM-MO-1', 2),
+                       ('BB-S-1', 2), ('PV-EX-3', 1), ('GA-EX-1', 1),
+                       ('BB-ST-1', 0), ('MT-S-1', 2)):
+        got = stagenav.zone_rows_of(code)
+        assert got == want, '分区序号错了：%s → %s（应为 %d）' % (code, got, want)
+
+    # 已经标定过的活动：图标数与分区数一致，坐标都在 1280×720 内
+    for code, n in (('DM-EX-1', 3), ('BB-S-1', 3), ('MT-S-1', 3), ('PV-EX-1', 3),
+                    ('WD-EX-1', 2), ('GA-EX-1', 2), ('HE-EX-1', 2),
+                    ('BI-EX-1', 2), ('RS-EX-1', 2), ('GO-EX-1', 2),
+                    ('MN-EX-1', 2)):
+        pts = stagenav.zone_icons_of(code)
+        assert len(pts) == n, '%s 应该标定了 %d 个分区图标，实际 %d' % (code, n, len(pts))
+        for x, y in pts:
+            assert 0 < x < 1280 and 0 < y < 720, ('分区图标坐标越界', code, x, y)
+        # 同一个活动的图标必须左→右有序、且互不重叠（MT 的「谒见神祇」离
+        # 「瞻望圣堂」只有 87px，所以门槛按图标宽度的下限定 70）
+        for a, b in zip(pts, pts[1:]):
+            assert b[0] - a[0] >= 70, ('分区图标间距过小', code, a, b)
+
+    # 切入必须走独立函数，而且要在「进入活动」之后
+    src = inspect.getsource(stagenav.goto_story_activity)
+    assert 'goto_subzone(touch, stage_code' in src, '进地图后要调 goto_subzone 切分区'
+    assert hasattr(stagenav, 'goto_subzone') and callable(stagenav.goto_subzone)
+    sub = inspect.getsource(stagenav.goto_subzone)
+    assert '先归位' in sub or '归位到第 1 个分区' in sub, '要先点第 1 格归位再切目标格'
+    assert '_snap_icon' in sub, '点之前要用图像识别校正图标位置'
+    # 图像识别本身：真图上要能认出图标列（用 2026-11-18 用户截图标定的坐标自检）
+    assert hasattr(stagenav, '_icon_peaks') and hasattr(stagenav, '_snap_icon')
 
     # 6) 扫描覆盖与步长：整张表（主线 + 各 Story Line 分组 + 未归组新活动）
     #    实测 15 屏、约 12000 像素高（1080 口径）。覆盖要留几倍余量，但

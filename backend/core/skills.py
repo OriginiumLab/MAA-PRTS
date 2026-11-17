@@ -15,7 +15,7 @@
   skill        对应能力                                    依托
   ----------  ------------------------------------------  ----------------
   wakeup      唤醒游戏到主界面（按尾号切号）               maaplan StartUp
-  navigate    从主界面导航到任意活动（含 EX）              stagenav.goto_stage_list
+  navigate    从主界面导航到任意活动（含 EX / S / MO）     stagenav.goto_stage_list
   fight       自动战斗：编队 / 借助战 / 吃理智药 / 开打    maaplan.run_core
   skip_story  过剧情关（mn-st-1 这类 ST 关）               stagenav + 跳幕
   signin      森空岛签到（单号 / 全部）                    signin.run
@@ -81,9 +81,10 @@ def _client_of(file):
         return ''
 
 
-# 关卡代号形态：CW-1 / MN-EX-1 / 15-3 / TR-1。**这是唯一能被导航直接消化的
-# 形态**，其余写法都要先换（见 norm_stage）。
-_STAGE_CODE_RE = re.compile(r'^(?:\d{1,2}|[A-Za-z][A-Za-z0-9]*)(?:-[A-Za-z]+)?-\d+')
+# 关卡代号形态：CW-1 / MN-EX-1 / OF-EX1 / 15-3 / TR-1。**这是唯一能被导航
+# 直接消化的形态**，其余写法都要先换（见 norm_stage）。EX 与数字之间那道
+# 横杠是可选的：火蓝之心 / 喧闹法则写成 OF-EX1、CB-EX1。
+_STAGE_CODE_RE = re.compile(r'^(?:\d{1,2}|[A-Za-z][A-Za-z0-9]*)(?:-[A-Za-z]+)?-?\d+')
 
 
 def norm_stage(raw, log=None):
@@ -471,6 +472,17 @@ def skill_weekly(params, log, tid=None):
 
 
 def _run_fight_batch(batch, params, file, log, done):
+    # **周目必须先自己走到位**：老的常驻活动 MAA 资源里没有寻路配置，Copilot
+    # 的 ClickStageName 只在「已经在正确分区的地图上」时才 OCR 得到关卡名；
+    # 直跑的话 EX / S 批次会一直报「找不到关卡」。所以每个批次开打前导航一次
+    # （navigate 内部会连带切分区，见 stagenav.goto_subzone）。
+    if params.get('nav', True):
+        log('—— 导航到 %s ——' % batch[0])
+        try:
+            skill_navigate({'stage': batch[0], 'account': file,
+                            'accountName': params.get('accountName')}, log)
+        except Exception as e:
+            raise RuntimeError('周目导航到 %s 失败：%s' % (batch[0], e))
     log('—— 自动战斗 %s ——' % ' '.join(batch))
     r = skill_fight({'stages': batch, 'account': file,
                      'mode': params.get('mode') or 'copy',
