@@ -687,6 +687,12 @@ def row_sort_key(packed):
 
 def search(keyword, snap, pages=2, min_rating=0, limit=12):
     res = resources.resolve(keyword)
+    if res['mode'] == 'story':
+        # 剧情关没有作业可抄，也不用去问作业站：把这张卡直接给前端，
+        # 它渲染成「看剧情、不可挂机」，顺带告诉用户通关送一颗源石
+        return {'mode': 'story', 'title': res['title'], 'keyword': keyword,
+                'stages': [], 'story': res['stages'][0], 'stories': [],
+                'next': None}
     if not res['stages']:
         # 回退：把关键词当关卡代号问作业站，用返回的 stage_name 反推
         pool = [p for p in _pull({'document': keyword.strip()}, pages=1)
@@ -725,6 +731,9 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
         'title': res['title'],
         'keyword': res['keyword'],
         'stages': results,
+        # 这一段里的剧情关（同活动 / 同章）：结果区拿它提示「挂到那里会停」，
+        # 不进结果行、不参与排序，也不去作业站查
+        'stories': resources.stories_between([s for s, _ in collected]),
         # 「下一关」按钮的数据：按置顶行（用户正在看的难度视角）推进
         'next': resources.next_stage(results[0]['stage']) if results else None,
     }

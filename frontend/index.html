@@ -53,6 +53,7 @@
         <span class="dot"></span>
         <span class="txt">MAA 状态检测中</span>
       </div>
+      <div class="run-strip" id="run-strip"></div>
       <button class="icon-btn" id="btn-settings" title="设置">
         <span class="app-dot" id="app-dot" hidden></span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -79,13 +80,20 @@
       <div class="hero-stats" id="hero-stats"></div>
     </header>
 
-    <!-- 模块菜单：作业获取 / 抽卡统计 / 森空岛签到（终末地账号只留抽卡统计） -->
+    <!-- 模块菜单：作业获取 / 助手 / 抽卡统计 / 森空岛签到（终末地账号只留助手与抽卡统计） -->
     <nav class="modtabs" id="modtabs" role="tablist">
       <button class="modtab active" data-mod="copilot" role="tab" title="按关卡搜作业站作业，比对练度写进 MAA">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 5.5h7l2 2h7v11H4z"/><path d="M8 12h8M8 15.5h5"/>
         </svg>
         作业获取
+      </button>
+      <button class="modtab" data-mod="chat" role="tab" title="内置助手：用大白话让它查进度、排多账号挂机（需要先在设置里配置模型）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.6 9.6 0 0 1-2.8-.4L4 21l1.5-4.2A8.2 8.2 0 0 1 3 11.5 8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/>
+          <path d="M8.5 10.5h7M8.5 14h4"/>
+        </svg>
+        助手
       </button>
       <button class="modtab" data-mod="gacha" role="tab" title="森空岛抽卡记录统计（明日方舟 / 终末地）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -136,6 +144,63 @@
           <p>选中的账号会自动和作业站的干员要求比对，直接告诉你哪些能抄、哪些要借人。</p>
         </div>
       </section>
+    </section>
+
+    <!-- 内置助手：一个普通模块，不再是浮在右下角的弹层（浮层会盖住设置弹窗）
+         2026-11-17：分两栏——左边聊天占大头，右边执行日志（工具调用 / 任务进度） -->
+    <section class="module" id="mod-chat" hidden>
+      <div class="chat-mod">
+        <div class="chat-main">
+        <header class="chat-head">
+          <div class="chat-title">
+            <b>助手</b>
+            <span id="chat-model" class="chat-model"></span>
+          </div>
+          <div class="chat-tools">
+            <button class="chat-ico" id="chat-skilltest" title="skill 联调：让模型解析一句话，看它选哪个 skill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 3v4M15 3v4M6 7h12v6a6 6 0 0 1-12 0z"/><path d="M12 19v2"/>
+              </svg>
+            </button>
+            <button class="chat-ico" id="chat-reset" title="清空这段对话">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                   stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
+            </button>
+          </div>
+        </header>
+        <div class="chat-body" id="chat-body">
+          <div class="chat-empty" id="chat-empty">
+            <p>可以这么问：</p>
+            <button class="chat-chip" data-ask="我还差哪些关没打？">我还差哪些关没打？</button>
+            <button class="chat-chip" data-ask="帮我挂左侧所有账号这周的活动关">帮我挂左侧所有账号这周的活动关</button>
+            <button class="chat-chip" data-ask="现在跑到哪了？卡住了吗？">现在跑到哪了？卡住了吗？</button>
+            <button class="chat-chip" data-ask="推荐一下我该养哪些干员">推荐一下我该养哪些干员</button>
+          </div>
+        </div>
+        <div class="chat-foot">
+          <textarea id="chat-input" rows="1" placeholder="说人话就行，例如：帮我把 15 章打完"></textarea>
+          <button class="chat-send" id="chat-send" title="发送（Enter）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 12l16-8-6 8 6 8z"/>
+            </svg>
+          </button>
+        </div>
+        </div>
+        <aside class="chat-side">
+          <div class="chat-side-head">
+            <b>任务进度</b>
+            <button class="chat-ico" id="chat-log-clear" title="清空日志">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                   stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>
+            </button>
+          </div>
+          <div class="chat-side-body" id="chat-side-log">
+            <div class="chat-side-empty" id="chat-side-empty">skill / 后台任务的进度日志会显示在这里。</div>
+          </div>
+        </aside>
+      </div>
     </section>
 
     <!-- 抽卡统计 -->
@@ -241,6 +306,7 @@
     </svg>
     <span class="fab-count" id="fab-count" hidden>0</span>
   </button>
+
 </div>
 
 <div id="modal-root"></div>

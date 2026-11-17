@@ -9,7 +9,7 @@ import os
 import threading
 
 from . import settings, tasks, updater
-from . import atomicio, paradox
+from . import atomicio, paradox, progress
 
 ELITE_CN = {0: '精零', 1: '精一', 2: '精二'}
 
@@ -60,8 +60,15 @@ def list_accounts():
             'hasToken': bool((snap.get('skd') or {}).get('data')),
             'secretary': a.get('secretary') or {},
             'maaProfile': (snap.get('maa') or {}).get('profile') or '',
+            # MAA 切号名：官服是手机号掩码（181****5505），B 服是游戏内用户名。
+            # 存下来就不用每次挂机都问一遍——这是唯一必须问用户的字段，
+            # 猜错的表现是切号死循环（MAA 找不到账号名，重试到超时）。
+            'maaAccountName': (snap.get('maa') or {}).get('accountName') or '',
             'maaDir': (snap.get('maa') or {}).get('dir') or '',
             'syncedAt': (snap.get('sync') or {}).get('syncedAt'),
+            # 关卡进度摘要（主线还差几关、活动几个区、剿灭几张没满）；
+            # 明细在 account_detail 里，列表页只放这几个数字
+            'progress': progress.summary(snap.get('progress')),
             'stats': {
                 'charCount': s.get('charCount'),
                 'charTotal': s.get('charTotal'),
@@ -126,6 +133,9 @@ def account_detail(file: str) -> dict:
         'maa': snap.get('maa') or {},
         'sync': snap.get('sync') or {},
         'paradox': paradox.plan(snap)['stats'],
+        # 完整关卡进度（主线明细、活动 zone、剿灭每张图）：给「还差哪几关」
+        # 这类界面和后面的助手工具用
+        'progress': snap.get('progress') or {},
     }
 
 

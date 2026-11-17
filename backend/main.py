@@ -353,6 +353,11 @@ def _quit(code=0, reason='退出'):
     """
     log('正在退出（%s）…' % reason)
     try:
+        from core import watch as _watch
+        _watch.stop_all()      # 观测线程是 daemon，但主动停能让它把最后一条日志写完
+    except Exception:
+        pass
+    try:
         left = tasks.wait_all(5)
         if left:
             log('仍有 %d 个任务未完成，不再等待：%s' % (len(left), '、'.join(left)))
@@ -368,6 +373,13 @@ def _quit(code=0, reason='退出'):
 
 
 def main():
+    # CLI 入口：打包后同一个 exe 用 `MAA-PRTS.exe --cli accounts` 调
+    # （给外部 harness / 脚本用，不启窗口、不起 HTTP）
+    if '--cli' in sys.argv:
+        import cli          # 与 main.py 同级的 backend/cli.py，不是 core 包里的
+        i = sys.argv.index('--cli')
+        return cli.main(sys.argv[i + 1:])
+
     if not os.path.isdir(WEB):
         print('[error] frontend dir not found: %s' % WEB)
         print('        Resources are loaded relative to the working directory --')

@@ -200,6 +200,19 @@ def build():
         '--hidden-import', 'clr',
         '--hidden-import', 'clr_loader',
         '--hidden-import', 'pythonnet',
+        # CLI 入口是 main() 里的分支（`MAA-PRTS.exe --cli ...`），显式声明
+        # 免得哪天挪成动态导入后被漏掉
+        '--hidden-import', 'cli',
+        # 活动关导航要判断"当前停在哪一页"（stagenav.probe），靠 PIL 解 adb
+        # 截出来的 PNG。它是函数内 import，构建机的 Pillow 又可能只被拿去
+        # 画图标（icon 已存在时根本不 import），不显式声明就会漏进包——
+        # 漏了的表现是导航永远判不出页面，一路点空。
+        '--hidden-import', 'PIL.Image',
+        # 老故事集导航（stagenav.goto_story_activity）靠卡片模板图在「曲谱 →
+        # 乐章收录」的网格里找活动，模板放在 backend/core/navtpl。不带上就是
+        # 打包版一进老故事集就报「没有卡片模板」。
+        '--add-data', os.path.join(HERE, 'backend', 'core', 'navtpl')
+        + ';backend/core/navtpl',
         '--collect-submodules', 'webview',
         '--paths', os.path.join(HERE, 'backend'),
         os.path.join('backend', 'main.py'),

@@ -467,8 +467,84 @@ def clear_tasklist(profile=None, maa_dir=None):
     return True
 
 
+def set_current(profile, maa_dir=None, close_first=True):
+    """把 MAA 当前启用的配置档案切到 profile
+
+    MAA 关闭时会把内存里的整份配置回写磁盘，所以运行中改 ``Current`` 会被
+    原样覆盖——切档案前必须先关掉（close_first=False 只给已经关掉的调用方）。
+    """
+    d = _dir(maa_dir)
+    if close_first:
+        mine = running_in(d)
+        if mine and not close(d):
+            raise RuntimeError('MAA 关闭失败（PID %s），请手动退出后重试'
+                               % ' / '.join(map(str, mine['pids'])))
+    cfg = _load_cfg(d)
+    configs = cfg.get('Configurations') or {}
+    if profile not in configs:
+        raise ValueError('配置「%s」不存在，可选：%s' % (profile, ', '.join(configs)))
+    cfg['Current'] = profile
+    _save_cfg(cfg, maa_dir=d)
+    return profile
+
+
+def profiles(maa_dir=None):
+    """这个 MAA 装了哪些配置档案，以及各自绑的账号名
+
+    多账号就靠它：MAA 里 **一个配置档案 = 一个账号**，档案的 TaskQueue[0]
+    是 StartUpTask，里面的 AccountName 就是切换目标。
+    """
+    cfg = _load_cfg(_dir(maa_dir))
+    out = []
+    for name, c in (cfg.get('Configurations') or {}).items():
+        su = next((t for t in (c.get('TaskQueue') or [])
+                   if t.get('TaskType') == 'StartUp'), None)
+        out.append({
+            'name': name,
+            'accountName': (su or {}).get('AccountName') or '',
+            'switchEnabled': bool((su or {}).get('AccountSwitchEnabled')),
+            'tasks': len(c.get('TaskQueue') or []),
+            'copilot': len(((c.get('Copilot') or {}).get('TaskList')) or []),
+        })
+    return {'current': cfg.get('Current') or '', 'profiles': out}
+
+
 def tasklist(profile=None, maa_dir=None):
     cfg = _load_cfg(maa_dir)
     profile = profile or cfg.get('Current') or ''
     cop = ((cfg.get('Configurations') or {}).get(profile) or {}).get('Copilot') or {}
     return {'profile': profile, 'items': cop.get('TaskList') or []}
+
+
+def set_tasklist(entries, profile=None, maa_dir=None, close_first=True):
+    """直接改写作业列表，不重新下载作业文件
+
+    给「卡住后续跑」用：作业 json 已经在 config/copilot/ 里了，只是要从
+    第 N 关继续，没必要走 apply_plan 那套「重新取内容 + 重新落盘」。
+
+    与 apply_plan 同一条铁律：MAA 在跑时改 TaskList 会被它退出时用内存态
+    全量回写覆盖，所以默认先关进程（close_first=False 只给「已经关掉了」
+    的调用方用）。
+    """
+    d = _dir(maa_dir)
+    if close_first:
+        mine = running_in(d)
+        if mine and not close(d):
+            raise RuntimeError('MAA 关闭失败（PID %s），请手动退出 MAA 后重试'
+                               % ' / '.join(map(str, mine['pids'])))
+    cfg = _load_cfg(d)
+    configs = cfg.get('Configurations') or {}
+    profile = profile or cfg.get('Current') or ''
+    if not profile or profile not in configs:
+        raise ValueError('配置「%s」不存在，可选：%s'
+                         % (profile or '（空）', ', '.join(configs)))
+    rows = []
+    for i, e in enumerate(entries or []):
+        row = dict(e)
+        row['Index'] = i
+        rows.append(row)
+    configs[profile].setdefault('Copilot', {})['TaskList'] = rows
+    if 'Current' in cfg:
+        cfg['Current'] = profile
+    _save_cfg(cfg, maa_dir=d)
+    return {'profile': profile, 'count': len(rows)}

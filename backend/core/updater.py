@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from . import atomicio, gacha, skland
+from . import atomicio, gacha, progress, skland
 from .skland import Skland
 
 SCHEMA_VERSION = 2
@@ -523,6 +523,10 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
         old_path = existing.get(uid)
         old = load_json(old_path) if old_path else None
         snap = merge_preserved(snap, old)
+        # 关卡进度（推图点、活动 zone 计数、剿灭击杀、日常周常）：同一个
+        # player/info 里本来就有，以前没解析。放在 merge 之后，老账号下一次
+        # 同步就能补上，不需要重登
+        snap['progress'] = progress.parse(info)
         if skd_meta:
             snap['skd'] = dict(skd_meta)
         changes = diff_snapshots(old, snap)
@@ -536,6 +540,10 @@ def sync_one(token, alias, accounts_dir, log, with_skins=False, cache_path=None,
             s['mastery3Count'], s['moduleCount'], s['module3Count']))
         log('    缺卡 %d%s' % (s['missingCount'],
                                '：' + fmt_missing(snap['missing']) if snap['missing'] else '（图鉴已满）'))
+        ps = progress.summary(snap['progress'])
+        log('    进度 主线剩 %d 关（下一关 %s）｜活动 %d 区待清｜剿灭 %d 张未满' % (
+            ps['mainRemaining'], (ps.get('mainNext') or {}).get('code') or '-',
+            ps['activityLeft'], ps['campaignLeft']))
         for line in changes:
             log('    · %s' % line)
 

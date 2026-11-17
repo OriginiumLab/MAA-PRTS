@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import os
 import py_compile
@@ -1055,13 +1056,22 @@ def check_story_stage_filter():
     left = [c for c in codes if resources._is_story({'id': '', 'code': c})]
     assert not left, '_stages() 里还有剧情关：%s' % left[:5]
 
-    # 4. 搜剧情关代号拿不到结果；战斗关照常能搜到
+    # 4. 搜剧情关代号：给一张「剧情关」卡（mode=story），不能当成战斗关返回。
+    #    以前是整条过滤掉、搜了落空；现在能看到这一关存在，但挂不了机
     for kw in ('NL-ST-1', 'EG-3'):
         r = resources.resolve(kw)
-        assert not r['stages'], '搜 %s 不该有结果，实际 %d 关' % (kw, len(r['stages']))
+        assert r['mode'] == 'story', '搜 %s 应返回剧情卡，实际 %s' % (kw, r['mode'])
+        assert r['stages'] and all(s['story'] for s in r['stages']), \
+            '%s 返回了非剧情关' % kw
     r = resources.resolve('NL-10')
     assert r['mode'] == 'stage' and len(r['stages']) == 1, \
         'NL-10 是战斗关，必须还能搜到：%r' % r['mode']
+
+    # 4.5 代号既是剧情关、又是章节前缀时（12-1 / 12-10 ~ 12-19），
+    #     必须展开成章节系列，不能被剧情卡抢走
+    r = resources.resolve('12-1')
+    assert r['mode'] == 'activity' and len(r['stages']) > 3, \
+        '12-1 应展开成第 12 章系列，实际 %s / %d 关' % (r['mode'], len(r['stages']))
 
     # 5. 活动展开不带剧情关，但战斗关一个不能少
     r = resources.resolve('act13side')
@@ -1575,6 +1585,591 @@ def check_copilot_rank_band():
 
 
 # ---------------------------------------------------------------- B23 作业黑名单
+def check_story_stages(_tmp):
+    """B29：剧情关双视图 + 森空岛进度解析
+
+    剧情关（资源包里 story=True 的 208 条）以前被 _stages() 整条丢掉，导致
+    两件事：搜 9-1 / TL-ST-1 这类「只有剧情关才有的代号」会落空；森空岛
+    activity.zones 的 totalStage 含剧情关，两边口径永远对不上。
+    """
+    from core import progress, resources as R
+
+    plain = R._stages()
+    full = R._stages(True)
+    assert all(not s['story'] for s in plain), '默认视图里混进了剧情关'
+    stories = [s for s in full if s['story']]
+    assert len(stories) == 208, '剧情关应为 208 条，实际 %d' % len(stories)
+    assert len(full) - len(plain) == len(stories), '两个视图的差应正好是剧情关条数'
+
+    # 剧情关代号精确命中：TL-ST-1 这种前缀不可能被章节抢占；
+    # 主线剧情关用 stageId 精确查（9-1 这个代号要让位给「第 9 章系列」展开，
+    # 因为 9-10 ~ 9-19 都以它开头，见 B18 的 4.5）
+    r = R.resolve('TL-ST-1')
+    assert r['mode'] == 'story' and r['stages'][0]['stageId'] == 'act55side_st01'
+    r = R.resolve('st_09-01')
+    assert r['mode'] == 'story' and r['stages'][0]['code'] == '9-1', \
+        'stageId 精确查剧情关失败：%r' % r['mode']
+
+    # 系列搜索不带剧情关，但能算出「这一段里有几个剧情关」
+    r = R.resolve('TL-')
+    assert r['stages'] and not any(s['story'] for s in r['stages']), 'TL- 系列混进了剧情关'
+    tips = R.stories_between(r['stages'])
+    assert {s['code'] for s in tips} >= {'TL-ST-1', 'TL-ST-2'}, 'TL 系列的剧情关没找出来'
+    assert all(s['story'] for s in tips), 'stories_between 返回了非剧情关'
+
+    # 推图不能跳进剧情关
+    nxt = R.next_stage({'stageId': 'main_09-01', 'difficulty': 'normal'})
+    assert nxt and not R.story_of(nxt['stageId']), 'next_stage 指到了剧情关'
+    after = R.stages_after('st_09-01')
+    assert after and after[0]['code'] == '9-2', '剧情关之后应该是 9-2'
+    assert not any(s['story'] for s in after), 'stages_after 里混进了剧情关'
+
+    # 森空岛进度解析（结构取自 player/info 的真实返回）
+    probe = {
+        'status': {'level': 71, 'mainStageProgress': 'st_09-01',
+                   'ap': {'current': 561, 'max': 127}},
+        'campaign': {'records': [{'campaignId': 'camp_01', 'maxKills': 400},
+                                 {'campaignId': 'camp_03', 'maxKills': 271}]},
+        'activity': [{'actId': 'act55side', 'actReplicaId': 'act55side',
+                      'zones': [{'zoneReplicaId': 'act55side_zone1',
+                                 'clearedStage': 3, 'totalStage': 6}]}],
+        'routine': {'daily': {'current': 1, 'total': 10},
+                    'weekly': {'current': 0, 'total': 13}},
+    }
+    pr = progress.parse(probe)
+    assert pr['main']['story'] is True and pr['main']['remaining'] > 0, '主线进度没解析出来'
+    assert pr['main']['next']['code'] == '9-2', '主线下一关应是 9-2'
+    assert [c['id'] for c in pr['campaign']] == ['camp_03', 'camp_01'], '没打满的剿灭应排前面'
+    assert pr['campaign'][0]['full'] is False and pr['campaign'][1]['full'] is True
+    assert pr['campaign'][0]['name'] == '龙门市区', 'camp_03 应叫龙门市区'
+    a = pr['activities'][0]
+    assert a['left'] == 3 and a['matched'] is True, '活动 zone 余量算错'
+    assert a['name'] == '时间啊，向前！', '活动名应取正式名'
+    assert pr['ap']['current'] == 561 and pr['routine']['daily']['total'] == 10
+    assert progress.summary(pr)['mainRemaining'] == pr['main']['remaining']
+
+
+# ---------------------------------------------------------------- B30 日志观测
+def check_asstlog(_tmp):
+    """B30：MAA 日志观测（增量读 / 轮转 / 事件归一 / 停滞判定 / 运行记录）
+
+    这一层完全靠日志，不认识图。所以 MAA 升级改了格式，最坏结果只能少几个
+    事件，不能抛异常——下面每条断言都在守这件事。
+    """
+    import time as _t
+    from core import asstlog as A
+
+    maa_dir = os.path.join(_tmp, 'obs')
+    dbg = os.path.join(maa_dir, 'debug')
+    os.makedirs(dbg, exist_ok=True)
+    asst = os.path.join(dbg, 'asst.log')
+    gui = os.path.join(dbg, 'gui.log')
+
+    def stamp(ts):
+        return _t.strftime('%Y-%m-%d %H:%M:%S', _t.localtime(ts)) \
+            + '.%03d' % int((ts % 1) * 1000)
+
+    def line(ts, body, tag='INF'):
+        return '[%s][%s][Px1][Tx1] %s' % (stamp(ts), tag, body)
+
+    now = _t.time()
+    stage_body = ('SubTaskExtraInfo {"class":"asst::MultiCopilotTaskPlugin",'
+                  '"details":{"file_name":"config\\\\copilot\\\\TL-1_101.json","id":0,'
+                  '"stage_name":"act55side_01"},"subtask":"MultiCopilotTask",'
+                  '"taskchain":"Copilot","taskid":1,'
+                  '"what":"CopilotListLoadTaskFileSuccess"}')
+    node_body = ('{"class":"asst::ProcessTask","cur_task":"Copilot@WaitUntilEndOfAction",'
+                 '"details":{"cur_retry":18,"retry_times":20,'
+                 '"to_be_recognized":["Copilot@SkipThePreBattlePlot",'
+                 '"Copilot@EndOfAction"]},"subtask":"ProcessTask",'
+                 '"taskchain":"Copilot","taskid":1}')
+    with open(asst, 'w', encoding='utf-8') as f:
+        f.write(line(now - 40, stage_body) + '\n')
+        f.write(line(now - 30, node_body) + '\n')
+    with open(gui, 'w', encoding='utf-8') as f:
+        f.write(line(now - 45, 'AsstProxy | <2> Start Task Chain: Copilot, Task ID: 1') + '\n')
+
+    w = A.Watcher(maa_dir, live=False)
+    snap = w.poll()
+    assert snap['state'] == 'running', '有链起点 + 新日志应判在跑：%r' % snap['state']
+    assert snap['stage'] == 'act55side_01', snap['stage']
+    assert snap['index'] == 0, snap['index']
+    assert snap['node'] == 'Copilot@WaitUntilEndOfAction', snap['node']
+    assert (snap['retry'], snap['retryTotal']) == (18, 20), snap['retry']
+
+    # 增量：只读新追加的那一行，旧的不重复计数
+    with open(asst, 'a', encoding='utf-8') as f:
+        f.write(line(now - 5, stage_body.replace('act55side_01', 'act55side_02')
+                     .replace('"id":0', '"id":1')) + '\n')
+    snap = w.poll()
+    assert snap['newEvents'] == 1, '增量读多算了：%d' % snap['newEvents']
+    assert snap['stage'] == 'act55side_02', snap['stage']
+
+    # 轮转：asst.log 被清空重写（变小）后要能从头读，不能卡在旧 offset
+    # （用单独的目录，否则前面造的两关数据会被这一步冲掉）
+    d3 = os.path.join(_tmp, 'obs3')
+    os.makedirs(os.path.join(d3, 'debug'), exist_ok=True)
+    f3 = os.path.join(d3, 'debug', 'asst.log')
+    with open(f3, 'w', encoding='utf-8') as f:
+        f.write(line(now - 40, stage_body) + '\n')
+    w3 = A.Watcher(d3, live=False)
+    assert w3.poll()['stage'] == 'act55side_01'
+    with open(f3, 'w', encoding='utf-8') as f:
+        f.write(line(now - 2, stage_body.replace('act55side_01', 'act55side_09')) + '\n')
+    assert w3.poll()['stage'] == 'act55side_09', '轮转后没重新读'
+
+    # 停滞：最后一条日志停在 200 秒前、重试已经打满 → stalled（不是 running）
+    d2 = os.path.join(_tmp, 'obs2')
+    os.makedirs(os.path.join(d2, 'debug'), exist_ok=True)
+    with open(os.path.join(d2, 'debug', 'gui.log'), 'w', encoding='utf-8') as f:
+        f.write(line(now - 200, 'AsstProxy | <2> Start Task Chain: Copilot, Task ID: 1') + '\n')
+    with open(os.path.join(d2, 'debug', 'asst.log'), 'w', encoding='utf-8') as f:
+        f.write(line(now - 195, node_body) + '\n')
+    snap2 = A.Watcher(d2, live=False).poll()
+    assert snap2['state'] == 'stalled', '停了 3 分钟该判停滞：%r' % snap2['state']
+    ex = A.explain(snap2)
+    assert ex['level'] == 'bad' and '卡' in ex['text'], ex
+    assert ex['hint'], '停滞要给下一步提示'
+
+    # clean_done：链跑完就收工，不能一直挂在 running
+    with open(os.path.join(d2, 'debug', 'gui.log'), 'a', encoding='utf-8') as f:
+        f.write(line(now - 1, 'AsstProxy | <2> Completed Task Chain: Copilot, Task ID: 1') + '\n')
+    snap3 = A.Watcher(d2, live=False).poll()
+    assert snap3['state'] == 'done', snap3['state']
+    assert A.explain(snap3)['level'] == 'ok'
+
+    # 运行记录：每换一关切一段，同一关的重复上报合并
+    rows = A.failures(maa_dir, limit=10)
+    assert len(rows) >= 2, '应能还原出至少两关：%r' % rows
+    assert rows[0]['stageId'] == 'act55side_01', rows[0]
+    assert all(r['code'] for r in rows), '运行记录要带关卡代号（查不到就回退 stageId）'
+
+    # 认不出的行一律跳过，绝不抛
+    for junk in ('', '乱七八糟一行', '[2026-11-16 10:00:00.000][ERR][Px1][Tx1] 报错',
+                 '{"class":"asst::X"', '[]'):
+        assert A.norm_asst(junk) is None, '非事件行不该产出事件：%r' % junk
+        assert A.norm_gui(junk) is None
+
+
+# ---------------------------------------------------------------- B31 多账号
+def check_multiacct(tmp):
+    """B31：多账号编排（切号名归一 / 一账号一档案 / AccountName 写入）"""
+    from core import copilot, multiacct as M, settings
+
+    _reset_config(tmp)
+    # 切号名：MAA 是子串匹配，官方说明允许「123****4567 / 4567 / 23****45」
+    # 三种写法。以前只认 3 位+4 星+4 位，用户照文档只给尾号就被判非法，
+    # 助手只能反复追问，最后任务出不来（2026-11-17）。
+    from core import acctname
+    assert M.norm_account_name('5505') == '5505', '尾号要原样保留（MAA 认）'
+    assert M.norm_account_name('1815505') == '181****5505'
+    assert M.norm_account_name('18112345505') == '181****5505', '完整手机号也要能补成掩码'
+    assert M.norm_account_name('181****5505') == '181****5505'
+    assert M.norm_account_name('23****45') == '23****45', '部分掩码别被压星号'
+    # 星号数量 / 全角 / 分隔符都不该让用户重填
+    for raw, want in (('181＊5505', '181****5505'), ('181*5505', '181****5505'),
+                      ('181***5505', '181****5505'), ('181 5505', '181****5505'),
+                      ('181-5505', '181****5505'), ('（181）5505', '181****5505'),
+                      ('１２３＊５５０５', '123****5505'),
+                      ('181****  5505', '181****5505')):
+        assert M.norm_account_name(raw) == want, (raw, M.norm_account_name(raw))
+    assert M.norm_account_name('小卡拉帕鲁灰') == '小卡拉帕鲁灰'
+    assert M.norm_account_name('灰bao#0384') == '灰bao#0384', 'B 服用户名带 # 别被吃掉'
+    assert M.norm_account_name('') == ''
+    # 校验：官服只拦昵称，格式问题不归用户
+    assert acctname.check('5505', '官服') == ('5505', '')
+    assert acctname.check('136', '官服') == ('136', ''), '本机档案里就有 3 位片段'
+    assert acctname.check('23****45', '官服')[0] == '23****45'
+    nm, why = acctname.check('小卡拉帕鲁灰', '官服')
+    assert nm is None and '后 4 位' in why, (nm, why)
+    assert acctname.check('小卡拉帕鲁灰', 'bilibili服')[0] == '小卡拉帕鲁灰'
+    assert acctname.is_official_channel('') is True, '渠道缺失按官服算'
+    assert acctname.is_official_channel('B服') is False
+    # 档案名撞了就加序号，不覆盖用户原来的档案
+    # 一律带 PRTS- 前缀：绝不覆盖用户自己那份档案
+    taken = {'PRTS-a', 'PRTS-a_2'}
+    assert M._profile_name('a', 'x', taken) == 'PRTS-a_3'
+    assert M._profile_name('', '', set()) == 'PRTS-acct'
+
+    # 排不出方案时必须明确说缺什么，不能悄悄返回一个空方案
+    p = M.plan({'keyword': '', 'accounts': []})
+    assert not p['ok'] and (p.get('missing') or p.get('error')), \
+        '排不出方案要说明原因：%r' % p
+
+    # 账号绑的 maaProfile 是**档案名**（moren / 136），不是切号名。拿它填
+    # StartUp.AccountName，MAA 切号必然失败，整轮挂机死在「登录」这一步。
+    old_c = M.candidates
+    M.candidates = lambda: [{'file': 'x.json', 'name': '测试号',
+                             'nickName': '测试号', 'channel': '官服',
+                             'maaProfile': 'moren', 'accountName': '',
+                             'maaDir': '', 'progress': {}}]
+    try:
+        pl = M.plan({'keyword': '', 'accounts': []})
+        whys = {m.get('what') for m in pl['missing']}
+        assert 'accountName' in whys, pl
+        assert all(not r.get('accountName') for r in pl['accounts']), \
+            '档案名不能冒充切号名：%r' % pl['accounts']
+        # 用户给尾号就能过，且原样写进 rows
+        pl = M.plan({'keyword': '', 'accounts': [], 'names': {'x.json': '5505'}})
+        assert pl['accounts'][0]['accountName'] == '5505', pl['accounts'][0]
+    finally:
+        M.candidates = old_c
+
+    # 假 MAA 目录：一个账号 → 一个档案，AccountName 与开关都写进去
+    md = os.path.join(tmp, 'fakemaa')
+    os.makedirs(os.path.join(md, 'config'), exist_ok=True)
+    cfg = {'Current': 'Default', 'Configurations': {'Default': {
+        'TaskQueue': [{'$type': 'StartUpTask', 'AccountName': '',
+                       'AccountSwitchEnabled': False, 'TaskType': 'StartUp',
+                       'Name': '开始唤醒', 'IsEnable': True}],
+        'Copilot': {'TaskList': []},
+    }}}
+    with open(os.path.join(md, 'config', 'gui.new.json'), 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False)
+
+    old_fetch = copilot.fetch_prepared
+    # 不联网：假装作业已经下好了
+    copilot.fetch_prepared = lambda cid, *a, **k: (
+        {'stage_name': 'main_01-07', 'opers': []}, 1, 'main_01-07', [], True)
+    try:
+        plan = {'maaDir': md, 'accounts': [{
+            'file': 'x.json', 'name': '测试号', 'accountName': '181****5505',
+            'profile': '181****5505', 'reuse': False,
+            'ops': [{'copilotId': 1, 'stageCode': '1-7', 'title': 't'}],
+        }]}
+        res = M.apply(plan)
+        assert res['profiles'] == ['PRTS-181****5505'], res
+        with open(os.path.join(md, 'config', 'gui.new.json'), encoding='utf-8') as f:
+            cfg2 = json.load(f)
+        prof = cfg2['Configurations']['PRTS-181****5505']
+        su = prof['TaskQueue'][0]
+        assert su['AccountName'] == '181****5505', '切号名没写进 StartUpTask'
+        assert su['AccountSwitchEnabled'] is True, '没打开切号开关'
+        tl = prof['Copilot']['TaskList']
+        assert len(tl) == 1 and tl[0]['CopilotId'] == 1, tl
+        # 模板档案本身不能被改动
+        assert cfg2['Configurations']['Default']['Copilot']['TaskList'] == []
+
+        # set_tasklist / set_current：续跑与切号的底层，索引要重排
+        from core import maa
+        maa.set_current('PRTS-181****5505', md, close_first=False)
+        assert maa.profiles(md)['current'] == 'PRTS-181****5505'
+        maa.set_tasklist(tl, 'PRTS-181****5505', md, close_first=False)
+        got = maa.tasklist('PRTS-181****5505', md)['items']
+        assert len(got) == 1 and got[0]['Index'] == 0
+        try:
+            maa.set_current('不存在', md, close_first=False)
+            raise AssertionError('切到不存在的档案应该报错')
+        except ValueError:
+            pass
+    finally:
+        copilot.fetch_prepared = old_fetch
+
+
+# ---------------------------------------------------------------- B32 助手与 CLI
+def check_agent_cli(tmp):
+    """B32：内置助手的工具白名单 + 写操作闸门 + CLI 契约"""
+    import contextlib
+    import io as _io
+    import time as _t
+
+    from core import agent, settings
+    import cli
+
+    _reset_config(tmp)
+    _patch_settings(tmp)      # 造账号/读账号都落在 tmp/config，别碰隔离根
+    # 工具表与实现必须一一对应：多一个没实现 = 模型调到就崩
+    names = {t['function']['name'] for t in agent.TOOLS}
+    handlers = set(agent._HANDLERS) | set(agent._WRITE_HANDLERS)
+    assert names == handlers, '工具表与实现不一致：%r' % (names ^ handlers)
+    for t in agent.TOOLS:
+        fn = t['function']
+        assert fn.get('description'), '工具缺描述：' + fn['name']
+        assert fn['parameters']['type'] == 'object'
+
+    # 模型给错工具名不能把 loop 炸掉
+    r = agent.run_tool('does_not_exist', {})
+    assert isinstance(r, dict) and r.get('error'), '未知工具应返回 error'
+
+    # 工具内部异常也要兜住
+    r = agent.run_tool('op_detail', {'copilot_id': 'not-a-number'})
+    assert isinstance(r, dict) and r.get('error'), '坏参数应兜成 error'
+    assert r.get('hint'), '内部异常要带 hint，否则模型会原样重试同一个调用'
+
+    # 账号字段对齐：list_accounts() 给的是 nickName/alias/channelName，
+    # progress.summary() 给的是 mainRemaining/activityLeft。助手工具曾直接
+    # 下标 'name'（KeyError，一问进度就报错）、又去取不存在的 'mainLeft' /
+    # 'activityZones'（全是 null）。同一个坑踩过两次（CLI 一次、助手一次），
+    # 这里用真实账号文件钉住字段名。
+    acc = {
+        'account': {'uid': '123', 'nickName': '测试号#0001',
+                    'channelName': '官服', 'game': 'arknights', 'level': 120},
+        'progress': {
+            'main': {'stageId': 'main_15-17', 'code': '15-19', 'name': '直至，此刻',
+                     'remaining': 5,
+                     'next': {'code': '15-20', 'stageId': 'main_15-18',
+                              'name': '得以重回'}},
+            'campaign': [],
+            'activities': [{'name': '孤星', 'left': 3, 'matched': True}],
+        },
+    }
+    with open(os.path.join(tmp, 'config', '测试号#0001 官服.json'),
+              'w', encoding='utf-8') as f:
+        json.dump(acc, f, ensure_ascii=False)
+    rows = agent.run_tool('list_accounts', {})['accounts']
+    assert len(rows) == 1, '账号列表应读到造的账号：%r' % rows
+    row = rows[0]
+    assert row['name'] == '测试号#0001', '账号名要取 nickName/alias：%r' % row
+    assert row['channel'] == '官服', row
+    assert row['mainLeft'] == 5, 'mainLeft 要取 summary 的 mainRemaining：%r' % row
+    assert row['mainKnown'] is True and row['activityLeft'] == 1, row
+    pg = agent.run_tool('account_progress', {'account': row['file']})
+    assert pg['summary']['mainRemaining'] == 5, pg
+    assert pg['summary']['mainKnown'] is True, pg
+    # 主线缺数据时不能靠 0 推断「已推完」
+    acc['progress']['main'] = None
+    with open(os.path.join(tmp, 'config', '测试号#0001 官服.json'),
+              'w', encoding='utf-8') as f:
+        json.dump(acc, f, ensure_ascii=False)
+    pg = agent.run_tool('account_progress', {'account': row['file']})
+    assert pg['summary']['mainKnown'] is False, 'main=null 要标成没数据：%r' % pg
+
+    # 切号名：助手只问尾号，用户给什么格式都得吃下（原来 3+4 星+4 的死正则
+    # 把「照 MAA 文档填的 5505」判成非法，助手反复追问，任务出不来）
+    f = row['file']
+    got, miss, err = agent._roster([], {f: '5505'}, '')
+    assert not err and not miss and got[0]['accountName'] == '5505', (got, miss)
+    for raw in ('181 5505', '181＊5505', '18112345505', '1815505'):
+        got, miss, _ = agent._roster([], {f: raw}, '')
+        assert got and got[0]['accountName'] == '181****5505', (raw, got, miss)
+    # 清掉上面几轮写回账号文件的切号名，否则会走「saved」分支蒙过去
+    from core import accounts as _accounts
+    _accounts.save_maa_meta(f, {'accountName': ''})
+    got, miss, _ = agent._roster([], {f: '测试号#0001'}, '')
+    assert not got and miss, ('官服填昵称必须拦下（否则切号死循环）', got, miss)
+    assert '后 4 位' in miss[0]['question'], miss[0]['question']
+
+    # 写操作在 autoApply 关闭时必须停下来等用户点确认
+    settings.save({'agent': {'baseUrl': 'https://api.deepseek.com/v1',
+                             'model': 'deepseek-chat', 'autoApply': False}})
+    agent._plans['t1'] = {'at': _t.time(), 'plan': {
+        'maaDir': '', 'totalStages': 1, 'totalOps': 1,
+        'accounts': [{'name': '测试号', 'accountName': '181****5505',
+                      'ops': [{'stageCode': '1-7', 'copilotId': 1}]}],
+    }}
+    s = agent.Session()
+    out = agent.run_tool('apply_plan', {'plan_id': 't1'}, s)
+    assert out.get('need_confirm') is True, out
+    assert s.pending and s.pending['action'] == 'apply_plan', s.pending
+    assert '测试号' in (out.get('summary') or ''), '确认文案要写清楚给谁挂什么'
+
+    # 助手没配 Key 时，状态要如实说「不能用」，不能假装可用
+    st = agent.status()
+    assert st['configured'] is False and st['hasKey'] is False
+    # apiKey 绝不回显
+    assert 'apiKey' not in st and 'key' not in st, st
+
+    # CLI：输出形状 + 退出码是给外部 harness 的契约
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli.main(['doctor', '--maa-dir', os.path.join(tmp, 'nope')])
+    body = json.loads(buf.getvalue())
+    assert body['command'] == 'doctor' and 'ok' in body, body
+    assert body['data']['ready'] is False, '空目录不该判就绪'
+    assert rc in (0, 1, 2, 3), rc
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli.main(['no_such_cmd'])
+    assert rc == 2, '未知命令应回 2'
+    assert json.loads(buf.getvalue())['ok'] is False
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli.main(['stages'])
+    assert rc == 2, '缺参数应回 2'
+    assert 'hint' in json.loads(buf.getvalue())['error'], '错误要带 hint'
+
+    # 关卡命令的出口必须过 resources：模型/脚本给的代号查不到就明确报错
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli.main(['stages', 'TL-'])
+    body = json.loads(buf.getvalue())
+    assert rc == 0 and body['data']['stages'], body
+    assert any(s['code'] == 'TL-1' for s in body['data']['stages'])
+
+    # 位置参数要跳过 --opt value：``ops --account 号.json TL-5`` 曾经把账号名
+    # 当成关卡关键词
+    assert cli._positionals(['--account', '号.json', 'TL-5']) == ['TL-5']
+    assert cli._positionals(['TL-5', '--limit', '2']) == ['TL-5']
+
+    # ``plan --stages TL-5`` 是文档里的写法，但 --stages 同时被当成数量上限，
+    # 于是 int('TL-5') 直接炸 ValueError。不联网：把 plan 换成假的抓参数。
+    seen = {}
+    old_plan = cli.multiacct.plan
+    cli.multiacct.plan = lambda req: (seen.update(req)
+                                      or {'ok': False, 'warnings': ['测试']})
+    try:
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(['plan', '--stages', 'TL-5', '--limit', '2'])
+    finally:
+        cli.multiacct.plan = old_plan
+    assert rc == cli.EXIT_DECIDE, '排不出方案应回 3（该问用户），实际 %r' % rc
+    assert seen.get('keyword') == 'TL-5', seen
+    assert seen.get('limitStages') == 2, '--limit 要进 limitStages：%r' % seen
+
+
+
+# ---------------------------------------------------------------- B33 任务编排
+def check_maaplan(tmp):
+    """B33：任务编排（GUI 队列 / 直连序列 / 档案隔离）
+
+    两条路线各自的契约：
+    - GUI 路线写 ``<档案>.TaskQueue``，**绝不能**放 Copilot —— MAA 的
+      ``TaskQueueViewModel.InitializeItems`` 不认识 CopilotTask，会抛
+      NotImplementedException，整个任务列表变空白（连别的任务也看不见）。
+    - 直连路线 ``core_tasks`` 生成 MaaCore 的任务序列，Copilot 的
+      ``filename`` 必须是绝对路径（相对路径不报错，就是静默不入队）。
+    """
+    from core import copilot, maacore, maaplan
+
+    _reset_config(tmp)
+    md = os.path.join(tmp, 'fakemaa3')
+    os.makedirs(os.path.join(md, 'config', 'copilot'), exist_ok=True)
+    user_prof = {
+        'TaskQueue': [
+            {'$type': 'StartUpTask', 'TaskType': 'StartUp', 'Name': '开始唤醒',
+             'IsEnable': True, 'AccountName': 'mine', 'AccountSwitchEnabled': False},
+            {'$type': 'FightTask', 'TaskType': 'Fight', 'Name': '理智作战',
+             'IsEnable': True, 'StagePlan': ['1-7']},
+            {'$type': 'RecruitTask', 'TaskType': 'Recruit', 'Name': '自动公招',
+             'IsEnable': True},
+            {'$type': 'InfrastTask', 'TaskType': 'Infrast', 'Name': '基建换班',
+             'IsEnable': True},
+        ],
+        'Copilot': {'TaskList': []},
+        'Gui': {'ConnectSettings': {'AdbPath': 'adb.exe', 'Address': 'emulator-5554',
+                                    'Config': 'LDPlayer'},
+                'StartUpSettings': {'RunDirectly': False}},
+    }
+    cfg = {'Current': 'mine',
+           'Configurations': {'mine': json.loads(json.dumps(user_prof))}}
+    with open(os.path.join(md, 'config', 'gui.new.json'), 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False)
+
+    # 1) GUI 队列：Copilot 必须被剔出去
+    q, skipped = maaplan.build_queue(
+        {'tasks': ['startup', 'copilot', 'fight'], 'stages': ['TL-5'],
+         'ops': [{'copilotId': 1}]},
+        user_prof['TaskQueue'])
+    types = [t['TaskType'] for t in q]
+    assert 'Copilot' not in types, 'GUI 队列不能有 CopilotTask：%r' % types
+    assert 'StartUp' in types and 'Fight' in types, types
+    assert any('自动战斗' in s for s in skipped), skipped
+
+    # 2) 关卡写进 FightTask，模板里其它参数原样保留
+    fq = next(t for t in q if t['TaskType'] == 'Fight')
+    assert fq['StagePlan'] == ['TL-5'], fq
+    assert fq['IsEnable'] is True
+
+    # 3) 建档案：只多一份 PRTS-，用户那份一个字段都不变
+    info = maaplan.ensure_profile(
+        {'profile': '活动', 'accountName': '181****5505',
+         'tasks': ['startup', 'fight'], 'stages': ['TL-5'], 'maaDir': md}, md)
+    assert info['profile'] == 'PRTS-活动', info
+    with open(os.path.join(md, 'config', 'gui.new.json'), encoding='utf-8') as f:
+        cfg2 = json.load(f)
+    assert 'PRTS-活动' in cfg2['Configurations']
+    assert cfg2['Configurations']['mine'] == user_prof, '用户档案被改了'
+    ours = cfg2['Configurations']['PRTS-活动']
+    assert ours['Gui']['StartUpSettings']['RunDirectly'] is True, '没打开启动即跑'
+    su = next(t for t in ours['TaskQueue'] if t['TaskType'] == 'StartUp')
+    assert su['AccountName'] == '181****5505', su
+    assert su['AccountSwitchEnabled'] is True, '没打开切号开关'
+
+    # 4) 档案名：带前缀、保留 *（官服切号名就靠它）
+    assert maaplan._profile_name({'accountName': '181****5505'}) == 'PRTS-181****5505'
+    assert maaplan._profile_name({'profile': 'PRTS-x'}) == 'PRTS-x'
+    assert maaplan._profile_name({}) == 'PRTS-挂机'
+
+    # 5) 直连序列：StartUp 带切号、Fight 带关卡、渠道映射对
+    seq = maaplan.core_tasks({'tasks': ['startup', 'fight'], 'stages': ['TL-5'],
+                              'accountName': '181****5505',
+                              'channel': 'bilibili服'})
+    assert [t for t, _ in seq] == ['StartUp', 'Fight'], seq
+    assert seq[0][1]['client_type'] == 'Bilibili', seq[0]
+    assert seq[0][1]['account_name'] == '181****5505'
+    assert seq[1][1]['stage'] == 'TL-5'
+
+    # 6) 抄作业：filename 必须绝对路径（相对路径会被 MaaCore 静默丢掉）
+    old = copilot.fetch_prepared
+    copilot.fetch_prepared = lambda cid, *a, **k: (
+        {'stage_name': 'act55side_05', 'opers': []}, 1, 'act55side_05', [], True)
+    try:
+        rows = maaplan.prepare_copilot([{'copilotId': 108609, 'stageCode': 'TL-5'}], md)
+    finally:
+        copilot.fetch_prepared = old
+    assert rows, '作业列表是空的'
+    assert os.path.isabs(rows[0]['filename']), rows[0]
+    assert rows[0]['filename'].endswith('TL-5_108609.json'), rows[0]
+    assert rows[0]['stage_name'] == 'TL-5', rows[0]
+    # 必须是**关卡代号**不是作业内部 id（act55side_05）：MaaCore 的
+    # MultiCopilotTaskPlugin 拿它去拼 `<代号>@Copilot@ClickStageName`，
+    # 传内部 id 拼出来的 pipeline 不存在，OCR 永远匹配不上
+    assert os.path.isfile(rows[0]['filename']), '作业文件没落盘'
+    cq = maaplan.core_tasks({'tasks': ['copilot'], 'copilotList': rows,
+                             'copilot': {'formation': True}})
+    # core_tasks 会自动补一个 StartUp 在最前面（没有唤醒什么都跑不了）
+    assert [t for t, _ in cq] == ['StartUp', 'Copilot'], cq
+    cp = cq[-1][1]
+    assert cp['copilot_list'][0]['filename'] == rows[0]['filename']
+    assert cp['formation'] is True
+
+    # 7) 渠道 → client_type
+    for cn, code in [('官服', 'Official'), ('bilibili服', 'Bilibili'),
+                     ('B服', 'Bilibili'), ('日服', 'YoStarJP'), ('', 'Official')]:
+        assert maaplan.client_type_of(cn) == code, (cn, maaplan.client_type_of(cn))
+
+    # 8) 引擎事件翻译（纯函数，不碰设备）
+    eng = maacore.Engine.__new__(maacore.Engine)
+    eng.connected = False
+    ev = eng._translate(maacore.MSG_CONNECTION_INFO, {'what': 'Connected'})
+    assert ev['kind'] == 'connected' and eng.connected, ev
+    ev = eng._translate(maacore.MSG_CONNECTION_INFO, {'what': 'ConnectFailed'})
+    assert ev['kind'] == 'error', ev
+    assert eng._translate(maacore.MSG_ALL_TASKS_COMPLETED, {})['kind'] == 'done'
+    assert '自动战斗' in eng._translate(
+        maacore.MSG_TASK_START, {'taskchain': 'Copilot'})['text']
+    assert maacore._chain_cn('Fight') == '理智作战'
+
+    # 9) 停挂机：直连跑的时候机器上没有 MAA 进程，只能让引擎自己 AsstStop。
+    #    空表返回 0 就够——真停要设备，这里钉住「有这个出口且不会炸」。
+    assert maacore.stop_all_live() == 0
+
+    # 10) capabilities 带上核心版本位（GUI 6.20.1 但核心可能单独更新过，
+    #     版本对不上时 AsstAppendTask 会静默不收，所以前端要能看到）
+    cap = maaplan.capabilities(md)
+    assert 'coreVersion' in cap and isinstance(cap['coreVersion'], str), cap
+    assert len(cap['tasks']) == 9, len(cap['tasks'])
+    assert all('available' in t for t in cap['tasks']), cap['tasks'][:1]
+
+    # 11) build_run(start=false)：只建档案，不启动、不连模拟器
+    from core import agent
+    res = agent._start_build({
+        'rows': [{'name': '测号', 'accountName': '181****5505'}],
+        'tasks': ['startup', 'fight', 'copilot'], 'fightStages': ['TL-5'],
+        'formation': True, 'start': False, 'maaDir': md, 'profileHint': '只配不跑',
+    })
+    assert res['started'] is False, res
+    assert res['profiles'] == ['PRTS-只配不跑'], res
+    assert 'copilotNote' in res, '抄作业配不进档案，必须如实告诉用户'
+    with open(os.path.join(md, 'config', 'gui.new.json'), encoding='utf-8') as f:
+        cfg3 = json.load(f)
+    assert cfg3['Configurations']['mine'] == user_prof, '用户档案被改了'
+    assert cfg3['Configurations']['PRTS-只配不跑']['TaskQueue'], '队列是空的'
+
+
 def check_op_blacklist(tmp):
     """作业黑名单：条目按 MAA 代码存（maa://12345），归一化容错（裸数字补全、
     去重、非法丢弃）；fetch_ops 出口按代码滤，与作者黑名单同一出口"""
@@ -2043,6 +2638,226 @@ def check_applog_capture(_tmp):
     assert 'boom' in filed, '缺 traceback 现场'
 
 
+# ---------------------------------------------------------------- B34 活动关导航
+def check_stagenav(tmp):
+    """B34：活动关导航（区域行号推算 / 页面判别 / 商店保护）
+
+    这块全靠固定坐标 + 截图判断，最容易被"顺手改一下"改坏，所以把两条稳定
+    契约钉住：代号→区域行号、当前页面的分类。
+    """
+    from core import stagenav
+
+    # 1) 代号 → 区域行号（0=残阳终尽 1=长冬初青 2=世纪之春）
+    cases = {
+        'TL-S-1': 2,        # 当期新关，本地资源库还没收录 → 走后缀规则
+        'TL-S-3': 2,
+        'TL-EX-1': 1,       # EX 挑战关在第二个区域
+        'TL-5': 0,          # 本地查得到 zoneId → 走精确路径
+        '1-7': None,        # 主线关不归这段导航管
+        '15-3': None,
+        'S4-1': None,       # 「1 个字母 + 章节号」的主线特殊关
+        'R8-2': None,
+        'act55side_s01': None,   # 作业内部 id，调用方本来就该传代号
+    }
+    for code, want in cases.items():
+        got = stagenav.zone_rows_of(code)
+        assert got == want, (code, got, want)
+
+    # 2) 导航点齐全（少一个就是 KeyError 直接炸导航）
+    p = stagenav.points()
+    for k in ('tabTerminal', 'activityCard', 'themeZone', 'zoneRows',
+              'backCorner'):
+        assert k in p, '缺导航点：%s' % k
+    assert len(p['zoneRows']) == 3, p['zoneRows']
+
+    # 3) 页面判别：造四张图钉阈值（底部白占比 / 中部纯白 + 亮度）
+    import io
+
+    from PIL import Image, ImageDraw
+
+    class Shot:
+        def __init__(self, data):
+            self._d = data
+
+        def shot(self):
+            return self._d
+
+    def png(tab_white, mid_pure=0.0, mid_fill=(60, 60, 60)):
+        im = Image.new('RGB', (1280, 720), (60, 60, 60))
+        d = ImageDraw.Draw(im)
+        x1, y1 = int(0.01 * 1280), int(0.86 * 720)
+        x2, y2 = int(0.35 * 1280), int(0.94 * 720)
+        if tab_white > 0:
+            d.rectangle([x1, y1, x1 + int((x2 - x1) * tab_white), y2],
+                        fill=(255, 255, 255))
+        mx1, my1 = int(0.30 * 1280), int(0.35 * 720)
+        mw, mh = int(0.40 * 1280), int(0.20 * 720)
+        d.rectangle([mx1, my1, mx1 + mw, my1 + mh], fill=mid_fill)
+        if mid_pure > 0:
+            d.rectangle([mx1, my1, mx1 + int(mw * mid_pure), my1 + mh],
+                        fill=(255, 255, 255))
+        buf = io.BytesIO()
+        im.save(buf, 'PNG')
+        return Shot(buf.getvalue())
+
+    assert stagenav.probe(png(0.0)) == 'map', '底部全暗应判成活动地图'
+    assert stagenav.probe(png(0.30)) == 'home', '底部半白应判成主界面'
+    assert stagenav.probe(png(0.85, 0.0, (225, 225, 225))) == 'theme', \
+        '底部大半白 + 中部亮应判成活动主题页'
+    assert stagenav.probe(png(0.50, 0.40)) == 'store', \
+        '中部成片纯白（商品卡片）应判成活动商店'
+
+    # 4) 主线关不点：直接返回 False，绝不能对主线关乱点活动入口
+    class NullTouch:
+        def __init__(self):
+            self.hits = []
+
+        def tap(self, x, y):
+            self.hits.append((x, y))
+            return True
+
+        def shot(self):
+            return b''
+
+    nt = NullTouch()
+    ok, why = stagenav.goto_stage_list(nt, '1-7')
+    assert ok is False and '不是活动关' in why, (ok, why)
+    assert nt.hits == [], '主线关不该产生任何点击：%s' % (nt.hits,)
+
+
+# ---------------------------------------------------------------- B35 老故事集导航
+def check_story_nav(tmp):
+    """B35：老故事集导航（曲谱入口 / 卡片模板匹配）
+
+    MN 这类老活动 MAA 资源里没有导航配置，``Fight`` 直接拒收（实测
+    ``AsstAppendTask`` 返回 0），只能自己从「曲谱 → 乐章收录」的网格里按图
+    找活动卡片。这里钉住三件事：模板找得到、匹配定位准、曲谱页判据。
+    """
+    import io as _io
+
+    from PIL import Image, ImageDraw
+
+    from core import stagenav
+
+    # 1) 模板查找：MN 有卡片模板，当期活动（TL）不该有
+    assert stagenav.tpl_path_of('MN-7'), 'MN-7 应该能找到卡片模板'
+    assert stagenav.tpl_path_of('MN-EX-1'), 'MN-EX-1 也该命中同一个模板'
+    assert stagenav.tpl_path_of('TL-9') == '', 'TL-9 不该有卡片模板'
+    assert stagenav.tpl_path_of('1-7') == '', '主线关不该有卡片模板'
+
+    tpl_path = stagenav.tpl_path_of('MN-7')
+    tpl = Image.open(tpl_path).convert('L')
+
+    class Shot:
+        def __init__(self, data):
+            self._d = data
+
+        def shot(self):
+            return self._d
+
+    # 2) 模板匹配：贴到黑底大图的固定位置，得能找回那个位置
+    canvas = Image.new('L', (1920, 1080), 8)
+    px, py = 520, 380
+    canvas.paste(tpl, (px, py))
+    buf = _io.BytesIO()
+    canvas.save(buf, 'PNG')
+    x, y, s = stagenav.find_card(Shot(buf.getvalue()), tpl_path)
+    want = (px + tpl.width // 2, py + tpl.height // 2)
+    assert x and abs(x - want[0]) <= 12 and abs(y - want[1]) <= 12, \
+        ('模板定位偏了', (x, y), want, s)
+    assert s <= stagenav._CARD_MAX_SCORE, ('分数应该很低才对', s)
+
+    # 3) 曲谱页判据：暗底 True / 亮底 False（实测 曲谱 42 / 网格 53 / 主界面 99~130）
+    def gray(v):
+        im = Image.new('L', (1280, 720), v)
+        b = _io.BytesIO()
+        im.save(b, 'PNG')
+        return Shot(b.getvalue())
+
+    assert stagenav.in_story_page(gray(45)) is True, '暗底应判成曲谱页'
+    assert stagenav.in_story_page(gray(128)) is False, '亮底不该判成曲谱页'
+
+    # 只靠「左上角够暗」会把主界面判成曲谱页：皮肤立绘压在左边，实测灰度
+    # 98.5，正好卡在旧阈值 100 下面。后果是登录后一步都没走就开始翻三十几屏，
+    # 最后报「翻了几十屏都没找到」——2026-11-17 用户报的跳转失败就是这个。
+    # 这里造一张「左上暗 + 左下角那块礼包白卡」的主界面：必须判 False。
+    im = Image.new('RGB', (1280, 720), (45, 45, 45))
+    dr = ImageDraw.Draw(im)
+    dr.rectangle([int(0.02 * 1280), int(0.86 * 720),
+                  int(0.35 * 1280), int(0.98 * 720)],
+                 fill=(255, 255, 255))
+    b = _io.BytesIO()
+    im.save(b, 'PNG')
+    assert stagenav.in_story_page(Shot(b.getvalue())) is False, \
+        '左下角有白色功能卡的是主界面，不能判成曲谱页'
+
+    # 4) 九张老活动的卡片模板都在（少一张就意味着那个活动导航不了）
+    for code, name in (('MN-1', 'MN'), ('WD-1', 'WD'), ('DM-1', 'DM'),
+                       ('MB-1', 'MB'), ('BI-1', 'BI'), ('TW-1', 'TW'),
+                       ('RI-1', 'RI'), ('SV-1', 'SV'), ('WR-1', 'WR')):
+        assert stagenav.tpl_path_of(code), '缺卡片模板：%s' % name
+
+    # 5) EX 关识别与切换点（老故事集的 EX 关全靠地图右下角那个圆按钮）
+    assert stagenav.is_extra('MN-EX-1') is True
+    assert stagenav.is_extra('MN-EX-8') is True
+    assert stagenav.is_extra('MN-7') is False
+    assert stagenav.is_extra('TL-S-1') is False
+    assert stagenav.ex_point('MN-EX-1') == (1199, 620), stagenav.ex_point('MN-EX-1')
+    assert stagenav.ex_point('WD-EX-3') == (1199, 620)
+
+    # 6) 扫描覆盖与步长：整张表（主线 + 各 Story Line 分组 + 未归组新活动）
+    #    实测 15 屏、约 12000 像素高（1080 口径）。覆盖要留几倍余量，但
+    #    **步长不能贪大**：560 那版会漏屏（玛莉娅·临光正好落在两张截图之间）；
+    #    360 仍会截断卡片（截断卡匹配分从 4 涨到 19，掉出阈值），
+    #    240（1080 口径 360px）保证每行至少有一屏基本完整（2026-11-17）。
+    assert stagenav._MAX_SCREENS * stagenav._SWIPE_STEP >= 10000, \
+        ('扫描覆盖要够整个曲谱网格', stagenav._MAX_SCREENS, stagenav._SWIPE_STEP)
+    assert 200 <= stagenav._SWIPE_STEP <= 460, \
+        ('步长太大漏屏、太小翻不完', stagenav._SWIPE_STEP)
+    # 预滚必须存在：卡片图是网络异步加载的，不等加载完就扫会截到黑色占位
+    assert '预滚' in inspect.getsource(stagenav.goto_story_activity), \
+        ('扫描前要先预滚一遍触发卡片图加载',)
+
+    # 7) adb 通道自检：地址写错时要能自己换一个，连不上要明确说「连不上」，
+    #    而不是让上层一路点空、最后误报「翻了几十屏没找到卡片」。
+    assert hasattr(stagenav.Touch, 'ready'), 'Touch 要有 ready() 自检'
+
+    # 8) 活动总表（EVENTS）与分发：乐章收录网格里全部有关卡的活动都在表里。
+    #    2026-11-17 打包版踩过：PYZ 里模板目录解析不到 → tpl_path_of 返回空 →
+    #    MN-7 被当成当期活动去点区域列表。所以分发必须「模板 or 总表」双闸。
+    #    代号全部经真机落图核对（2026-11-17，46 个），易错代号在此钉死。
+    assert len(stagenav.EVENTS) >= 45, ('活动总表不该缩水', len(stagenav.EVENTS))
+    assert stagenav.event_of('SV-EX-1') == ('SV', '覆潮之下')
+    assert stagenav.event_of('DM-2') == ('DM', '生于黑夜')
+    assert stagenav.event_of('15-3') == ('', ''), '主线关不该进活动表'
+    assert stagenav.event_of('H15-1') == ('', ''), '突袭关不该进活动表'
+    assert stagenav._navtpl_dirs(), '模板目录一个都没找到'
+    # 真机落图核出的易错代号（2026-11-17）：别再回退成按英文缩写猜的旧表
+    assert stagenav.event_of('BP-1') == ('BP', '生路'), '生路=BP（RS 是银心湖列车）'
+    assert stagenav.event_of('RS-1') == ('RS', '银心湖列车')
+    assert stagenav.event_of('WR-1') == ('WR', '画中人')
+    assert stagenav.event_of('WB-2') == ('WB', '登临意')
+    assert stagenav.event_of('CV-1') == ('CV', '不义之财')
+    assert stagenav.event_of('ZT-3') == ('ZT', '崔林特尔梅之金')
+    assert stagenav.event_of('EP-1') == ('EP', '出苍白海')
+    assert stagenav.event_of('MT-1') == ('MT', '众生行记')
+    assert stagenav.event_of('EA-1') == ('EA', '挽歌燃烧殆尽')
+    assert stagenav.event_of('ME-1') == ('ME', '雅赛努斯复仇记')
+    assert stagenav.event_of('AW-1') == ('AW', '日暮寻路')
+    assert stagenav.event_of('TG-1') == ('TG', '去咧嘴谷')
+    assert stagenav.event_of('KR-1')[1] == '熔炉"还魂"记'
+    assert stagenav.event_of('OS-1') == ('OS', '雪山降临1101')
+    assert stagenav.event_of('UR-1') == ('UR', '未许之地')
+    assert stagenav.event_of('AT-1') == ('AT', '墟')
+    # 46 张模板都随包带上
+    tpldir = stagenav._navtpl_dirs()[0]
+    missing = [c for c in stagenav.EVENTS
+               if not any(os.path.isfile(os.path.join(d, c + '.png'))
+                          for d in stagenav._navtpl_dirs())]
+    assert not missing, ('这些活动缺模板图', missing)
+    assert len([f for f in os.listdir(tpldir) if f.endswith('.png')]) >= 40
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -2088,6 +2903,13 @@ def main():
         r.check('B26 skland HTTP 错误响应体进任务日志（401 鉴别信息）', lambda: check_skland_http_body(tmp))
         r.check('B27 app.log 失败现场（森空岛响应体全量 + 任务失败摘要/traceback）', lambda: check_applog_capture(tmp))
         r.check('B28 推荐排序分档 + 详情缺练度/缺人提示', check_copilot_rank_band)
+        r.check('B29 剧情关双视图 + 森空岛进度解析', lambda: check_story_stages(tmp))
+        r.check('B30 日志观测（增量/轮转/停滞判定/运行记录）', lambda: check_asstlog(tmp))
+        r.check('B31 多账号编排（切号名/一账号一档案/作业列表）', lambda: check_multiacct(tmp))
+        r.check('B32 助手工具白名单 + 写操作闸门 + CLI 契约', lambda: check_agent_cli(tmp))
+        r.check('B33 任务编排（GUI 队列剔除 Copilot/直连序列/档案隔离）', lambda: check_maaplan(tmp))
+        r.check('B34 活动关导航（区域行号/页面判别/主线关不点）', lambda: check_stagenav(tmp))
+        r.check('B35 老故事集导航（曲谱入口/卡片模板/EX 切换）', lambda: check_story_nav(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
