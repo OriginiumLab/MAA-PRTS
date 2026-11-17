@@ -2868,7 +2868,12 @@ def check_story_nav(tmp):
     for code, n in (('DM-EX-1', 3), ('BB-S-1', 3), ('MT-S-1', 3), ('PV-EX-1', 3),
                     ('WD-EX-1', 2), ('GA-EX-1', 2), ('HE-EX-1', 2),
                     ('BI-EX-1', 2), ('RS-EX-1', 2), ('GO-EX-1', 2),
-                    ('MN-EX-1', 2)):
+                    ('MN-EX-1', 2),
+                    # 2026-11-18 第二批（用户逐活动截图标的 EX / S 入口）
+                    ('NL-EX-1', 3), ('NL-S-1', 3),
+                    ('HS-EX-1', 3), ('HS-S-1', 3), ('HS-MO-1', 3),
+                    ('OR-EX-1', 3), ('OR-S-1', 3), ('OR-MO-1', 3),
+                    ('CW-EX-1', 2), ('DV-EX-1', 2), ('MB-EX-1', 2)):
         pts = stagenav.zone_icons_of(code)
         assert len(pts) == n, '%s 应该标定了 %d 个分区图标，实际 %d' % (code, n, len(pts))
         for x, y in pts:
@@ -2877,6 +2882,31 @@ def check_story_nav(tmp):
         # 「瞻望圣堂」只有 87px，所以门槛按图标宽度的下限定 70）
         for a, b in zip(pts, pts[1:]):
             assert b[0] - a[0] >= 70, ('分区图标间距过小', code, a, b)
+
+    # 分区栏式活动：序号要落在资源库算出来的那一格上（错了就点到隔壁分区）
+    for code, want in (('NL-EX-1', 1), ('NL-S-1', 2), ('HS-EX-1', 1),
+                       ('HS-MO-1', 2), ('OR-EX-1', 1), ('OR-MO-1', 2),
+                       ('CW-EX-1', 1), ('DV-EX-1', 1), ('MB-EX-1', 1)):
+        assert stagenav.zone_rows_of(code) == want, \
+            ('分区序号错了：%s → %s' % (code, stagenav.zone_rows_of(code)))
+
+    # 只有「基础区 + 一个 EX 按钮」的活动：不进 zoneIcons，按活动覆盖单点。
+    # 这类界面上右边那块是活动名/副标题，不是格子，硬按分区栏下标点会点空。
+    for code, pt in (('WR-EX-1', (1073, 605)), ('WB-EX-1', (1005, 628)),
+                     ('IW-EX-1', (1175, 620)), ('GT-EX-1', (1171, 605))):
+        assert stagenav.zone_icons_of(code) == [], \
+            ('%s 不是分区栏，不该进 zoneIcons' % code)
+        assert stagenav.ex_point(code) == pt, (code, stagenav.ex_point(code))
+        assert stagenav.zone_rows_of(code) == 1, code
+
+    # GT-HX 与 GT-EX 同属 act13d2_zone2（界面上共用一个 EX 图标）：代号归一成 ex
+    assert stagenav.zone_kind('GT-HX-1') == 'ex', stagenav.zone_kind('GT-HX-1')
+    assert stagenav.zone_rows_of('GT-HX-1') == 1
+    assert stagenav.is_extra('GT-HX-1') is True
+
+    # CW 的第 3 格（S 分区）故意不标：那套 UI 不是常规战斗列表，MAA 跑不了，
+    # 标了会把它点开。留给 goto_subzone 报「只标了 2 个」。
+    assert len(stagenav.zone_icons_of('CW-S-1')) == 2
 
     # 切入必须走独立函数，而且要在「进入活动」之后
     src = inspect.getsource(stagenav.goto_story_activity)

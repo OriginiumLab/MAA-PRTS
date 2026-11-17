@@ -115,13 +115,37 @@ DEFAULT_POINTS = {
         'BI': [[1048, 608], [1209, 608]],
         'RS': [[1046, 608], [1201, 608]],
         'PV': [[816, 608], [1002, 608], [1198, 608]],
-        # MN 2026-11-17 单点实测有效（EX 在右数第一个）：补上基础区那个点，
-        # 让「先归位再切」的流程也能用
-        'MN': [[1019, 608], [1199, 608]],
+        # ---- 2026-11-18 第二批（用户逐活动截图标注）----
+        # MN 黄圈徽记 / SG·EX 方块（两个分区，S 关不存在）
+        'MN': [[1087, 608], [1207, 608]],
+        # NL 交叉剑 / EX / 白塔（塔 = S 分区）
+        'NL': [[953, 608], [1073, 608], [1197, 608]],
+        # HS 地 / 荒（EX） / 洄（S·MO）
+        'HS': [[995, 608], [1098, 608], [1208, 608]],
+        # OR 识七味 / 阅世情（EX） / 怅别离（S·MO）
+        'OR': [[933, 608], [1039, 608], [1148, 608]],
+        # CW 未来将至 / 过往未尽（EX） / 紧握当下（S）。
+        # 第 3 格故意不标：CW-S 换成另一套 UI（不是常规战斗列表，MAA 跑不了），
+        # 标了反而会把它点开，所以留给 goto_subzone 报「只标了 2 个」。
+        'CW': [[963, 608], [1084, 608]],
+        # DV 绿色 LABORATORY（基础） / ∞-EX
+        'DV': [[1067, 608], [1191, 608]],
+        # MB 超狱计划（基础） / 狱中生活（EX）
+        'MB': [[1008, 608], [1170, 608]],
     },
     # 老的单点（EX 在最右边的活动）：没有分区图标表的活动退回这里
     'exSwitch': [1199, 620],
-    'exSwitchByEvent': {},
+    # 只有「基础区 + 一个 EX 按钮」的活动：那一排不是分区栏，右边那块是活动
+    # 名/副标题，左边才是按钮，没有整齐的格子，所以不给 zoneIcons，直接记
+    # EX 按钮中心（1280 口径）。goto_subzone 会走老的单点分支：点一下 + 校验
+    # 画面变化，切不过去会如实报错。
+    #   WR 铁窗徽记 / WB 小「EX」方块 / IW 棕红「EX」条 / GT 菱形「EX」
+    'exSwitchByEvent': {
+        'WR': [1073, 605],
+        'WB': [1005, 628],
+        'IW': [1175, 620],
+        'GT': [1171, 605],
+    },
 }
 
 # Windows 上控制台子进程默认会**弹一个黑色 cmd 窗口**：打包成窗口程序后没有
@@ -652,7 +676,7 @@ def zone_rows_of(stage_code):
             except (TypeError, ValueError):
                 pass
     rest = stage_code[len(m.group(1)):].lstrip('-').upper()
-    if rest.startswith('EX'):
+    if rest.startswith('EX') or rest.startswith('HX'):
         return 1
     if rest.startswith('S-') or rest == 'S':
         return 2
@@ -894,14 +918,17 @@ def find_card(touch, tpl_file, max_score=_CARD_MAX_SCORE):
 
 
 def is_extra(stage_code):
-    """这个代号是不是 EX 挑战关（``MN-EX-1`` / ``MNEX1`` 都算）"""
-    return bool(re.search(r'EX[-_]?\d', (stage_code or '').upper()))
+    """这个代号是不是 EX 挑战关（``MN-EX-1`` / ``MNEX1`` / ``GT-HX-1`` 都算）"""
+    return bool(re.search(r'(?:EX|HX)[-_]?\d', (stage_code or '').upper()))
 
 
 # 活动内分区类型：EX 挑战关 / S 特别关 / MO（终局）关 / ST 剧情关 / 基础关。
 # 代号三种写法都要认：``DM-EX-1``（主流）、``OF-EX1``（火蓝之心那种）、
 # ``BB-S-1``、``DM-MO-1``、``MN-ST-1``。
-_ZONE_KIND_RE = re.compile(r'-(EX|MO|S|ST)-?\d+$', re.I)
+# HX 是 EX 分区的另一批关（GT-EX-1~3 与 GT-HX-1~3 同属 ``act13d2_zone2``，
+# 界面上共用一个「EX」图标），所以归一成 ``ex``——按 ``ex`` 走完分区图标的
+# 下标和排序都对，只有日志里少一个字母。
+_ZONE_KIND_RE = re.compile(r'-(EX|HX|MO|S|ST)-?\d+$', re.I)
 
 
 def zone_kind(stage_code):
@@ -912,7 +939,10 @@ def zone_kind(stage_code):
     正好是「基础关 → EX → S/MO」这个顺序）。
     """
     m = _ZONE_KIND_RE.search((stage_code or '').upper())
-    return m.group(1).lower() if m else 'base'
+    if not m:
+        return 'base'
+    k = m.group(1).lower()
+    return 'ex' if k == 'hx' else k
 
 
 def zone_icons_of(stage_code):
@@ -1775,11 +1805,17 @@ def goto_subzone(touch, stage_code, log=None):
     label = {'ex': 'EX', 's': 'S', 'mo': 'MO', 'st': 'ST'}.get(kind, kind.upper())
 
     if not icons:
-        # 没标定过这个活动：EX 退回老的单点（历史行为），S/MO 只能如实报错，
-        # 因为老的单点根本没有它们的位置。
+        # 没标定过这个活动：EX 退回单点（有的活动就长这样，见 exSwitchByEvent），
+        # S/MO 只能如实报错，因为单点根本没有它们的位置。
         if kind == 'ex' and idx:
             nx, ny = ex_point(stage_code)
-            log('「%s」没有分区图标表，退回老的单点 EX (%d,%d)' % (stage_code, nx, ny))
+            pre = re.match(r'^([A-Za-z][A-Za-z0-9]*)', stage_code or '')
+            tbl = points().get('exSwitchByEvent') or {}
+            marked = bool(pre and (tbl.get(pre.group(1).upper())
+                                   or tbl.get(pre.group(1))))
+            log(('「%s」是单 EX 按钮式活动，点 EX 按钮 (%d,%d)' if marked else
+                 '「%s」没有分区图标表，退回老的单点 EX (%d,%d)')
+                % (stage_code, nx, ny))
             before = _settled_shot(touch)
             touch.tap(nx, ny)
             time.sleep(MAP_DELAY)
