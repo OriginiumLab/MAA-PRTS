@@ -380,10 +380,12 @@ TOOLS = [
            'accountName': {'type': 'string',
                            'description': '切号名；不给就唤醒当前账号'}}),
     _tool('skill_navigate',
-          '把游戏导航到指定活动（老活动走曲谱，当期活动走区域列表；EX / S / MO 关会自动切到活动地图里的对应分区）。'
+          '把游戏导航到指定活动（老活动走曲谱，当期活动走终端页的活动提示条；'
+          'EX / S / MO 关会自动切到活动地图里的对应分区）。'
           'stage 可以传**中文活动名（推荐，如「孤星」「愚人号」）**、关卡号'
-          '（MN-1 / TL-5 / XX-EX-1）或活动 id（act25side），内部会自己换成真实'
-          '关卡代号。**别自己凭记忆把中文名换算成代号**（孤星是 CW，不是 SV）。'
+          '（MN-1 / TL-5 / XX-EX-1）、活动 id（act25side），也可以直接传'
+          '「最新活动 / 当期活动」。内部会自己换成真实关卡代号。'
+          '**别自己凭记忆把中文名换算成代号**（孤星是 CW，不是 SV）。'
           '返回 taskId。',
           {'stage': _STAGE,
            'activity': {'type': 'string',
@@ -604,9 +606,23 @@ def _tool_list_accounts(args):
 def _tool_list_activities(args):
     n = max(1, min(40, int(args.get('limit') or 12)))
     rows = resources.activity_list(n) or []
-    return {'activities': [{'name': r.get('name'), 'prefix': r.get('prefix'),
-                            'stages': r.get('count') or r.get('stages')}
-                           for r in rows]}
+    out = {'activities': [{'name': r.get('name'), 'prefix': r.get('prefix'),
+                           'stages': r.get('count') or r.get('stages')}
+                          for r in rows]}
+    # 当期活动（我们写过导航的那几个，带有效期）：用户说「最新活动」时用
+    # 这里的 prefix，别自己猜代号（2026-11-19 用户要求）
+    try:
+        from . import eventnav
+        cur = eventnav.active()
+        if cur:
+            out['current'] = cur
+            out['currentHint'] = ('current 是**当期还在有效期**的活动（我们写过'
+                                  '导航），用户说「最新活动 / 当期活动」就用它的 '
+                                  'stage（如 TL-1），EX / S 关分别是 TL-EX-1 / '
+                                  'TL-S-1')
+    except Exception:
+        pass
+    return out
 
 
 def _tool_search_stages(args):
@@ -1609,8 +1625,18 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
   文案改成"已换"是没用的——不传 ops 就会重新搜索，排序又挑回原来那份。
 - **翻车会自动重挂，不用你重排**：skill_fight / skill_sweep 每关都备了
   2~3 份作业，某关打不过会换下一份自动重挂这一关，**已经成功的关不会重打**。
+  重挂前程序会自己点一下结算页把界面带回关卡列表（用户 2026-11-19 实测：
+  失败后必须点一下才回得到关卡界面，**不需要重新唤醒/登录**）。
   日志里会出现「✘ X 翻车：原因」「换作业重挂：X #a → #b」「✔ X 战斗成功」，
   照实转述换了哪几关、最后成没成；不要自己说"我再重跑一遍"。
+- **关卡名单只能用用户点名的那些**（2026-11-19 用户实测吃亏）：用户说
+  「SV-EX-1 到 SV-EX-6」就排这 6 关，**不许改编号、不许跳掉一关再往后补
+  一关凑数**（那次实际排成 SV-EX-2 ~ SV-EX-7，白烧一轮理智）。跳过要说明
+  「EX-1 我按你说的跳过了」，不要偷偷把 EX-7 加进来。
+- **「最新活动 / 当期活动」**：先 list_activities，看返回的 ``current``（带
+  ``until`` 有效期和 stage 代号）——直接用它，EX 关是 ``前缀-EX-1``、S 关是
+  ``前缀-S-1``。current 为空（活动都过期了）就如实说「当期活动还没标定导航，
+  把截图和步骤发我」。
 - 不确定能配什么就先调 maa_capabilities，别猜
 - 回答用中文，简洁，别写长篇。不要输出 JSON 给用户看。
 - 涉及具体操作时，最后告诉用户去界面上哪看结果（跑机面板 / 左侧账号栏）

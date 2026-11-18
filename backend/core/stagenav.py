@@ -1981,6 +1981,19 @@ def goto_stage_list(touch, stage_code, log=None):
             return False, ('「%s」不是关卡代号（要像 CW-1 / MN-EX-1 这样）；'
                            '先换成真实关卡代号再导航' % stage_code)
 
+    # 当期活动：用户 2026-11-19 逐屏标注的那套入口（终端页活动提示条 → 活动
+    # 地图 → 右下区域按钮）。**排在老路径前面**：新活动的 UI 上「主界面大图 →
+    # 主题页 → 区域列表」已经点不到了（区域是散点，分区靠关卡列表右下角切）。
+    try:
+        from . import eventnav
+        if eventnav.has(stage_code):
+            ok, why = eventnav.run(touch, stage_code, log)
+            if ok:
+                return True, why
+            log('当期活动导航没成功（%s），退回老路径再试一次' % why)
+    except Exception as e:                       # noqa: BLE001 别把人卡在这
+        log('当期活动导航出错（%s: %s），退回老路径' % (type(e).__name__, e))
+
     # 有卡片模板、或者代号在活动总表（EVENTS）里，就先走「曲谱」：这是显式
     # 配置过的意图。**两道闸都要在**——打包环境里模板目录偶尔解析不到
     # （PYZ 的 __file__ 指向不存在的 .pyc），只看模板会把 MN-7 错当成当期

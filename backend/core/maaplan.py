@@ -52,6 +52,12 @@ from . import acctname, maa, maalog, settings, tasks
 PROFILE_PREFIX = 'PRTS-'
 _SAFE = re.compile(r'[\\/:*?"<>|]')
 
+# 结算页「点一下继续」的位置（1280 口径）：MAA 自己的 ClickCorner 是
+# ``specificRect [1000, 20, 270, 50]``，定义里注明「点屏幕右边不会点到掉落
+# 物品，也不会关掉关卡选择」，取中心点用。翻车重挂前必须先点掉结算页，
+# 否则新作业集排下去 Copilot 在结算页上认不出关卡名（2026-11-19 用户实测）。
+_RESULT_TAP = (1135, 45)
+
 # 任务清单：key → (TaskType, 中文名, 说明, 是否需要关卡)
 # 顺序即「一键长草」里的推荐顺序，也是默认队列的顺序
 TASK_DEFS = [
@@ -902,8 +908,9 @@ def run_core(spec, tid=None, timeout=None):
                     # 老故事集/自建模板的关卡，MAA 自己 100% 找不到（它的入口
                     # 模板在当前 UI 上全失效，只会横向滑主线）。这种情况宁可
                     # 明确报错，也别把作业排下去让它乱滑 30 秒再失败。
-                    from . import stagenav
-                    if stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]:
+                    from . import stagenav, eventnav
+                    if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
+                            or eventnav.has(first)):
                         raise RuntimeError('导航没到位（%s），不再把作业交给 MAA'
                                            % nav_why)
                     log('导航没成功，交给 MAA 自己试（当期活动它认得）')
@@ -921,8 +928,9 @@ def run_core(spec, tid=None, timeout=None):
             nav_ok, nav_why = _navigate(conn, first, log,
                                         client=spec.get('clientType'))
             if not nav_ok:
-                from . import stagenav
-                if stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]:
+                from . import stagenav, eventnav
+                if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
+                        or eventnav.has(first)):
                     raise RuntimeError('导航没到位（%s），不再把作业交给 MAA'
                                        % nav_why)
 
@@ -934,7 +942,8 @@ def run_core(spec, tid=None, timeout=None):
         # 自动接着挂，并且日志里说清楚换了哪份。
         swapped, chains_mark = [], None
         if state.get('results') and spec.get('retry'):
-            swapped, chains_mark = _retry_failed(eng, spec, state, log, d, budget)
+            swapped, chains_mark = _retry_failed(eng, spec, state, log, d, budget,
+                                                 conn=conn)
         if not finished and not state.get('pause'):
             log('等了 %d 分钟还没跑完，先停下' % (total // 60))
             eng.stop()
@@ -1497,7 +1506,60 @@ def _tally(results):
     return ok, list(bad.values())
 
 
-def _retry_failed(eng, spec, state, log, d, deadline):
+def _leave_result(conn, spec, stage, log):
+    """翻车后把界面从「失败结算页」点回关卡列表；点不动就重新导航
+
+    用户 2026-11-19 的实测口径：一次战斗失败后要随便点一下界面回到关卡界面，
+    在那个界面重排作业集就能换作业开打，**不需要重新唤醒/登录**。
+
+    点哪儿不是随便挑的：用的是 MAA 自己 ``ClickCorner`` 那块
+    ``[1000, 20, 270, 50]``（1280 口径，中心 (1135,45)）——任务定义里写得很
+    清楚「点击屏幕右边，不会点到掉落物品，且不会关掉关卡选择的一块区域」，
+    所以结算页上能推进、在关卡列表上点了也无害，重复点几次都安全。
+
+    点完看一眼是不是回到关卡列表（``stagenav.probe == 'map'``）；不是就按
+    正常导航流程重新到位（首页 → 终端页 → 活动地图 → 分区）。这一段只保证
+    「界面能接受新的作业集」，失败也不抛错——真开不了打，下一轮还有日志。
+    """
+    try:
+        from . import stagenav
+    except Exception:
+        return False
+    if not conn:
+        return False
+    try:
+        touch = stagenav.Touch(conn['adb_path'], conn['address'], log,
+                               package=stagenav.game_package(spec.get('clientType')))
+        alive, detail = touch.ready()
+        if not alive:
+            log('点结算页失败：adb 不可用（%s）' % detail)
+            return False
+        prev = touch.shot()
+        if not prev:
+            log('点结算页失败：截不到图')
+            return False
+        for i in range(4):
+            touch.tap(*_RESULT_TAP)
+            time.sleep(1.5)
+            cur = touch.shot()
+            if cur and not stagenav._moved(prev, cur, thr=2.5):
+                break                   # 画面不动了：结算页已经点完
+            prev = cur
+        state_now = stagenav.probe(touch)
+        if state_now == 'map':
+            log('结算页已点回到关卡列表')
+            return True
+        log('点完不在关卡列表（判定：%s），重新导航一次再重挂'
+            % (state_now or '未知'))
+        ok, why = _navigate(conn, stage, log, client=spec.get('clientType'))
+        log('重挂前重新导航%s：%s' % ('完成' if ok else '失败', why))
+        return ok
+    except Exception as e:              # noqa: BLE001 点结算页不能拖垮挂机
+        log('点结算页出错：%s: %s' % (type(e).__name__, e))
+        return False
+
+
+def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
     """一轮打完，把翻车的关**换一份作业**重挂（同段内，不重新导航）
 
     用户 2026-11-19 的需求 3：「某关战斗失败了，修改作业集中该关卡的作业，
@@ -1572,6 +1634,13 @@ def _retry_failed(eng, spec, state, log, d, deadline):
                             r.get('stage_name') for r in rows if r.get('filename')}
         state['cid_of'] = {os.path.basename(r.get('filename') or ''):
                            _cid_of(r.get('filename')) for r in rows if r.get('filename')}
+        # 翻车之后游戏停在**失败结算页**（「作战失败 / 行动结束」那一层），
+        # 这时把新的作业集排下去，MAA 的 ClickStageName 在结算页上 OCR 不到
+        # 关卡名，整轮重挂就白跑——用户 2026-11-19 实测口径：「战斗失败需要
+        # 随便点击一下界面回到关卡界面，在那个界面重新运行修改后的作业集就
+        # 可以换作业运行，不需要重新唤醒登录」。所以先点一下（MAA 自己的
+        # ClickCorner 区域，点这里不会点到掉落物、也不会关掉关卡选择）再排。
+        _leave_result(conn, spec, pend[0]['stage'], log)
         eng.append('Copilot', _copilot_params(rows, spec))
         done_n = len(order) - len(pend)
         log('第 %d 轮：重挂 %d 关%s'

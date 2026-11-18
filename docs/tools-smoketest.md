@@ -153,6 +153,28 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
   `普通关 / EX 关·普通 / EX 关·突袭 / S 关`，variant `normal/normal/raid/normal`；
   `raid='normal'` 塌成三段；`tiers=['ex']` 只出 EX 两段；剧情关（ST）不进计划
 
+### B44 当期活动导航（2026-11-19）
+
+用户给了当期活动（TL「时间啊，向前！」，有效期到 11-25）的逐屏步骤，要
+「说最新活动就用这套导航，老的别删，会复刻」。
+
+- 有效期：TL 到 `2026-11-25` 不过期、`2026-11-26` 过期；`active()` 过了那一天
+  就不返回它
+- 指代：`最新活动 / 当期活动 / 时间啊，向前！ / 时间啊向前` 都落到 `TL-1`；
+  `skills.norm_stage` 同样认
+- 模板：`_entry_track.png` / `TL_z1~z3.png` 必须在包里；分区必须是
+  `base / ex / s`，每个都有兜底 `tap` 和 `roi`，EX 与 S 的 ROI 不能重叠
+  （否则同一个按钮两段互相抢）
+- 路由：`goto_stage_list('TL-EX-1')` 先走 `eventnav.run`，不再去点老的活动大图
+- 重挂前点结算页：`_leave_result` 第一下必须点在 `_RESULT_TAP`（MAA 的
+  ClickCorner 中心），`probe == 'map'` 就停在关卡列表不再导航；不在关卡列表
+  时退回 `_navigate` 重新到位
+- 名单核对：`_tidy_stage_list(['SV-EX-1','SV-EX-2','SV-EX-7'], 用户点名
+  ['SV-EX-1','SV-EX-2'])` → 剔掉 EX-7 并写日志；用户点名却没排进去的关也点名
+
+离线核对模板（不连模拟器也能验）：把用户截图喂给 `find_card_bytes`，四张模板
+都拿 0.0 分、命中位置就是红框中心。
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

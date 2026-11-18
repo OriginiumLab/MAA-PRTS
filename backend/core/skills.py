@@ -141,6 +141,17 @@ def norm_stage(raw, log=None):
     if re.match(r'^\d{1,2}-\d+$', s):
         return s, ''
 
+    # 「最新活动 / 当期活动」这类指代：走当期活动表（用户 2026-11-19 要求，
+    # 活动一换就让助手直接挂新的，不用他每次都报代号）
+    try:
+        from . import eventnav
+        hit = eventnav.match_name(s)
+        if hit:
+            log('「%s」→ %s（当期活动）' % (s, hit))
+            return hit, ''
+    except Exception:
+        pass
+
     try:
         res = resources.resolve(s)
     except Exception:
@@ -492,6 +503,40 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
     return picks, pool
 
 
+def _tidy_stage_list(stages, asked, log):
+    """预检后的名单核对：只留「用户点名的关 + 游戏内前置关」
+
+    2026-11-19 用户实测：他说「SV-EX-1 ~ SV-EX-6」，助手排的是
+    ``SV-EX-2 ~ SV-EX-7``（跳掉 EX-1 之后又往后补了一关凑数），白烧一整轮
+    理智。这里按白名单过滤，名单外的一律剔掉并写日志；用户点名却没排进去的
+    （预检判定打不了）也点名说明。
+    """
+    asked = [str(s).upper() for s in (asked or []) if s]
+    if not asked or not stages:
+        return stages
+    allow = set(asked)
+    try:
+        allow |= {x['code'].upper()
+                  for x in stageplan.expand(list(asked), with_prereq=True,
+                                            fill_base=True)}
+    except Exception:
+        pass
+    extra = [s for s in stages if str(s).upper() not in allow]
+    if extra:
+        log('名单核对：%s 不在用户点名的关卡里（也不是前置关），已剔除'
+            % '、'.join(str(x) for x in extra))
+        stages = [s for s in stages if str(s).upper() in allow]
+        if not stages:
+            raise ValueError('名单核对后一关都不剩（用户点名的是 %s）'
+                             % '、'.join(asked))
+    got = {str(x).upper() for x in stages}
+    missed = [s for s in asked if s not in got]
+    if missed:
+        log('名单核对：用户点名的 %s 没在计划里（预检判定打不了，见上面说明）'
+            % '、'.join(missed))
+    return stages
+
+
 def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
                  depth=3, strict=False):
     """``_select_ops`` + 落盘 → ``(copilotList, retry)``
@@ -570,6 +615,8 @@ def skill_fight(params, log, tid=None):
     with_nav = bool(params.get('wakeup') or params.get('navigate'))
 
     # ---- 开打前预检：能打哪几关、哪几关打不了、为什么 ----
+    # 用户点名的关（预检会往里补前置关，比对时要用原样的这一份）
+    asked = [s.upper() for s in stages]
     plan = None
     if params.get('precheck', True):
         # autoPrereq：默认 'auto' = 只补 EX / S / MO 的前置（这几关才是「没通
@@ -591,6 +638,9 @@ def skill_fight(params, log, tid=None):
                 raise ValueError('这号一关都打不了：\n' + '\n'.join(
                     stageplan.details(plan)) + '\n' + '\n'.join(plan['notes']))
             stages = plan['playable']
+
+    # ---- 关卡名单核对：只能比用户点名的多「前置关」，不能冒出别的编号 ----
+    stages = _tidy_stage_list(stages, asked, log)
 
     spec = {
         'tasks': ['startup', 'copilot' if mode == 'copy' else 'fight'],

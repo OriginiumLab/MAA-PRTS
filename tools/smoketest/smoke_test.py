@@ -4098,6 +4098,132 @@ def check_battle_retry(tmp):
         resources.resolve = old_res
 
 
+def check_event_nav(tmp):
+    """B44：当期活动导航 + 翻车重挂前点结算页 + 关卡名单核对
+
+    ① 当期活动表带有效期（TL 到 2026-11-25），过期只提示不失效
+    ② 用户说「最新活动 / 活动名」能落到真实代号（TL-1）
+    ③ 导航模板都在包里（缺了就只能靠兜底坐标）
+    ④ goto_stage_list 对当期活动先走 eventnav，不再点老的活动大图
+    ⑤ 翻车重挂前点一下结算页（MAA 自己的 ClickCorner 位置）回关卡列表
+    ⑥ 名单核对：用户点名的关之外的编号一律剔掉
+    """
+    _reset_config(tmp)
+    import datetime
+
+    from core import eventnav, maaplan, skills, stagenav
+
+    # ① 有效期
+    assert eventnav.has('TL-EX-1') and not eventnav.has('SV-EX-1')
+    assert not eventnav.is_expired('TL', datetime.date(2026, 11, 19))
+    assert eventnav.is_expired('TL', datetime.date(2026, 11, 26))
+    act = eventnav.active(datetime.date(2026, 11, 19))
+    assert any(r['prefix'] == 'TL' and r['until'] == '2026-11-25' for r in act), act
+    assert not any(r['prefix'] == 'TL'
+                   for r in eventnav.active(datetime.date(2026, 12, 1)))
+
+    # ② 指代 → 真实代号
+    assert eventnav.match_name('最新活动') == 'TL-1'
+    assert eventnav.match_name('当期活动') == 'TL-1'
+    assert eventnav.match_name('时间啊，向前！') == 'TL-1'
+    assert eventnav.match_name('时间啊向前') == 'TL-1'
+    assert eventnav.match_name('覆潮之下') == ''
+    assert skills.norm_stage('最新活动')[0] == 'TL-1'
+    assert skills.norm_stage('SV-EX-1')[0] == 'SV-EX-1'
+
+    # ③ 模板齐全 + 分区结构（基础 / EX / S 都要有兜底坐标和识别区域）
+    ent = eventnav.ENTRIES['TL']
+    specs = [ent['entry']] + list(ent['zones'].values())
+    for s in specs:
+        p = eventnav._tpl_path(s['tpl'])
+        assert p and os.path.isfile(p), s
+    assert set(ent['zones']) == {'base', 'ex', 's'}, ent['zones']
+    for k, v in ent['zones'].items():
+        assert len(v['tap']) == 2 and len(v['roi']) == 4, (k, v)
+    # ROI 只框住目标按钮：EX 和 S 的识别区域不能重叠到互相抢
+    assert ent['zones']['ex']['roi'][1] + ent['zones']['ex']['roi'][3] \
+        <= ent['zones']['s']['roi'][1], ent['zones']
+
+    # ④ 当期活动先走 eventnav
+    called = []
+    old_run = eventnav.run
+    eventnav.run = lambda touch, code, log=None: (
+        called.append(code) or (True, 'ok'))
+    try:
+        ok, why = stagenav.goto_stage_list(object(), 'TL-EX-1', lambda *_: None)
+    finally:
+        eventnav.run = old_run
+    assert ok and called == ['TL-EX-1'], (ok, called)
+
+    # ⑤ 重挂前点结算页 → 回到关卡列表
+    taps = []
+
+    class Touch:
+        def __init__(self, *a, **kw):
+            self.n = 0
+
+        def ready(self):
+            return True, 'ok'
+
+        def shot(self):
+            self.n += 1
+            return b'frame%d' % self.n
+
+        def tap(self, x, y):
+            taps.append((x, y))
+            return True
+
+    class FakeTime:
+        @staticmethod
+        def sleep(_s):
+            return None
+
+        @staticmethod
+        def time():
+            return 0.0
+
+    old = (stagenav.Touch, stagenav.probe, stagenav._moved, maaplan.time)
+    stagenav.Touch = Touch
+    stagenav._moved = lambda a, b, thr=3.0: False      # 画面不动 = 点完了
+    maaplan.time = FakeTime
+    talk, naved = [], []
+    old_nav = maaplan._navigate
+    maaplan._navigate = lambda conn, st, log, client=None: (
+        naved.append(st) or (True, 'ok'))
+    try:
+        stagenav.probe = lambda t: 'map'
+        ok = maaplan._leave_result({'adb_path': 'adb', 'address': 'x'},
+                                   {'clientType': 'Official'}, 'TL-EX-1',
+                                   talk.append)
+        assert ok, talk
+        assert taps and taps[0] == maaplan._RESULT_TAP, (taps, maaplan._RESULT_TAP)
+        assert any('点回到关卡列表' in x for x in talk), talk
+        assert not naved, '已经在关卡列表就不该再导航'
+        # 点完不在关卡列表（例如停在主题页）：退回重新导航
+        taps.clear()
+        stagenav.probe = lambda t: 'theme'
+        ok2 = maaplan._leave_result({'adb_path': 'adb', 'address': 'x'},
+                                    {'clientType': 'Official'}, 'TL-EX-1',
+                                    talk.append)
+        assert ok2 and naved == ['TL-EX-1'], (ok2, naved)
+    finally:
+        (stagenav.Touch, stagenav.probe, stagenav._moved,
+         maaplan.time) = old
+        maaplan._navigate = old_nav
+
+    # ⑥ 名单核对：用户点名之外的关剔掉，缺的要点名
+    logs = []
+    got = skills._tidy_stage_list(['SV-EX-1', 'SV-EX-2', 'SV-EX-7'],
+                                 ['SV-EX-1', 'SV-EX-2'], logs.append)
+    assert got == ['SV-EX-1', 'SV-EX-2'], got
+    assert any('SV-EX-7' in x and '剔除' in x for x in logs), logs
+    logs2 = []
+    got2 = skills._tidy_stage_list(['SV-EX-1'], ['SV-EX-1', 'SV-EX-2'],
+                                   logs2.append)
+    assert got2 == ['SV-EX-1'], got2
+    assert any('SV-EX-2' in x and '没在计划里' in x for x in logs2), logs2
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -4160,6 +4286,7 @@ def main():
         r.check('B41 每关只打要打的档（默认突袭/@后缀逐关/不再垫普通）', lambda: check_raid_order(tmp))
         r.check('B42 工具调用断链自愈 + 点名作业真的生效', lambda: check_agent_tool_chain(tmp))
         r.check('B43 逐关战报 + 失败换作业重挂 + 分段扫图', lambda: check_battle_retry(tmp))
+        r.check('B44 当期活动导航（有效期/指代/模板/点结算页/名单核对）', lambda: check_event_nav(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
