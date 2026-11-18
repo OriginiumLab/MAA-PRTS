@@ -213,6 +213,8 @@ WR=画中人        ZT=崔林特尔梅之金
 | `autoCheckAppUpdate` | 启动后是否检查程序新版本，默认开。6 小时最多一次，且**只提醒不自动装**——下载与重启都要用户自己点 |
 | `acceptPrerelease` | 是否接收 `vX.Y.Z-beta.N` 预发布版，默认关。关掉时预发布版本不会提示 |
 | `lastAccount` | 上次选中的账号文件，下次启动直接恢复 |
+| `emulatorPath` | 模拟器安装目录，**留空就用 MAA 配置里那个**（`ConnectSettings.Extras.<类型>.EmulatorPath`）。只有 MAA 里没配、或者想指另一个实例时才填 |
+| `emulatorAutoStart` | 任务开跑前发现模拟器没启动，是否替用户启动，默认开（见 `docs/backend.md` 的「开跑前的环境闸」）。关掉后只提示不动手 |
 
 这个文件可以直接手改；改完要重启程序生效（程序启动时读一次并缓存）。
 删掉它等于恢复默认：引导会重新出现，需要再填一次 MAA 目录。

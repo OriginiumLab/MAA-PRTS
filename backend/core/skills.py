@@ -20,6 +20,10 @@
   skip_story  过剧情关（mn-st-1 这类 ST 关）               stagenav + 跳幕
   signin      森空岛签到（单号 / 全部）                    signin.run
   weekly      周目编排：把上面几个按关卡顺序串起来         本文件 _plan_cycle
+
+除 signin 外，每个 skill 起跑前都会先过一次环境闸（``envcheck.ensure``）：
+模拟器没开就替用户启动，起来才往下走；见 ``_NEEDS_GAME`` 和 envcheck 的
+模块注释。它不是 skill，``/api/skill/list`` 里看不到。
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ import threading
 import time
 
 from . import accounts
+from . import envcheck
 from . import maaplan
 from . import resources
 from . import settings
@@ -611,6 +616,12 @@ SKILLS = {
     'weekly':    ('周目编排：剧情+战斗按序全自动',      skill_weekly),
 }
 
+# 哪些 skill 跑之前要先确认模拟器在。signin 走的是森空岛网页，跟游戏无关，
+# 不查——否则用户只想签个到，却被要求开模拟器。这张表另用一个常量而不是
+# 塞进 SKILLS 元组：/api/skill/list 和助手的工具列表都直接吃 SKILLS 的形状，
+# 加字段会把两处都牵连一遍。
+_NEEDS_GAME = frozenset(['wakeup', 'navigate', 'fight', 'skip_story', 'weekly'])
+
 
 def run_skill(name, params=None):
     """把一个 skill 跑成后台任务，返回 taskId（前端 / 助手轮询 /api/task）
@@ -618,6 +629,10 @@ def run_skill(name, params=None):
     tid 透传给 skill：fight / wakeup / skip_story 里调 run_core(spec, tid=tid)，
     MAA 的事件日志（排队 / 逃跑 / 失败）会写进同一条任务日志——右栏日志栏
     和助手都能一眼看到卡在哪。
+
+    **起任务前先过环境闸**（:mod:`envcheck`）：模拟器没开就替用户启动，
+    起来之后才真正开跑；起不来直接让任务失败，不往下走到「翻了几十屏没
+    找到卡片」那种更看不懂的报错。一切正常时日志里不会多一行。
     """
     entry = SKILLS.get(name)
     if not entry:
@@ -631,6 +646,10 @@ def run_skill(name, params=None):
         tid = threading.current_thread().name.replace('task-', '', 1)
         log = tasks.log_factory(tid)
         log('[%s] %s' % (name, desc))
+        if name in _NEEDS_GAME:
+            ok, why = envcheck.ensure(log)
+            if not ok:
+                raise RuntimeError('环境没准备好：%s' % why)
         return fn(params or {}, log, tid=tid)
 
     tid = tasks.create('skill:' + name, job)

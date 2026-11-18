@@ -3158,6 +3158,124 @@ def check_stage_precheck(tmp):
         stageplan.review = orig_rev2
 
 
+# ---------------------------------------------------------------- B37 环境检测
+def check_envcheck(_tmp):
+    """B37：开跑前环境检测（配置来源 / 静默 / 替用户启动 / 闸门）
+
+    2026-11-18 用户要求：每次跑任务前先看模拟器在不在，路径优先从 MAA 的
+    配置里读；检测本身「不显示出来」，只有真没启动、真替他启动了才说话。
+    所以这组断言的语气很明确——**正常路径必须一行日志都没有**。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from unittest import mock
+    from core import envcheck, skills, tasks
+
+    cfg = {'adb': 'adb', 'address': 'emulator-5554', 'kind': 'LDPlayer',
+           'emu_dir': 'D:\\LDPlayer\\', 'index': 0, 'name': '雷电模拟器',
+           'source': 'MAA 配置'}
+    empty = {'adb': '', 'address': '', 'kind': '', 'emu_dir': '', 'index': 0,
+             'name': '', 'source': ''}
+
+    # 1) 读不到 MAA 配置（还没引导过）：放行，别把任务堵死
+    with mock.patch.object(envcheck, 'read_config', lambda: empty):
+        logs = []
+        ok, why = envcheck.ensure(log=logs.append)
+        assert ok and not logs, ('没配置时应静默放行', logs)
+
+    # 2) 已经连上：零日志（「不显示出来」就是这条）
+    with mock.patch.multiple(
+            envcheck, read_config=lambda: cfg,
+            adb_now=lambda cfg=None: (True, 'emulator-5554', 'adb 正常')):
+        logs = []
+        ok, why = envcheck.ensure(log=logs.append)
+        assert ok and why == 'adb 正常', (ok, why)
+        assert not logs, ('已连上时不该刷日志', logs)
+
+    # 3) 用户关了自动启动：只提示，绝不发启动命令
+    started = []
+    with mock.patch.multiple(
+            envcheck, read_config=lambda: cfg,
+            adb_now=lambda cfg=None: (False, '', '没有在线设备'),
+            instance_up=lambda cfg: False,
+            launch=lambda c: started.append(c) or (True, 'x')):
+        with mock.patch.object(envcheck, 'settings',
+                               mock.Mock(load=lambda: {'emulatorAutoStart': False})):
+            ok, why = envcheck.ensure(log=lambda *_: None)
+        assert not ok and '自动启动' in why, why
+        assert not started, '关了自动启动还去点启动器'
+
+    # 4) 没开就替用户启动；起了才放行，日志里要说清「帮你了」
+    seq = []
+
+    def fake_adb(cfg=None):
+        seq.append(1)
+        return (len(seq) > 1, 'emulator-5554', 'adb 正常（emulator-5554）')
+    logs = []
+    with mock.patch.multiple(
+            envcheck, read_config=lambda: cfg, adb_now=fake_adb,
+            instance_up=lambda cfg: False,
+            launch=lambda c: (True, 'ldconsole.exe launch --index 0')):
+        with mock.patch.object(envcheck, 'settings',
+                               mock.Mock(load=lambda: {'emulatorAutoStart': True})):
+            ok, why = envcheck.ensure(log=logs.append, wait=3)
+    assert ok, why
+    assert any('帮你启动' in l for l in logs), logs
+    assert any('adb 就绪' in l for l in logs), logs
+
+    # 5) 启动器找不到 / 类型不认识：说清原因，别静默往下走
+    with mock.patch.multiple(
+            envcheck, read_config=lambda: dict(cfg, emu_dir='D:\\nope\\'),
+            adb_now=lambda cfg=None: (False, '', '没有在线设备'),
+            instance_up=lambda cfg: False):
+        with mock.patch.object(envcheck, 'settings',
+                               mock.Mock(load=lambda: {'emulatorAutoStart': True})):
+            ok, why = envcheck.ensure(log=lambda *_: None)
+        assert not ok and '目录不存在' in why, why
+    with mock.patch.multiple(
+            envcheck, read_config=lambda: dict(cfg, kind='Weird'),
+            adb_now=lambda cfg=None: (False, '', '没有在线设备'),
+            instance_up=lambda cfg: False):
+        with mock.patch.object(envcheck, 'settings',
+                               mock.Mock(load=lambda: {'emulatorAutoStart': True})):
+            ok, why = envcheck.ensure(log=lambda *_: None)
+        assert not ok and '不认识' in why, why
+
+    # 6) 进程在、adb 连不上（模拟器还在开机 / adb 端口被占）：等一小会再给话术
+    with mock.patch.multiple(
+            envcheck, read_config=lambda: cfg,
+            adb_now=lambda cfg=None: (False, 'emulator-5554', '设备 offline'),
+            instance_up=lambda cfg: True):
+        ok, why = envcheck.ensure(log=lambda *_: None, wait=1)
+        assert not ok and 'adb' in why and 'MAA' in why, why
+
+    # 7) 闸门挂对了：除签到（森空岛网页）外都要先查环境
+    assert set(skills._NEEDS_GAME) == set(skills.SKILLS) - {'signin'}, \
+        skills._NEEDS_GAME
+    # /api/skill/list 和助手工具表都按 (desc, fn) 二元组取值，形状不能变
+    for name, entry in skills.SKILLS.items():
+        assert len(entry) == 2 and callable(entry[1]), name
+
+    # 8) 真挡一次：环境没过，任务直接 error，skill 本体一次都不该被调
+    boom = []
+    entry = skills.SKILLS['wakeup']
+    skills.SKILLS['wakeup'] = (entry[0], lambda *a, **k: boom.append(1))
+    try:
+        with mock.patch.object(skills.envcheck, 'ensure',
+                               lambda log=None: (False, '模拟器没起来')):
+            tid = skills.run_skill('wakeup', {})
+            t = None
+            for _ in range(300):
+                t = tasks.get(tid)
+                if t and t['status'] != 'running':
+                    break
+                time.sleep(0.02)
+    finally:
+        skills.SKILLS['wakeup'] = entry
+    assert not boom, '环境没过还是把 skill 本体跑了'
+    assert t and t['status'] == 'error', (t or {}).get('status')
+    assert '环境没准备好' in (t.get('error') or ''), t.get('error')
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -3211,6 +3329,7 @@ def main():
         r.check('B34 活动关导航（区域行号/页面判别/主线关不点）', lambda: check_stagenav(tmp))
         r.check('B35 老故事集导航（曲谱入口/卡片模板/EX 切换）', lambda: check_story_nav(tmp))
         r.check('B36 打关预检（前置关/练度/连锁/卡在哪关）', lambda: check_stage_precheck(tmp))
+        r.check('B37 环境检测（配置来源/静默/替用户启动/任务前闸门）', lambda: check_envcheck(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

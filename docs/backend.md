@@ -29,6 +29,7 @@
 | `core/packsync.py` | 资源包自动更新：读远端 manifest → 校验 sha256/条数 → 原子替换 |
 | `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.ps1 替换 |
 | `core/maa.py` | MAA 进程控制、`gui.new.json` 读写、作业文件下载 |
+| `core/envcheck.py` | 开跑前的环境闸：模拟器开着没有、adb 通不通。路径优先从 MAA 的 `gui.new.json` 抄（`Config` 类型 / `AdbPath` / `Extras.<类型>.EmulatorPath` / `InstanceIndex`），再退到 `settings.emulatorPath` 和 adb 反推。没启动就替用户启动（`settings.emulatorAutoStart`，默认开），起来才放行。**不进 `SKILLS`**，所以 `/api/skill/list` 和助手工具表里都看不到它——它是每个任务的前置闸，`skills.run_skill` 起任务时自动调一次，正常时零日志 |
 | `core/tasks.py` | 内存任务表：状态、日志、结果，供前端轮询 |
 | `core/progress.py` | 森空岛 `player/info` → 关卡进度：主线推到哪（含剧情关落点）、后续关卡、活动 zone 已打/总数、剿灭最高击杀、日常周常。只做 zone 级余量判断，不拿计数切关卡列表（两边口径含剧情关/突袭关，会错位） |
 | `core/asstlog.py` | MAA 日志观测：`debug/asst.log` 的回调 JSON + `debug/gui.log` 的 `Start/Completed Task Chain` → 结构化事件流；增量读、轮转识别、状态推导（idle/running/stalled/failed/done）、`failures()` 还原「跑过哪几关、哪几关没跑完」 |
@@ -701,3 +702,71 @@ BB、MT 的「谒见神祇」、PV 的「彩车游行」都在中间。老实现
 - 周目（`skill_weekly`）现在按**分区断批**：基础 / EX / S / MO 各自一次
   navigate + 一次 Copilot。以前只在 ST 关处断批，活动没有 ST 时整个活动挤成
   一批，MAA 站在基础关地图上找 EX 关，必然「找不到」。
+
+## 开跑前的环境闸（`envcheck.py`，2026-11-18）
+
+用户要求：每次跑任务前先确认模拟器在不在，**路径优先从 MAA 的配置里读**；
+检测本身不要显示出来，只有真没启动、真替他启动了才说话。
+
+### 为什么放在 `run_skill` 而不是各 skill 里
+
+所有 skill 最终都要连模拟器，而「模拟器没开」的反面反馈是最难看懂的那种：
+MaaCore 只会报 `adb 连不上`，用户第一反应是程序坏了。放一处前置闸，
+`wakeup / navigate / fight / skip_story / weekly` 全覆盖；`signin` 走森空岛
+网页，用 `skills._NEEDS_GAME` 排除掉——不然用户只想签个到，却被要求开模拟器。
+
+### 路径从哪来
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | `settings.emulatorPath` | 用户手动指定，最高优先（MAA 里没配 / 想指另一个实例时用） |
+| 2 | MAA `config/gui.new.json` | 当前配置的 `Gui.ConnectSettings`：`Config`（LDPlayer / MuMuEmulator12 / BlueStacks / Nox / MEmu）、`AdbPath`、`Address`、`Extras.<Config>.EmulatorPath`、`InstanceIndex` |
+| 3 | adb 路径反推 | `AdbPath` 是 `<模拟器目录>/adb.exe` 时，上一级就是安装目录 |
+| 4 | 常见安装位置 | 只在提示里用，不拿它启动 |
+
+### 判断「开着没有」
+
+先 `adb devices`：目标地址是 `device` 就算通；地址对不上但**有别的在线设备**
+也放行（`emulator-5554` 和 `127.0.0.1:5555` 是同一台机器的两个名字，
+`stagenav.Touch.ready` 也是这么自愈的）。
+
+不通再看进程。雷电多一层 `ldconsole list2`：那一行第 5 个字段是「安卓是否
+已启动」，能精确到实例——只看进程名的话，用户多开时实例 1 开着、MAA 配的是
+实例 0，会误判「已在启动中」，白等 45 秒还连不上。
+
+### 启动
+
+按模拟器类型挑启动器，前面的不存在就换后面：
+
+| 类型 | 启动器 | 参数 |
+|---|---|---|
+| LDPlayer | `ldconsole.exe` | `launch --index <实例>` |
+| MuMuEmulator12 | `shell/MuMuManager.exe` | `control -v <实例> launch` |
+| BlueStacks | `HD-Player.exe` | — |
+| Nox | `Nox.exe` | 首个实例空参；多开 `-clone:Nox_<实例>` |
+| MEmu | `MEmuConsole.exe` | `-v <实例>` |
+
+只负责「点着火」，不等它开完机：之后轮询 `adb devices`，最多 90 秒
+（`wait` 参数可覆盖），期间每 15 秒往日志写一句进度。真机实测雷电 14
+从冷启动到 `emulator-5554 device` 是 **20.7 秒**。
+
+### 日志口径（用户要的「不显示出来」）
+
+| 情况 | 日志 | 返回值 |
+|---|---|---|
+| adb 已通 | **一行都不写** | `(True, 'adb 正常（…）')` |
+| 进程在、adb 还没通 | `已经在跑了，等 adb 就绪…` | 等到通 → True；超时 → False |
+| 没启动、自动启动开 | `…没启动，正在帮你启动…` + `启动命令已发出…` + `已启动，adb 就绪` | True |
+| 没启动、自动启动关 | 无 | False，提示自己开 |
+| 起不来 / 目录不存在 / 类型不认识 | 无（只在返回值里） | False，写明原因 |
+
+返回 False 时 `run_skill` 直接把任务置为 error（`环境没准备好：…`），不往下
+走到「翻了几十屏没找到卡片」那种更误导人的报错。读不到 MAA 配置（还没引导）
+时放行——宁可放过，不能因为检测本身有问题把所有任务堵死。
+
+### 已知边界
+
+- 只查模拟器，不查游戏进程。游戏要谁拉起是 `wakeup` / MAA `StartUp` 的事。
+- `describe()` 是只读诊断入口（类型 / 目录 / 实例 / adb 现状），不启动任何东西。
+- 沙箱里 `Popen` 出去的模拟器会随命令会话结束被回收（实测），所以「启动后
+  保持运行」只能在常驻进程（dev 服务 / exe）里验。

@@ -192,6 +192,10 @@ DEFAULTS = {
     'opBlacklist': [],            # 作业黑名单：['maa://12345']，直接存 MAA 代码
     'lastAccount': '',
     'accountOrder': [],     # 账号列表手动排序（长按拖动保存的文件名顺序）
+    # 环境检测（envcheck.py）：模拟器路径默认从 MAA 的 gui.new.json 里抄，
+    # 这里只在用户手动指定时覆盖（比如 MAA 里没配、或者想指向另一个实例）
+    'emulatorPath': '',
+    'emulatorAutoStart': True,   # 任务开跑前发现模拟器没启动，替用户启动
     # 内置助手：只存连接参数，apiKey 走 DPAPI 单独存 config/agent.key
     'agent': {
         'baseUrl': 'https://api.deepseek.com/v1',
@@ -404,6 +408,11 @@ def save(patch: dict) -> dict:
                 v = _norm_op_blacklist(v)
             elif k == 'accountOrder':
                 v = [str(x) for x in (v or []) if str(x).endswith('.json')][:200]
+            elif k == 'emulatorPath':
+                v = _norm_dir(v) if v else ''
+            elif k == 'emulatorAutoStart':
+                # 前端可能传 "false" / 0 / 空串，别让字符串 "false" 变成真
+                v = bool(v) and str(v).strip().lower() not in ('0', 'false', 'no', '')
             elif k == 'agent':
                 v = _norm_agent(v)
             cur[k] = v
