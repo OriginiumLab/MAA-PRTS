@@ -83,7 +83,10 @@ main()
 | POST | `/api/settings` | 保存设置（白名单 `maaDir` / `profile` / `autoStartMaa` / `lastAccount`） |
 | GET | `/api/accounts` | 账号列表（含每个账号的统计摘要） |
 | GET | `/api/account?file=` | 单个账号完整配置：account / stats / missing / chars |
-| POST | `/api/account/maa` | 把 `maa.profile` 等用户字段写回账号 JSON（同步不覆盖的那几个） |
+| POST | `/api/account/maa` | 把 `maa.profile` 等用户字段写回账号 JSON（同步不覆盖的那几个）。`dir` 会归一化并并入「用过的 MAA」历史；`accountName`（切号名）统一走 `acctname.check()`——`5505` / `181 5505` / `181****5505` 都收成 `181****5505`，官服填昵称当场 400，**留空合法**（还没填 / 想清掉） |
+| POST | `/api/account/token` | 设置 → 账号管理用：返回 `{has, broken, token, mask}`。`token` 是明文（只在本地窗口里展示，不落日志、不进 bootstrap），`mask` 只留尾 4 位；`broken=true` 表示密文本机解不开（换电脑 / 换 Windows 用户），与「没存过」分开 |
+| POST | `/api/account/token/check` | 拿 grant 接口验一次 token 还能不能用（最长约 12 秒）。只有明确失效才回 `ok:false`，网络问题走异常——界面据此决定要不要解锁「修改」 |
+| POST | `/api/account/token/set` | 换 token：先 `Skland(token)` 登录 + 取绑定，确认 token 绑的 uid 就是这个账号，才把密文写回 `skd` 段（练度 / 进度 / MAA 绑定一个字段都不动）。uid 对不上直接报错，防止粘错号把凭证静默换掉 |
 | POST | `/api/account/remove` | 删除账号：直接删除账号 JSON，不备份不可恢复。账号列表卡片悬停 ✕ 触发，前端有二次确认 |
 | POST | `/api/account/refresh` | 同步账号。带 `token` 同步单个（密文写进账号文件 `skd` 段）；不带则按各账号文件 ∪ 旧 `tokens.json` 全部同步。返回 `taskId` |
 | POST | `/api/account/import-maa` | 从账号绑定的 MAA 目录读干员识别结果（`done=false` 残缺名单拒绝），覆盖练度/统计/缺卡（账号信息与 `skd` 保留），同步任务直接返回摘要。**默认不动森空岛同步来的练度**：命中 `operbox._token_synced()` 时返回 `skippedBy=token`，只把 `force=true` 当作用户确认（账号页手动导入）才覆盖 |
@@ -770,3 +773,38 @@ MaaCore 只会报 `adb 连不上`，用户第一反应是程序坏了。放一�
 - `describe()` 是只读诊断入口（类型 / 目录 / 实例 / adb 现状），不启动任何东西。
 - 沙箱里 `Popen` 出去的模拟器会随命令会话结束被回收（实测），所以「启动后
   保持运行」只能在常驻进程（dev 服务 / exe）里验。
+
+## 设置页改版后的两个「能动账号文件」的入口（2026-11-18）
+
+设置弹窗从「一列到底」改成左 tab + 右内容（账号 / MAA / 版本 / 助手 /
+数据与日志 / 黑名单）。界面本身在 `docs/frontend.md`，这里只记后端口径——
+新增的两个入口都会直接改账号 json，错一点就是数据事故。
+
+### token：默认只读，失效才解锁
+
+| 情况 | 界面 | 依据 |
+|---|---|---|
+| 有 token、`check` 通过 | `修改` 置灰，只能看 | 凭证没坏，允许改等于给「粘错号」开门 |
+| 有 token、`check` 明确返回失效 | 解锁，改成「修改」 | 唯一真正需要换 token 的场景 |
+| 没存过（MAA 导入建号） | 解锁，文案是「添加」 | 不是「失效」，别用失效话术误导 |
+| `broken`（密文本机解不开） | 解锁，文案是「重填」 | 换电脑/换用户后必然发生，重新粘一次就好 |
+
+`/api/account/token/check` 用 `sklogin.verify_token()`（`grant` 换码），
+网络问题一律抛异常而不是回 `ok:false`——**一断网就把所有账号解锁**是最糟
+的默认值，用户会在没坏的时候重粘一遍 token。
+
+写回走 `/api/account/token/set`，中间多一道 uid 核对：`Skland(token)` 登录
+→ `bindings()` 取 uid（终末地再补 `gacha.endfield_roles()` 的 uid / roleId）
+→ 和账号文件里的 uid 比。对不上就拒绝，并提示用「添加账号」——否则粘错一个
+别的号的 token，下次同步会静默多出一个账号、原账号还是失效状态，非常难查。
+
+`accounts.set_token()` 只重写 `skd` 段（`alias` 保留、`addedAt` 刷新），
+练度 / 进度 / `maa` 绑定全部原样：用户是来换凭证的，不是来重新同步的。
+
+### 切号名：`api_account_maa` 里统一归一
+
+`accountName` 现在可以直接在设置 → MAA 路径里按账号填。规则不在这儿重写，
+一律 `acctname.check(nm, channel)`：能吃 `5505` / `136` / `23****45` /
+`181****5505` / 全角与带横线的写法；官服只拦「填了昵称」（MAA 拿昵称去
+账号列表里子串匹配，死找几十次后超时，整轮挂机废掉）。**空串放行**——
+「还没填」和「填错了」是两件事，用 `check()` 原文会把清空输入框也拦下。

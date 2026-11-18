@@ -268,10 +268,11 @@ class Bridge:
         }
 
     def open_folder(self, which='accounts'):
-        """打开项目内的数据目录（accounts / config / root）"""
+        """打开项目内的数据目录（accounts / config / logs / root）"""
         table = {
             'accounts': settings.accounts_dir(),
             'config': settings.CONFIG_DIR,
+            'logs': settings.DEBUG_DIR,
             'root': settings.project_root(),
         }
         path = table.get(str(which or 'accounts').lower()) or settings.accounts_dir()

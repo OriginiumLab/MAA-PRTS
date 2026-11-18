@@ -9,7 +9,7 @@ import urllib.parse
 
 from . import (accounts, agent, appupdate, asstlog, copilot, gacha, maa,
                maaplan, multiacct, operbox, packsync, paradox, resources,
-               settings, signin, skills, sklogin, tasks, version, watch)
+               settings, signin, skills, sklogin, tasks, updater, version, watch)
 
 WEB = settings.static_dir()
 
@@ -62,6 +62,8 @@ def bootstrap(_q, _body):
             'accounts': settings.accounts_dir(),
             'tokens': settings.tokens_file(),
             'config': settings.CONFIG_DIR,
+            'logs': settings.DEBUG_DIR,
+            'appLog': settings.LOG_PATH,
         },
         'pack': resources.pack_info(),
         'gamedata': version.check(acts),
@@ -154,7 +156,96 @@ def api_account_maa(_q, body):
         patch['dir'] = settings._norm_dir(patch.get('dir') or '')
         if patch['dir']:
             settings.remember_maa_dir(patch['dir'])
+    if 'accountName' in patch:
+        # 切号名统一走 acctname：用户给「5505」「181 5505」「181****5505」
+        # 都能吃下，官服填了昵称则当场拦下——这一格填错的代价是 MAA 在
+        # 账号列表里死找、4 分钟超时后整轮挂机废掉。
+        # 留空是合法状态（还没填 / 想清掉），不能当成「填错」拦下。
+        from . import acctname
+        raw = (patch.get('accountName') or '').strip()
+        if raw:
+            snap = accounts.get_account(body['file'])
+            channel = (snap.get('account') or {}).get('channelName') or ''
+            name, why = acctname.check(raw, channel)
+            if why:
+                raise ValueError('切号名不对：%s' % why)
+            patch['accountName'] = name
+        else:
+            patch['accountName'] = ''
     return {'maa': accounts.save_maa_meta(body['file'], patch)}
+
+
+def api_account_token(_q, body):
+    """设置 → 账号管理：读某个账号的 token（明文，仅在本地窗口里展示）
+
+    明文只走「本机 HTTP + 桌面窗口」这条链路，不落日志、不进 bootstrap。
+    界面默认只显示尾 4 位，用户点「显示」才把明文填进输入框。
+    """
+    body = body or {}
+    file = _account_for(body.get('file'))
+    st = accounts.token_state(file)
+    return {
+        'file': file,
+        'has': st['has'],
+        'broken': st['broken'],
+        'error': st['error'],
+        'token': st['token'],
+        'mask': updater.mask(st['token']) if st['token'] else '',
+    }
+
+
+def api_account_token_check(_q, body):
+    """token 还能不能用（换 grant 校验）；返回 ok / 原因
+
+    只有「确认失效」才让界面解锁修改框：网络不通、森空岛抽风都返回
+    ok=None（未知），不然一断网就把所有账号的 token 都变成可改状态。
+    """
+    body = body or {}
+    file = _account_for(body.get('file'))
+    token = accounts.token_for(file)
+    if not token:
+        st = accounts.token_state(file)
+        return {'ok': False, 'error': st['error'] or '这个账号没有存 token'}
+    ok, why = sklogin.verify_token(token)
+    return {'ok': bool(ok), 'error': '' if ok else (why or 'token 已失效')}
+
+
+def api_account_token_set(_q, body):
+    """换 token：先验证 + 核对 uid，确认是同一个号再写回账号文件
+
+    不核 uid 的话，用户粘错一个别的号的 token 会静默把凭证换掉——下次
+    同步直接多出一个账号、原账号还是失效状态，很难查。
+    """
+    body = body or {}
+    file = _account_for(body.get('file'))
+    token = (body.get('token') or '').strip()
+    if not token:
+        raise ValueError('token 不能为空')
+    snap = accounts.get_account(file)
+    mine = str((snap.get('account') or {}).get('uid') or '')
+    game = (snap.get('account') or {}).get('game') or 'arknights'
+    try:
+        from . import skland
+        sk = skland.Skland(token)
+        uids = {str(b.get('uid')) for b in sk.bindings() if not b.get('isDelete')}
+    except Exception as e:
+        msg = str(e)
+        if any(code in msg for code in ('400', '401', '403')):
+            msg = '这个 token 无效或已过期（森空岛拒绝了它）'
+        raise ValueError('token 验证失败：%s' % msg)
+    if game == 'endfield':
+        # 终末地没有 arknights binding：角色 id / 账号 uid 任一能对上就算同一个号
+        try:
+            for r in gacha.endfield_roles(token):
+                uids.add(str(r.get('uid')))
+                uids.add(str(r.get('roleId')))
+        except Exception:
+            pass
+    if mine and mine not in uids:
+        raise ValueError('这个 token 绑的不是当前账号（uid %s 不在它的角色列表里），'
+                         '要加新号请用左上角「添加账号」' % mine)
+    accounts.set_token(file, token)
+    return {'file': file, 'mask': updater.mask(token), 'ok': True}
 
 
 def api_account_pref(_q, body):
@@ -709,6 +800,9 @@ ROUTES = {
     '/api/accounts': api_accounts,
     '/api/account': api_account,
     '/api/account/maa': api_account_maa,
+    '/api/account/token': api_account_token,
+    '/api/account/token/check': api_account_token_check,
+    '/api/account/token/set': api_account_token_set,
     '/api/account/pref': api_account_pref,
     '/api/account/remove': api_account_remove,
     '/api/account/refresh': api_refresh,

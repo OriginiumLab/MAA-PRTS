@@ -3276,6 +3276,80 @@ def check_envcheck(_tmp):
     assert '环境没准备好' in (t.get('error') or ''), t.get('error')
 
 
+def check_settings_panel(tmp):
+    """B38：设置页改版后的接口口径（账号 token / 账号级 MAA 绑定）
+
+    2026-11-18 设置从「一列到底」改成左 tab 右内容，账号页开始展示 token、
+    MAA 页开始按账号写切号名。这两处都直接改账号文件，口径错一点就是
+    「把别的号的凭证写进来」或「把昵称当切号名写进去，MAA 在账号列表里
+    死找 4 分钟」，所以单独一组建言。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import accounts, api
+
+    _reset_config(tmp)
+    cfg = os.path.join(tmp, 'config')
+    path = os.path.join(cfg, 'smoke-acc.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '9', 'nickName': '冒烟', 'channelName': '官服',
+                               'game': 'arknights'}}, f, ensure_ascii=False)
+
+    # 1) 没存过 token：要判「没有」，不能跟「坏了」混成一句
+    st = accounts.token_state('smoke-acc.json')
+    assert st['has'] is False and st['broken'] is False and st['token'] == '', st
+    d = api.api_account_token({}, {'file': 'smoke-acc.json'})
+    assert d['has'] is False and d['mask'] == '' and d['token'] == '', d
+
+    # 2) 写 token：密文落盘、能读回、掩码只露尾 4 位
+    accounts.set_token('smoke-acc.json', 'SMOKE_TOKEN_ABCD')
+    st = accounts.token_state('smoke-acc.json')
+    assert st['has'] and not st['broken'] and st['token'] == 'SMOKE_TOKEN_ABCD', st
+    raw = open(path, encoding='utf-8').read()
+    assert 'SMOKE_TOKEN_ABCD' not in raw, 'token 明文落盘'
+    d = api.api_account_token({}, {'file': 'smoke-acc.json'})
+    assert d['mask'].endswith('ABCD') and 'SMOKE_TOKEN' not in d['mask'], d
+    # 换 token 只动 skd 段，账号本体（uid/昵称）与备注必须原样
+    snap = accounts.get_account('smoke-acc.json')
+    assert snap['account']['uid'] == '9' and snap['account']['nickName'] == '冒烟'
+    accounts.update('smoke-acc.json', lambda s2: s2['skd'].__setitem__('alias', '大号'))
+    accounts.set_token('smoke-acc.json', 'SMOKE_TOKEN_WXYZ')
+    snap = accounts.get_account('smoke-acc.json')
+    assert snap['skd']['alias'] == '大号', '换 token 不该把备注冲掉'
+    assert accounts.token_state('smoke-acc.json')['token'] == 'SMOKE_TOKEN_WXYZ'
+
+    # 3) 密文解不开：点名「本机解不开」，而不是「没有 token」
+    snap['skd'] = {'data': base64.b64encode(b'not-dpapi').decode('ascii')}
+    accounts.save_account('smoke-acc.json', snap)
+    st = accounts.token_state('smoke-acc.json')
+    assert st['has'] and st['broken'] and st['token'] == '', st
+    assert '解不开' in st['error'], st['error']
+
+    # 4) 切号名：归一化、清空、官服填昵称要拦、B 服用户名不许动
+    m = api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                 'patch': {'accountName': '181 5505'}})['maa']
+    assert m['accountName'] == '181****5505', m
+    m = api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                 'patch': {'accountName': ''}})['maa']
+    assert m['accountName'] == '', '清空切号名是合法操作，不能拦'
+    try:
+        api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                 'patch': {'accountName': '冒烟'}})
+        raise AssertionError('官服填昵称没被拦下')
+    except ValueError as e:
+        assert '切号名' in str(e), e
+    snap = accounts.get_account('smoke-acc.json')
+    snap['account']['channelName'] = 'B服'
+    accounts.save_account('smoke-acc.json', snap)
+    m = api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                 'patch': {'accountName': '灰bao#7986'}})['maa']
+    assert m['accountName'] == '灰bao#7986', m
+
+    # 5) bootstrap 要把日志目录一起给界面（「数据与日志」页要用）
+    boot = api.bootstrap({}, {})
+    assert {'root', 'accounts', 'config', 'logs', 'appLog'} <= set(boot['paths']), boot['paths']
+    assert boot['paths']['logs'].replace('/', '\\').endswith('debug')
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -3330,6 +3404,7 @@ def main():
         r.check('B35 老故事集导航（曲谱入口/卡片模板/EX 切换）', lambda: check_story_nav(tmp))
         r.check('B36 打关预检（前置关/练度/连锁/卡在哪关）', lambda: check_stage_precheck(tmp))
         r.check('B37 环境检测（配置来源/静默/替用户启动/任务前闸门）', lambda: check_envcheck(tmp))
+        r.check('B38 设置页接口（token 读写/掩码/切号名归一）', lambda: check_settings_panel(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

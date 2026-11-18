@@ -450,6 +450,16 @@ def _verify(token):
         return False, '验证请求失败：%s' % e
 
 
+def verify_token(token):
+    """公开的 token 有效性检查（设置页「验证」按钮用）
+
+    走的就是登录窗抓完 token 后那一步 grant 校验：能换到 grant 就是有效，
+    换不到（401/403 / status≠0）就是过期或被改过。最长约 12 秒，调用方
+    应该在自己的线程 / 任务里等，别阻塞界面渲染。
+    """
+    return _verify((token or '').strip())
+
+
 # ---------------------------------------------------------------- 内部工具
 def _fail(msg):
     with _lock:

@@ -338,6 +338,50 @@ def token_for(file: str) -> str:
         return ''
 
 
+def token_state(file: str) -> dict:
+    """设置页「账号管理」用：这个账号的 token 到底有没有、能不能解
+
+    与 :func:`token_for` 的区别是**分得清三种状态**：没存过 / 存了但解不开
+    （换电脑、换 Windows 用户）/ 解开了。界面要按这三种给不同的话术，
+    「没 token」和「token 坏了」混成一句会让人以为重新登录一遍就行——
+    前者要粘 token，后者才是重新登录。
+    """
+    try:
+        snap = get_account(file)
+    except Exception as e:
+        return {'has': False, 'token': '', 'broken': False, 'error': str(e)}
+    skd = snap.get('skd') or {}
+    if not isinstance(skd, dict) or not skd.get('data'):
+        return {'has': False, 'token': '', 'broken': False, 'error': ''}
+    try:
+        token = vault.unprotect(base64.b64decode(skd.get('data'))).decode('utf-8')
+    except Exception:
+        return {'has': True, 'token': '', 'broken': True,
+                'error': '本机解不开这份密文（换电脑 / 换 Windows 用户后会这样），重新粘贴一次 token 即可'}
+    return {'has': True, 'token': token, 'broken': False, 'error': ''}
+
+
+def set_token(file: str, token: str) -> dict:
+    """把新的森空岛 token 加密写进账号文件（token 失效后重新粘贴用）
+
+    只动 ``skd`` 段，练度 / 进度 / MAA 绑定一律原样保留——用户是来换凭证的，
+    不是来重新同步账号的。调用方负责先验 token 与 uid 是否对得上。
+    """
+    token = (token or '').strip()
+    if not token:
+        raise ValueError('token 不能为空')
+    data = base64.b64encode(vault.protect(token.encode('utf-8'))).decode('ascii')
+    meta = {'alias': '', 'addedAt': updater.now_iso(), 'data': data}
+
+    def mut(snap):
+        old = snap.get('skd') if isinstance(snap.get('skd'), dict) else {}
+        meta['alias'] = old.get('alias') or ''
+        snap['skd'] = dict(meta)
+
+    update(file, mut)
+    return meta
+
+
 # 启动自检把读不开的条目原因存这里，main 起来后写进 app.log
 TOKENS_WARNING = ''
 # load_tokens 每次重算：单条解密失败被跳过的受影响文件列表
