@@ -3884,6 +3884,94 @@ def check_raid_order(tmp):
         copilot.search, copilot.fetch_prepared, skills._default_maa_dir = old
 
 
+def check_agent_tool_chain(tmp):
+    """B42：工具调用历史断链 + 点名换作业真的生效（2026-11-19 03:00）
+
+    用户报「老是存在这种报错」：服务端 400 `Messages with role 'tool' must be
+    a response to a preceding message with 'tool_calls'`。三种断法：
+
+    ① `_trim` 按条数裁剪，切点落在 tool_calls 与 tool 结果中间 → 开头孤儿 tool；
+    ② 工具要确认、用户点取消 → tool_call 永远没有响应；
+    ③ 工具抛异常 / 一批调用里后面几个没执行。
+
+    历史断一次就每轮都 400（坏消息一直在 s.messages 里），所以发送前必须
+    `_sanitize`：孤儿 tool 丢弃、缺响应的 tool_call 补占位。
+
+    第二个问题：「换了作业但 MAA 还是用同一份」。skill_fight 新增 ops 参数
+    钉住 copilotId，`_prepare_ops(fixed=...)` 不许再搜索。
+    """
+    _reset_config(tmp)
+    from types import SimpleNamespace
+    from core import agent, copilot, skills
+
+    def ids(msgs):
+        return [(m.get('role'), m.get('tool_call_id') or '') for m in msgs]
+
+    tc = {'id': 'call_a', 'type': 'function',
+          'function': {'name': 'skill_fight', 'arguments': '{}'}}
+    msgs = [
+        {'role': 'user', 'content': '开打'},
+        {'role': 'tool', 'tool_call_id': 'orphan', 'content': '孤儿'},   # ①
+        {'role': 'assistant', 'content': '', 'tool_calls': [tc]},
+        {'role': 'user', 'content': '算了'},                              # ② 没响应
+    ]
+    out = agent._sanitize(msgs)
+    assert ('tool', 'orphan') not in ids(out), '孤儿 tool 要丢掉'
+    # 每个 tool 前面必须有带同名 tool_calls 的 assistant
+    seen = set()
+    for m in out:
+        if m['role'] == 'assistant':
+            seen |= {x.get('id') for x in (m.get('tool_calls') or [])}
+        elif m['role'] == 'tool':
+            assert m.get('tool_call_id') in seen, 'tool 前面没有对应 tool_calls'
+    assert any(m['role'] == 'tool' and m.get('tool_call_id') == 'call_a'
+               for m in out), '缺响应的 tool_call 要补占位'
+
+    # 正常序列原样保留
+    good = [{'role': 'user', 'content': 'q'},
+            {'role': 'assistant', 'content': '', 'tool_calls': [tc]},
+            {'role': 'tool', 'tool_call_id': 'call_a', 'content': 'ok'}]
+    assert agent._sanitize(good) == good, '合法序列不许改动'
+
+    # ③ 裁剪后不能以 tool 开头
+    s = SimpleNamespace(messages=[{'role': 'user', 'content': 'q'}] +
+                        [{'role': 'tool', 'tool_call_id': 't%d' % i,
+                          'content': ''} for i in range(40)])
+    agent._trim(s)
+    assert s.messages[0]['role'] == 'user'
+    assert all(m['role'] != 'tool' for m in s.messages[1:]), \
+        '裁剪后开头不许是半截工具结果'
+
+    # ---- 点名换作业：fixed 里给了 copilotId 就不再搜索 ----
+    stage_name = {4242: 'SV-EX-1'}
+    hits = {'search': 0}
+
+    def fake_search(st, snap, pages=1, limit=6):
+        hits['search'] += 1
+        return {'stages': [{'stage': {'code': st, 'variant': 'raid'},
+                            'ops': [{'copilotId': 4242, 'mode': 'ready',
+                                     'rating': 9, 'title': '默认那份'}]}]}
+
+    def fake_fetch(cid):
+        cid = int(cid)
+        return ({'stage_name': stage_name.get(cid, 'SV-EX-1')},
+                copilot.DIFF_RAID, 'SV-EX-1', [], True)
+
+    old = (copilot.search, copilot.fetch_prepared, skills._default_maa_dir)
+    copilot.search, copilot.fetch_prepared = fake_search, fake_fetch
+    skills._default_maa_dir = lambda: tmp
+    try:
+        logs = []
+        rows = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                   fixed={'SV-EX-1': 98765})
+        assert hits['search'] == 0, '指名作业后不许再搜作业站'
+        assert rows[0]['filename'].endswith('98765.json'), rows
+        assert rows[0]['is_raid'] is True, rows
+        assert any('按指定作业 #98765' in x for x in logs), logs
+    finally:
+        copilot.search, copilot.fetch_prepared, skills._default_maa_dir = old
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -3944,6 +4032,7 @@ def main():
         r.check('B39 培养干员（练度导入/材料暂停/续跑/战斗日志）', lambda: check_oper_train(tmp))
         r.check('B40 全局 json 不炸账号列表（train-plan/畸形 account 段）', lambda: check_config_globals(tmp))
         r.check('B41 每关只打要打的档（默认突袭/@后缀逐关/不再垫普通）', lambda: check_raid_order(tmp))
+        r.check('B42 工具调用断链自愈 + 点名作业真的生效', lambda: check_agent_tool_chain(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

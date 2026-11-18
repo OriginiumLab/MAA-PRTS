@@ -291,7 +291,7 @@ def _parse_stages(raw):
     return codes, wants
 
 
-def _prepare_ops(stages, file, log, raid='auto', wants=None):
+def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
     """mode=copy：把关卡代号列表变成 MaaCore 的 copilotList
 
     每个 stage 按代号搜作业站，挑**这号能抄的**那份下载落盘（prepare_copilot）。
@@ -331,6 +331,7 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None):
               'normal': 'normal', 'false': 'normal', '0': 'normal',
               'no': 'normal'}.get(str(raid).strip().lower(), 'raid')
     wants = {str(k).upper(): v for k, v in (wants or {}).items()}
+    fixed = {str(k).upper(): int(v) for k, v in (fixed or {}).items() if v}
     ops = []
 
     def _best(row):
@@ -347,6 +348,23 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None):
                    '、'.join((op.get('missing') or []) + (op.get('training') or []))[:40]))
 
     for st in stages:
+        # 用户点名「用 41624 那份」：直接钉住作业 id，不再去作业站重挑。
+        # 以前没有这个入口，助手嘴上说换了、实际每次重新搜索都搜回同一份
+        # （2026-11-19 02:59 用户：「切换作业它并没有成功，而是反复用这个」）。
+        cid = fixed.get(st.upper())
+        if cid:
+            w = wants.get(st.upper()) or gw
+            if w == 'both':
+                ops.append({'copilotId': cid, 'stageCode': st,
+                            'variant': 'normal'})
+                ops.append({'copilotId': cid, 'stageCode': st, 'variant': 'raid'})
+                log('%s：按指定作业 #%s 打普通 + 突袭' % (st, cid))
+            else:
+                ops.append({'copilotId': cid, 'stageCode': st,
+                            'variant': 'raid' if w == 'raid' else 'normal'})
+                log('%s：按指定作业 #%s 打%s'
+                    % (st, cid, '突袭' if w == 'raid' else '普通'))
+            continue
         try:
             res = copilot.search(st, snap or {}, pages=1, limit=6)
         except Exception as e:                  # noqa: BLE001 一关搜不到别拖垮整批
@@ -450,6 +468,28 @@ def skill_fight(params, log, tid=None):
     stages, wants = _parse_stages(params.get('stages'))
     if not stages:
         raise ValueError('缺 stages（要打哪些关）')
+    # 用户点名某份作业（「用 41624 那份」「换成令的单核」）时钉住作业 id。
+    # 以前没有这个入口，助手只能重新搜，排序总是回到同一份（评分最高的），
+    # 用户就看到「换作业没生效，还是同一份」。
+    fixed = {}
+    for it in (params.get('ops') or []):
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get('stage') or it.get('stageCode')
+                   or it.get('code') or '').strip()
+        try:
+            cid = int(it.get('copilotId') or it.get('id') or 0)
+        except (TypeError, ValueError):
+            cid = 0
+        if not (code and cid):
+            continue
+        fixed[code.upper()] = cid
+        w = _VARIANT_ALIASES.get(str(it.get('raid') or it.get('variant')
+                                     or '').strip().lower())
+        if w:
+            wants[code.upper()] = w
+        if code.upper() not in {s.upper() for s in stages}:
+            stages.append(code)
     file = _account_file(params.get('account') or '')
     mode = (params.get('mode') or 'copy').strip()
     if mode not in ('copy', 'fight'):
@@ -504,13 +544,10 @@ def skill_fight(params, log, tid=None):
     if mode == 'copy':
         if params.get('copilotList'):
             spec['copilotList'] = params['copilotList']
-        elif params.get('ops'):
-            spec['copilotList'] = maaplan.prepare_copilot(
-                params['ops'], _default_maa_dir(), log=log)
         else:
             spec['copilotList'] = _prepare_ops(stages, file, log,
                                                raid=params.get('raid', 'auto'),
-                                               wants=wants)
+                                               wants=wants, fixed=fixed)
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
     if with_nav:
         log('带唤醒+导航的全套流程')

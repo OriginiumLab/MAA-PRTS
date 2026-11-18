@@ -91,12 +91,54 @@ class LLMError(RuntimeError):
     pass
 
 
+def _sanitize(messages):
+    """让每条 tool 消息都能对上前面的 assistant.tool_calls，坏掉的丢掉
+
+    用户 2026-11-19 02:59 连着三次「还是失败了」都是同一个 400：
+    ``Messages with role 'tool' must be a response to a preceding message
+    with 'tool_calls'``。原因是历史里出现了两种断链：
+
+    - ``_trim`` 按条数裁剪，切点正好落在「assistant.tool_calls」和它的 tool
+      结果中间，历史开头变成一条孤儿 tool；
+    - 工具要用户确认时助手先回了 tool_calls，用户点「取消」/直接说下一句，
+      那条 tool_call 永远没有响应。
+
+    断一次就**每轮都断**（坏历史一直留在 s.messages 里），所以「老是存在
+    这种报错」。发送前统一修一遍：孤儿 tool 丢弃，缺响应的 tool_call 补一句
+    占位，保证序列永远合法。
+    """
+    out, pending = [], []
+    for m in messages or []:
+        role = m.get('role')
+        if role == 'tool':
+            cid = m.get('tool_call_id') or ''
+            if cid in pending:
+                pending.remove(cid)
+                out.append(m)
+            continue                        # 对不上的孤儿 tool 直接丢
+        if pending:
+            for cid in pending:
+                out.append({'role': 'tool', 'tool_call_id': cid,
+                            'content': '（这一步没有执行完）'})
+            pending = []
+        out.append(m)
+        if role == 'assistant':
+            for tc in (m.get('tool_calls') or []):
+                cid = tc.get('id') or ''
+                if cid:
+                    pending.append(cid)
+    for cid in pending:
+        out.append({'role': 'tool', 'tool_call_id': cid,
+                    'content': '（这一步没有执行完）'})
+    return out
+
+
 def _payload(messages, tools=None, stream=True):
     st = settings.load().get('agent') or {}
     model = st.get('model') or ''
     if not model:
         raise LLMError('还没设置模型名（设置 → 内置助手）')
-    body = {'model': model, 'messages': messages, 'temperature': 0.2,
+    body = {'model': model, 'messages': _sanitize(messages), 'temperature': 0.2,
             'stream': stream}
     # 不给 max_tokens 时用中转站默认值（常见 512/1024）：回复长一点就被
     # 硬截断在句中，前端看着像「话没说完」（2026-11-17 用户反馈）。
@@ -145,6 +187,11 @@ def _explain_http(e, text):
             404: 'Base URL 或模型名不对（找不到这个接口/模型）',
             429: '触发了限流或余额不足', 400: '请求被拒绝（模型名可能写错，'
                                           '或该模型不支持工具调用）'}
+    low = (text or '').lower()
+    if code == 400 and 'tool' in low and 'role' in low:
+        # 专属解释：不是模型不支持工具调用，是历史里的工具调用记录断链了
+        # （发送前已由 _sanitize 修好），再说一次就能继续
+        return '上下文里的工具调用记录断了（这条已自动修复），把刚才那句再说一遍就行'
     msg = head.get(code) or ('HTTP %s' % code if code else '连不上服务')
     snippet = (text or '').strip().replace('\n', ' ')[:200]
     return '%s%s' % (msg, ('：' + snippet) if snippet else '')
@@ -359,6 +406,8 @@ TOOLS = [
           '或传 wakeup=true 走全套。**调用前先跟用户确认要打哪些关**。'
           '**每关只打要打的那一档**：EX 关默认只打突袭；普通还没通关、要一次'
           '打通就写 stages=["SV-EX-1@both"]；只刷材料写 @normal 或 raid="normal"。'
+          '**用户点名某份作业（「用 41624」「换成令的单核」）时必须用 ops 传 '
+          'copilotId**，光说"已经换了"没用——不传 ops 就会重新搜索挑回同一份。'
           '返回 taskId。',
           {'stages': {'type': 'array', 'items': {'type': 'string'},
                       'description': '关卡代号，可加 @ 后缀逐关指定难度：'
@@ -377,6 +426,21 @@ TOOLS = [
                                    '作业就只打突袭；both=普通+突袭都打（普通还没'
                                    '通关时用）；normal=只打普通（刷材料）。主线'
                                    '磨难/险地不是突袭，不受这个参数影响'},
+           'ops': {'type': 'array',
+                   'description': '指定用哪一份作业（用户点名「用 41624 那份」'
+                                  '「换成令的单核」时**必须**传，否则每次都重新'
+                                  '搜索、挑回评分最高的同一份，用户会看到「换了'
+                                  '作业没生效」）。copilotId 从 find_ops 拿',
+                   'items': {'type': 'object',
+                             'properties': {
+                                 'stage': {'type': 'string',
+                                           'description': '关卡代号'},
+                                 'copilotId': {'type': 'integer',
+                                               'description': '作业 id'},
+                                 'raid': {'type': 'string',
+                                          'enum': ['raid', 'normal', 'both'],
+                                          'description': '这关打哪档，默认 raid'}},
+                             'required': ['stage', 'copilotId']}},
            'account': _ACC}, ['stages']),
     _tool('skill_weekly',
           '**周目编排（一站式）**：把一个活动从头打到尾——ST 剧情关自动过、'
@@ -1506,6 +1570,9 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
   同一次计划里可以逐关分开写：``["SV-EX-1@raid", "SV-EX-6@both"]``。
   只刷材料写 ``@normal`` 或 raid=normal。磨难/险地是主线独立难度，不用后缀。
   **不要**跟用户说「突袭打不了」——作业站有突袭作业就能排。
+- **换作业要真的换**：用户说「用 41624 那份」「换成令的单核」时，先 find_ops
+  拿到 copilotId，再调 skill_fight 时用 ops=[{stage, copilotId}] 钉住。只把
+  文案改成"已换"是没用的——不传 ops 就会重新搜索，排序又挑回原来那份。
 - 不确定能配什么就先调 maa_capabilities，别猜
 - 回答用中文，简洁，别写长篇。不要输出 JSON 给用户看。
 - 涉及具体操作时，最后告诉用户去界面上哪看结果（跑机面板 / 左侧账号栏）
@@ -1629,15 +1696,29 @@ def confirm(sid):
 def cancel(sid):
     s = session(sid, create=False)
     if s:
+        # 取消时那个 tool_call 还没有响应：补一条，否则历史断了，下一句话
+        # 一发出去就被服务端 400 拒（用户 2026-11-19 连吃三次的根因之一）
+        call = s.pending_call
+        if call:
+            s.messages.append({'role': 'tool',
+                               'tool_call_id': call.get('id') or '',
+                               'content': '（用户取消了这一步）'})
         s.pending = None
+        s.pending_call = None
         s.push('say', text='（已取消）')
     return {'ok': True}
 
 
 def _trim(s):
     if len(s.messages) > KEEP_MESSAGES:
-        # 保留第一条 user 和最近若干条，避免上下文无限长
-        s.messages = s.messages[:1] + s.messages[-(KEEP_MESSAGES - 1):]
+        # 保留第一条 user 和最近若干条，避免上下文无限长。**切点不能落在
+        # 工具调用中间**：只按条数切会留下以 role=tool 开头的半截历史，
+        # 服务端直接 400（`tool` 前面必须有一条带 tool_calls 的 assistant）。
+        head = s.messages[:1]
+        tail = list(s.messages[-(KEEP_MESSAGES - 1):])
+        while tail and tail[0].get('role') == 'tool':
+            tail.pop(0)
+        s.messages = head + tail
 
 
 def _say_stream(s):
@@ -1688,8 +1769,17 @@ def _loop(s):
             s.messages.append({'role': 'assistant', 'content': content or '',
                                'tool_calls': calls})
             stop = False
-            for call in calls:
+            for i, call in enumerate(calls):
                 stop = _do_call(s, call) or stop
+                if stop:
+                    # 这批里排在后面的调用不会执行：补占位 tool 消息。少了它们，
+                    # 历史里 assistant.tool_calls 就缺响应，下一轮请求直接 400
+                    for rest in calls[i + 1:]:
+                        s.messages.append({
+                            'role': 'tool',
+                            'tool_call_id': rest.get('id') or '',
+                            'content': '（上一步在等用户确认，这一步没有执行）'})
+                    break
             if stop:
                 break
         else:
@@ -1714,7 +1804,11 @@ def _do_call(s, call):
     except ValueError:
         args = {}
     s.push('tool', name=name, args=args)
-    res = run_tool(name, args, s)
+    try:
+        res = run_tool(name, args, s)
+    except Exception as e:              # noqa: BLE001 工具抛异常也必须回一条 tool
+        # 不回的话 assistant.tool_calls 缺响应，下一轮请求被服务端 400 拒掉
+        res = {'error': '%s: %s' % (type(e).__name__, e)}
     if isinstance(res, dict) and res.get('need_confirm'):
         s.pending_call = call
         s.push('need_confirm', text=res.get('summary') or '',
@@ -1728,6 +1822,16 @@ def _do_call(s, call):
 
 
 def _run_pending(s):
+    call0 = s.pending_call or {'id': 'confirm'}
+
+    def reply(text, res=None):
+        s.messages.append({'role': 'tool',
+                           'tool_call_id': call0.get('id') or '',
+                           'content': text})
+        if res is not None:
+            s.push('tool_result', name=(s.pending or {}).get('action') or 'confirm',
+                   text=json.dumps(res, ensure_ascii=False)[:1200])
+
     try:
         pend = s.pending or {}
         action, args = pend.get('action'), pend.get('args') or {}
@@ -1735,6 +1839,9 @@ def _run_pending(s):
         fn = _WRITE_HANDLERS.get(action)
         if not fn:
             s.push('error', text='不认识的操作：%s' % action)
+            reply('不认识的操作：%s' % action)
+            s.pending = s.pending_call = None
+            s.running = False
             return
         # 这一步是用户点过确认的，绕过闸门直接执行
         old = settings.load().get('agent', {}).get('autoApply')
@@ -1746,15 +1853,14 @@ def _run_pending(s):
             settings.save({'agent': dict(settings.load().get('agent') or {},
                                          autoApply=bool(old))})
         s.pending = None
-        call = s.pending_call or {'id': 'confirm', 'function': {'name': action}}
         s.pending_call = None
-        s.messages.append({'role': 'tool', 'tool_call_id': call.get('id') or '',
-                           'content': json.dumps(res, ensure_ascii=False)[:6000]})
-        s.push('tool_result', name=action,
-               text=json.dumps(res, ensure_ascii=False)[:1200])
+        reply(json.dumps(res, ensure_ascii=False)[:6000], res)
         _loop(s)
     except Exception as e:
+        # 执行失败也要回 tool：否则 assistant.tool_calls 悬空，下一轮 400
         s.error = '%s: %s' % (type(e).__name__, e)
+        reply(s.error)
+        s.pending = s.pending_call = None
         s.push('error', text=s.error)
         s.running = False
 
