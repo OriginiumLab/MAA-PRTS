@@ -83,10 +83,15 @@ mock 掉，验证闸门口径——
   中文；裸名与带 `<Chain>@` 前缀的都要能命中；`BattleQuickFormationRole-*`
   统一归「编队·按职业筛选」；插件类名节点静默。这条专门防「照源码猜
   pipeline 名、跟真实日志对不上、战斗一整段没日志」的回归
-- **切号名 fallback 链**（2026-11-18 晚三连修）：`maa.accountName` → MAA 当前
-  档案 StartUp 的 `AccountName` → 档案名是纯数字尾号直接用；都没有时空串，
-  **绝不用昵称顶**（官服切号认手机号）。防「读错字段切号名永远空、唤醒 2 秒
-  完成、号没切」的回归
+- **切号名唯一来源 = 账号绑定**（2026-11-18 晚定版）：`maa.accountName` 读得
+  到就返回；没绑定给空串，且把 `maa._load_cfg` mock 成「一调用就炸」——
+  **全程不许读用户的 MAA 配置档案**（agent 模式跑临时配置=StartUp 任务参数，
+  不碰用户的 gui.new.json）。**绝不用昵称顶**（官服切号认手机号）。防「读错
+  字段切号名永远空、唤醒 2 秒完成、号没切」和「从档案猜尾号猜错号」两类回归
+- **StartUp 直连参数口径**：MaaCore 的 `StartUpTask::set_params` 只认
+  `account_name` / `client_type` / `start_game_enabled` 三个键（给了非空
+  `account_name` 就切号），`core_tasks` 不得发 `account_switch_enabled` 这类
+  MAA 不认的假参数；`switchAccount=false` 时整个不发 `account_name`
 - **`Engine.wait` 启动宽限**：mock `AsstRunning` 前 4 次 False——「还没开始
   跑」不能当「跑完」（AsstStart 异步生效）；跑过之后变 False 才算停。防
   「培养任务排进队列同一毫秒就被 close 杀掉」的回归

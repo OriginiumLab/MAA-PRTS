@@ -452,12 +452,20 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
    读的是 `snap['accountName'] / ['nickName']`，可快照顶层**根本没有这两个
    字段**（昵称在 `account.nickName`、切号名在 `maa.accountName`）——切号名
    永远拿不到，StartUp 不带 `account_name`：游戏已在主界面时这条链 2 秒就
-   「完成」，什么都没做，用户看到的就是「没唤醒就开始导航/培养」。修复后
-   fallback 链：设置页 `maa.accountName` → MAA 当前档案 StartUp 任务的
-   `AccountName` → 档案名本身是纯数字尾号（136/157/165…，用户的档案就是
-   这么命名的）→ 都没有给空串并在日志里提示去设置页填。**昵称绝不能顶**：
-   官服切号认手机号，拿昵称 MAA 在账号列表里翻不到。`skill_wakeup` 也补了
-   同样的 fallback（以前只看入参）。
+   「完成」，什么都没做，用户看到的就是「没唤醒就开始导航/培养」。
+   **昵称绝不能顶**：官服切号认手机号，拿昵称 MAA 在账号列表里翻不到。
+2. **agent 模式切号 = 临时配置，不碰用户的 MAA 档案**（用户口径，2026-11-18
+   晚再定版）。agent 跑 MAA 从不读写用户的 `gui.new.json` 档案：所谓的
+   「配置」就是 StartUp **任务参数**——只配「开始唤醒 + 该账号绑定的手机
+   尾号」，MaaCore 的 `StartUpTask` 拿到非空 `account_name` 就自己换号
+   （核对过 6.20.1 源码：`set_params` 只认 `account_name` / `client_type` /
+   `start_game_enabled` 三个键，**没有** `account_switch_enabled`，给了也
+   被忽略）。切号名的**唯一来源**是账号绑定 `maa.accountName`（设置 → MAA
+   路径填的，或对话里用户报给助手后回存的）；中间版曾加过「读 MAA 当前
+   档案 AccountName / 纯数字档案名」的 fallback，已按上面口径拆掉——
+   程序里两个游戏账号对 MAA 里五个尾号档案，档案名和 AccountName 说不清
+   谁是谁，猜错 MAA 在账号列表里死找 4 分钟。预检（`agent._roster`）同理：
+   只信用户这次给的 + 账号文件里存过的，没有就**问用户**，不从档案猜。
 2. **「培养干员没进去就报错」——`Engine.wait` 启动竞态**。asst.log 现场：
    StartUp 完成 → append OperProgress → `start` → **同一毫秒 `~Assistant`
    析构**，任务「完成」但培养一步没跑。原因：AsstStart 异步生效，刚 start
@@ -502,7 +510,8 @@ MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），
   不用重报练度；全部做完就把文件删掉。
 - `wakeup=false`（用户说游戏已经开着）时不排 StartUp（`spec['noStartUp']`，
   core_tasks 不再强制补）；`OperProgress` 自己会走 `OperBoxBegin` 从任意页面
-  进干员列表。`switchAccount=false` 时 StartUp 照跑，只是不开切号开关。
+  进干员列表。`switchAccount=false` 时 StartUp 照跑，但**不发** `account_name`
+  （MaaCore 里给了这个参数就切号，没有单独的开关可关）。
 
 ## MAA 日志补全（2026-11-18）
 

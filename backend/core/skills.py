@@ -37,7 +37,6 @@ import time
 from . import accounts
 from . import atomicio
 from . import envcheck
-from . import maa
 from . import maaplan
 from . import resources
 from . import settings
@@ -78,50 +77,26 @@ def _account_file(name):
 def _account_name_tail(file):
     """账号的切号名（MAA StartUp 切号用的那个）
 
-    来源优先级：
-      1. 设置页「MAA 路径」给账号填的 ``maa.accountName``（按游戏账号绑定，
-         最准——程序里两个游戏账号对 MAA 里 5 个尾号档案，只有这里能说清
-         谁是谁）；
-      2. MAA 当前档案「开始唤醒」任务里配的 ``AccountName``（用户在 MAA 里
-         填过 3635 这类尾号，直连跑也应遵从同一设置）；
-      3. 当前档案名本身就是纯数字尾号（136 / 157 / 165…，用户的档案就是
-         这么命名的）时直接用档案名。
+    **唯一来源：账号自己绑定的 ``maa.accountName``**（设置 → MAA 路径里填的
+    手机尾号，或对话里用户报给助手后回存的）。给空串就退回 adb 重启那条路，
+    调用方负责提示去设置页填。
 
-    都没有给空串——StartUp 照跑，只是不开切号开关，调用方要提示用户去
-    设置页填。**昵称绝不能拿来顶**：官服切号认的是手机号，拿昵称 MAA 在
-    账号列表里翻不到，acctname.check 会当场拒。
+    用户口径（2026-11-18）：agent 模式跑的是**临时配置**——StartUp 任务参数
+    只有「开始唤醒 + 手机号」，MaaCore 按参数自己换号，**不读也不改用户的
+    MAA 配置档案**。以前这里会退回读 MAA 当前档案的 ``AccountName`` / 档案名
+    （moren / 136 / 157…）来猜，两个问题：一是违背上面的口径（agent 不该碰
+    用户的 MAA 配置）；二是猜错代价大——程序里两个游戏账号对 MAA 里五个尾号
+    档案，档案名和 AccountName 根本说不清谁是谁，错配了 MAA 在账号列表里
+    死找 4 分钟超时。谁要用哪个尾号，只有账号绑定这一个可信来源。
 
-    以前读 ``snap['accountName'] / ['nickName']``——**顶层根本没有这两个
-    字段**（昵称在 ``account.nickName``，切号名在 ``maa.accountName``），切号名
-    永远拿不到，StartUp 不带 account_name：游戏已在主界面时这条链 2 秒就
-    「完成」，什么都没做，用户看到的就是「唤醒根本没跑」（2026-11-18 实测：
-    19:26 挂 IW-EX、17:02 培养两次的 StartUp 参数里都没有切号名，而旧路径
-    02:28 的有 3635）。
+    **昵称绝不能拿来顶**：官服切号认的是手机号，拿昵称 MAA 在账号列表里
+    翻不到，acctname.check 会当场拒。
     """
     try:
         snap = accounts.get_account(file)
     except Exception:
         snap = {}
-    name = ((snap.get('maa') or {}).get('accountName') or '').strip()
-    if name:
-        return name
-    try:
-        d = _default_maa_dir()
-        cfg = maa._load_cfg(d) if d else {}
-        prof_name = cfg.get('Current') or ''
-        prof = (cfg.get('Configurations') or {}).get(prof_name) or {}
-        for t in (prof.get('TaskQueue') or []):
-            if t.get('TaskType') == 'StartUp':
-                name = (t.get('AccountName') or '').strip()
-                if name:
-                    return name
-                break
-        # 档案名就是尾号（136/157/181 这类纯数字），直接当切号名
-        if re.fullmatch(r'\d{3,4}', prof_name or ''):
-            return prof_name
-    except Exception:
-        pass                    # MAA 配置读不了就算了，别拖垮任务
-    return ''
+    return ((snap.get('maa') or {}).get('accountName') or '').strip()
 
 
 def _client_of(file):
@@ -209,9 +184,11 @@ def skill_wakeup(params, log, tid=None):
     tail = (params.get('accountName') or params.get('tail')
             or _account_name_tail(file)).strip()
     if tail:
+        # 临时配置：StartUp 任务参数只有「开始唤醒 + 切号名」，MaaCore 按参数
+        # 自己换号——不读也不改用户的 MAA 配置档案
         spec = {'tasks': ['startup'], 'accountName': tail,
                 'maaDir': _default_maa_dir()}
-        log('按切号名唤醒：%s' % tail)
+        log('临时配置唤醒：只跑开始唤醒，切到 %s' % tail)
         maaplan.run_core(spec, tid=tid, timeout=360)
         return {'ok': True, 'how': 'maa-startup', 'account': file}
 
@@ -224,12 +201,8 @@ def skill_wakeup(params, log, tid=None):
     log('adb：%s' % detail)
     if not alive:
         raise RuntimeError(detail)
-    log('没找到切号名（设置 → MAA 路径里给这个账号填手机尾号就能切号），'
-        '直接重启游戏')
-    alive, detail = t.ready()
-    log('adb：%s' % detail)
-    if not alive:
-        raise RuntimeError(detail)
+    log('这个账号没绑定切号名（设置 → MAA 路径里填手机尾号，'
+        '或对话里直接告诉我），只能重启当前账号的游戏')
     if stagenav.at_home(t) and not stagenav.on_login_page(t) \
             and not stagenav.in_story_page(t) and not stagenav.in_story_dialog(t):
         log('已经在主界面，不用唤醒')

@@ -2101,6 +2101,13 @@ def check_maaplan(tmp):
     assert [t for t, _ in seq] == ['StartUp', 'Fight'], seq
     assert seq[0][1]['client_type'] == 'Bilibili', seq[0]
     assert seq[0][1]['account_name'] == '181****5505'
+    # MaaCore 的 StartUpTask 只认 account_name/client_type/start_game_enabled
+    # 三个键（给了非空 account_name 就切号），不许再发它不认的假参数
+    assert 'account_switch_enabled' not in seq[0][1], seq[0][1]
+    # 明说了不切号（switchAccount=False）时，切号名整个不发
+    seq2 = maaplan.core_tasks({'tasks': ['startup'], 'accountName': '5505',
+                               'switchAccount': False})
+    assert 'account_name' not in seq2[0][1], seq2[0][1]
     assert seq[1][1]['stage'] == 'TL-5'
 
     # 6) 抄作业：filename 必须绝对路径（相对路径会被 MaaCore 静默丢掉）
@@ -3390,7 +3397,7 @@ def check_oper_train(tmp):
     ④ 战斗过程（编队 / 部署 / 开技能）必须出日志，重复动作不能刷屏。
     """
     sys.path.insert(0, os.path.join(REPO, 'backend'))
-    from core import maalog, maaplan, skills
+    from core import accounts, maalog, maaplan, skills
 
     _reset_config(tmp)
     cfg = os.path.join(tmp, 'config')
@@ -3540,33 +3547,27 @@ def check_oper_train(tmp):
     assert (maaplan._subtask_label('Copilot@BattleQuickFormationRole-Caster')
             == '编队·按职业筛选')
 
-    # 8) 切号名 fallback 链：设置页 maa.accountName → MAA 当前档案 StartUp 的
-    #    AccountName → 档案名本身是纯数字尾号（136/157/165…）。2026-11-18 踩过：
-    #    旧代码读顶层 accountName/nickName（快照里根本不存在这两个字段），
-    #    切号名永远空，StartUp 不带 account_name，主界面 2 秒「完成」像
-    #    「唤醒根本没跑」。昵称绝不能顶——官服切号认手机号。
+    # 8) 切号名唯一来源 = 账号绑定的 maa.accountName；**绝不读用户的 MAA
+    #    配置档案**（2026-11-18 用户口径：agent 模式跑临时配置=StartUp 任务
+    #    参数，不碰用户的 gui.new.json）。以前这里会退回读 MAA 当前档案的
+    #    AccountName / 纯数字档案名来猜——档案和账号对不上号，猜错切号名
+    #    MAA 会在账号列表里死找 4 分钟。昵称也绝不能顶——官服切号认手机号。
     from core import maa as maa_mod
-    orig_load, orig_dmd = maa_mod._load_cfg, skills._default_maa_dir
-    skills._default_maa_dir = lambda: 'X:/maa'
+
+    def _forbidden(*a, **k):
+        raise AssertionError('不许读用户的 MAA 配置档案')
+
+    orig_load = maa_mod._load_cfg
+    maa_mod._load_cfg = _forbidden
     try:
-        maa_mod._load_cfg = lambda *a, **k: {'Current': 'moren',
-            'Configurations': {'moren': {'TaskQueue': [
-                {'TaskType': 'StartUp', 'AccountName': ''}]},
-                '157': {'TaskQueue': [{'TaskType': 'StartUp',
-                                       'AccountName': '3635'}]}}}
         assert skills._account_name_tail('smoke-acc.json') == '', \
-            'moren 切号名空、档案名不是数字 → 空串，不许拿昵称顶'
-        maa_mod._load_cfg = lambda *a, **k: {'Current': '157',
-            'Configurations': {'157': {'TaskQueue': [
-                {'TaskType': 'StartUp', 'AccountName': '3635'}]}}}
-        assert skills._account_name_tail('smoke-acc.json') == '3635'
-        maa_mod._load_cfg = lambda *a, **k: {'Current': '136',
-            'Configurations': {'136': {'TaskQueue': [
-                {'TaskType': 'StartUp', 'AccountName': ''}]}}}
-        assert skills._account_name_tail('smoke-acc.json') == '136', \
-            '档案名就是纯数字尾号时直接当切号名'
+            '没绑定切号名 → 空串（且全程没读 MAA 配置）'
+        accounts.save_maa_meta('smoke-acc.json', {'accountName': '5505'})
+        assert skills._account_name_tail('smoke-acc.json') == '5505', \
+            '账号绑定的切号名要能读到'
     finally:
-        maa_mod._load_cfg, skills._default_maa_dir = orig_load, orig_dmd
+        maa_mod._load_cfg = orig_load
+        accounts.save_maa_meta('smoke-acc.json', {'accountName': ''})
 
     # 9) Engine.wait 的启动宽限：AsstStart 异步生效，刚 start 完 AsstRunning
     #    还是 False——以前这里直接 return，把「还没开始跑」当「跑完」，

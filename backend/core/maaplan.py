@@ -17,6 +17,8 @@
   那条链（先 OCR 找关卡名、找不到就 ``FullStageNavigation`` 全关卡导航），
   所以「导航到指定关卡」是 MAA 自己做的，我们只要把关卡名写对。
 - ``StartUp`` → ``AccountName`` + ``AccountSwitchEnabled``，切号靠它。
+  （这是 GUI 任务队列的口径；``core_tasks`` 直连走的是 MaaCore 任务参数，
+  只有 ``account_name``，给了就切号——见下面的说明。）
 - 模板里没有的类型（``Copilot`` / ``Reclamation``）用内置默认值。
 
 为什么 CopilotTask 只有四个字段
@@ -597,9 +599,12 @@ def core_tasks(spec, maa_dir=None):
         ttype = TASK_MAP[key]['type']
         if ttype == 'StartUp':
             p = {'client_type': client, 'start_game_enabled': True}
-            if acc:
+            # MaaCore 的 StartUpTask::set_params 只认 account_name /
+            # client_type / start_game_enabled 三个键：**给了非空
+            # account_name 就切号**，没有 account_switch_enabled 这个参数
+            # （核对过 6.20.1 源码，塞进去只会被原样忽略）
+            if acc and switch:
                 p['account_name'] = acc
-                p['account_switch_enabled'] = switch
             out.append(('StartUp', p))
         elif ttype == 'Fight':
             for st in (stages or []):

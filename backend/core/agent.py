@@ -810,14 +810,15 @@ def _check_account_name(nm, channel):
 def _roster(want_files, names, maa_dir):
     """把「哪些账号 + 各自的切号名」理出来
 
-    切号名的来源，按可信度排：
+    切号名的来源，只有两个可信的：
     1. 用户这次显式给的 ``names``（还会回写账号文件，下次不用再问）
-    2. 账号文件里存过的 ``maa.accountName``
-    3. 账号绑定的 MAA 档案（``maa.profile``）里的 AccountName
-    4. 拿昵称去比 MAA 档案的 AccountName —— **只对 B 服**，官服绝不做这一步
+    2. 账号文件里存过的 ``maa.accountName``（上次给的 / 设置页填的）
 
-    猜错的代价很大：官服传昵称会让 MAA 在账号列表里死找，4 分钟才超时，
-    然后在"登录"这一步就把整轮挂机废掉。宁可多问一句。
+    **不从用户的 MAA 配置档案里猜**（2026-11-18 用户口径：agent 模式不碰
+    用户的 MAA 配置）：以前会拿 ``maa.profile`` 档案里的 AccountName、甚至
+    拿昵称去比对档案名来凑切号名——程序里两个游戏账号对 MAA 里五个尾号
+    档案，档案名和 AccountName 根本说不清谁是谁，错配的代价是官服传错号
+    MAA 在账号列表里死找 4 分钟超时，整轮挂机死在「登录」。宁可多问一句。
     """
     cands = multiacct.candidates()
     if want_files:
@@ -825,37 +826,6 @@ def _roster(want_files, names, maa_dir):
         cands = [c for c in cands if c['file'] in keep or c['name'] in keep]
     if not cands:
         return [], [], '没有可挂的明日方舟账号'
-
-    try:
-        existing = maa.profiles(maa_dir).get('profiles') or []
-    except Exception:
-        existing = []
-    by_profile = {pf.get('name'): pf for pf in existing}
-    by_acc = {}
-    for pf in existing:
-        an = (pf.get('accountName') or '').strip()
-        if an:
-            by_acc.setdefault(an, pf)
-
-    def _from_profile(c):
-        nm = ''
-        pf = by_profile.get(c.get('maaProfile') or '')
-        if pf:
-            nm, _ = _check_account_name(pf.get('accountName'), c.get('channel'))
-        if nm:
-            return nm
-        if _is_official(c.get('channel')):
-            return ''
-        nick = (c.get('nickName') or '').strip()
-        for key in (nick, nick.split('#')[0].strip(), (c.get('name') or '').strip()):
-            if not key:
-                continue
-            hit = by_acc.get(key)
-            if hit:
-                nm, _ = _check_account_name(hit.get('accountName'), c.get('channel'))
-                if nm:
-                    return nm
-        return ''
 
     rows, missing = [], []
     for c in cands:
@@ -875,9 +845,6 @@ def _roster(want_files, names, maa_dir):
                     accounts.save_maa_meta(c['file'], {'accountName': nm})
                 except Exception:
                     pass
-        if not nm:
-            nm = _from_profile(c)
-            source = 'profile'
         if not nm:
             official = _is_official(c.get('channel'))
             ask = ('手机号后 4 位是多少？给这四位就行（如 5505）——'
