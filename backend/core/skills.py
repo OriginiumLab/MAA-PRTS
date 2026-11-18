@@ -253,7 +253,45 @@ def skill_navigate(params, log, tid=None):
 
 # ---------------------------------------------------------------- fight
 
-def _prepare_ops(stages, file, log, raid=True):
+_VARIANT_ALIASES = {
+    'raid': 'raid', '突袭': 'raid', 'only': 'raid', 'onlyraid': 'raid',
+    'normal': 'normal', '普通': 'normal',
+    'both': 'both', 'all': 'both', '都要': 'both', 'allraid': 'both',
+}
+
+
+def _parse_stages(raw):
+    """stages 支持逐关指定难度：``'SV-EX-1'`` / ``'SV-EX-1@raid'`` /
+    ``'SV-EX-1@both'`` / ``{'stage': 'SV-EX-1', 'raid': 'both'}``
+
+    返回 ``(codes, wants)``；wants 只收明确标注过的关卡（大写代号 → 难度），
+    没标注的走全局 ``raid`` 参数。用户 2026-11-19 明确要求的用法：同一个
+    计划里「EX-1~5 只打突袭、EX-6/7 普通+突袭」，没有逐关标注就做不到。
+    """
+    codes, wants = [], {}
+    for it in raw or []:
+        if isinstance(it, dict):
+            code = str(it.get('stage') or it.get('code')
+                       or it.get('name') or '').strip()
+            w = it.get('raid', it.get('variant'))
+            if isinstance(w, bool):
+                w = 'both' if w else 'normal'
+        else:
+            code = str(it or '').strip()
+            w = None
+            if '@' in code:
+                code, w = code.rsplit('@', 1)
+                code, w = code.strip(), w.strip().lower()
+        if not code:
+            continue
+        codes.append(code)
+        key = _VARIANT_ALIASES.get(w) if w else None
+        if key:
+            wants[code.upper()] = key
+    return codes, wants
+
+
+def _prepare_ops(stages, file, log, raid='auto', wants=None):
     """mode=copy：把关卡代号列表变成 MaaCore 的 copilotList
 
     每个 stage 按代号搜作业站，挑**这号能抄的**那份下载落盘（prepare_copilot）。
@@ -261,14 +299,19 @@ def _prepare_ops(stages, file, log, raid=True):
     干员」的作业，MAA 编队阶段就失败，用户只看到「跑了 8 分钟 0/1」。
     现在优先 ready（可直接抄）→ borrow（借一人）→ 其它，并如实告警。
 
-    **突袭（raid）要占两条，普通在前、突袭在后**（2026-11-19 用户口径）：
-    MAA 的 ``copilot_list`` 里一条 ``is_raid=true`` 单独放着进不去——游戏里
-    没通关普通就没有「突袭」按钮。用户手动导作业集能挂突袭，就是因为里面
-    是「EX-1 普通 → EX-1 突袭」这个顺序。所以有突袭版的关卡这里拆两条：
-    先普通那条（IsRaid=false）、再突袭那条（IsRaid=true）。
+    **默认每关只排真正要打的那一档**（2026-11-19 用户实测口径）：
 
-    ``raid=False`` 时只排普通（刷材料不想要突袭就传它）。主线「磨难 / 险地」
-    不是突袭（用户 2026-11-19 明确），它们是独立关卡 id，各排一条、不展开。
+    - ``raid='auto'``（默认）→ 有突袭作业就**只排突袭**（IsRaid=true 一条）。
+      MaaCore 拿到 is_raid=true 会自己点「ChangeToRaidDifficulty」切难度
+      （asst.log 01:42 实证），不需要前面垫一条普通。以前排「普通 → 突袭」
+      两条，用户看到的就是「又从头打了一遍普通 EX-1」，白烧一次理智。
+    - ``raid='both'`` → 普通 + 突袭两条（普通还没通关、要一次打通时用）。
+    - ``raid=False`` / ``'normal'`` → 只排普通（刷材料、不打突袭）。
+    - 单关可以用 ``stages=['SV-EX-1@raid', 'SV-EX-6@both']`` 覆盖全局（见
+      ``_parse_stages``）。
+
+    主线「磨难 / 险地」不是突袭（用户 2026-11-19 明确），它们是独立关卡 id，
+    各排一条、不展开。
 
     没有 copilotList 的 spec 里 Copilot 任务会被 core_tasks 直接 continue——
     队列就只剩强制补的 StartUp，noNav 一摘就「没有可执行的任务」
@@ -281,7 +324,13 @@ def _prepare_ops(stages, file, log, raid=True):
     except Exception:
         pass
     band = {'ready': 0, 'borrow': 1, 'train': 2, 'blocked': 3}
-    want_raid = raid is not False and str(raid).lower() not in ('false', '0', 'no')
+    if isinstance(raid, bool):
+        gw = 'both' if raid else 'normal'
+    else:
+        gw = {'auto': 'raid', 'raid': 'raid', 'true': 'both', 'both': 'both',
+              'normal': 'normal', 'false': 'normal', '0': 'normal',
+              'no': 'normal'}.get(str(raid).strip().lower(), 'raid')
+    wants = {str(k).upper(): v for k, v in (wants or {}).items()}
     ops = []
 
     def _best(row):
@@ -323,26 +372,43 @@ def _prepare_ops(stages, file, log, raid=True):
         # 磨难 / 险地 / 简单是主线自己的难度（独立关卡 id），不展开成两条
         st_info = (raid_row or normal_row or {}).get('stage') or {}
         mainline = st_info.get('difficulty') in ('easy', 'tough', 'risky')
-        can_raid = (want_raid and r_op is not None and not mainline
-                    and (r_op.get('mode') or 'blocked') in ('ready', 'borrow',
-                                                            'unknown'))
-        if can_raid:
-            if n_op:
-                log('%s：先普通后突袭（作业 #%s → #%s）'
+        want = wants.get(st.upper()) or gw
+        if mainline:
+            want = 'normal'
+        raid_ok = (r_op is not None
+                   and (r_op.get('mode') or 'blocked') in ('ready', 'borrow',
+                                                           'unknown'))
+        if want == 'raid':
+            if raid_ok:
+                _note(st, r_op)
+                log('%s：只打突袭（作业 #%s《%s》）'
+                    % (st, r_op.get('copilotId'), (r_op.get('title') or '')[:30]))
+                ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
+                            'variant': 'raid'})
+                continue
+            if n_op is None:
+                log('跳过 %s：突袭作业不可抄，也没有普通版' % st)
+                continue
+            log('%s：突袭作业打不了（%s），这关只打普通'
+                % (st, {'train': '练度不足', 'blocked': '缺干员'}.get(
+                    r_op.get('mode') if r_op else '', '没搜到')))
+        elif want == 'both':
+            if raid_ok and n_op is not None:
+                log('%s：普通 + 突袭（作业 #%s → #%s）'
                     % (st, n_op.get('copilotId'), r_op.get('copilotId')))
                 _note(st, n_op)
                 ops.append({'copilotId': n_op['copilotId'], 'stageCode': st,
                             'variant': 'normal'})
-            else:
-                log('%s：只搜到突袭作业，没有普通版可直接垫在前面' % st)
-            _note(st, r_op)
-            ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
-                        'variant': 'raid'})
-            continue
-        if want_raid and r_op is not None and not mainline and n_op is not None:
-            log('%s：突袭作业「%s」，这关只打普通'
-                % (st, {'train': '练度不足', 'blocked': '缺干员'}.get(
-                    r_op.get('mode'), r_op.get('mode'))))
+                _note(st, r_op)
+                ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
+                            'variant': 'raid'})
+                continue
+            if raid_ok and n_op is None:
+                _note(st, r_op)
+                ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
+                            'variant': 'raid'})
+                continue
+            log('%s：突袭这档没作业/打不了，只排普通' % st)
         op, row = (n_op, normal_row) if n_op else (r_op, raid_row)
         _note(st, op)
         log('%s：用作业 #%s《%s》' % (st, op.get('copilotId'),
@@ -375,10 +441,13 @@ def skill_fight(params, log, tid=None):
     接手（当期活动 MAA 自己认路；老活动请先用 navigate skill 或手动到位）。
     用户明确要「连唤醒/导航一起」时传 wakeup=true 才走全套。
 
-    **突袭（raid）**：EX 关默认按「先普通、后突袭」排两条（见 ``_prepare_ops``）；
-    用户只刷材料不要突袭时传 ``raid=False``。主线磨难 / 险地不是突袭，各排一条。
+    **突袭（raid）**：默认每关**只打真正要打的那一档**（见 ``_prepare_ops``）：
+    ``raid='auto'``（默认）有突袭作业就只排突袭；``raid='both'`` 普通+突袭
+    两条（普通还没通关、要一次打通用）；``raid=False`` 只排普通（刷材料）。
+    单关可以写 ``stages=['SV-EX-1@raid', 'SV-EX-6@both']`` 逐关覆盖。
+    主线磨难 / 险地不是突袭，各排一条。
     """
-    stages = [s for s in (params.get('stages') or []) if s]
+    stages, wants = _parse_stages(params.get('stages'))
     if not stages:
         raise ValueError('缺 stages（要打哪些关）')
     file = _account_file(params.get('account') or '')
@@ -429,7 +498,7 @@ def skill_fight(params, log, tid=None):
     }
     # 抄作业必须有作业文件：按 stages 现搜（预检那轮已经拉过作业站，这里命中
     # 缓存，不再发请求）。**不能拿预检挑好的那一条直接用**——预检每关只挑
-    # 一份，突袭需要「普通 → 突袭」两条，得在这里拆。
+    # 一份，而且不看要打普通还是突袭（`@both` 那种要两条），得在这里按变体拆。
     # 不给 copilotList 的话队列里 Copilot 会被 core_tasks 跳过（见
     # _prepare_ops 注释），noNav 模式下直接空队列报错。
     if mode == 'copy':
@@ -440,7 +509,8 @@ def skill_fight(params, log, tid=None):
                 params['ops'], _default_maa_dir(), log=log)
         else:
             spec['copilotList'] = _prepare_ops(stages, file, log,
-                                               raid=params.get('raid', 'auto'))
+                                               raid=params.get('raid', 'auto'),
+                                               wants=wants)
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
     if with_nav:
         log('带唤醒+导航的全套流程')

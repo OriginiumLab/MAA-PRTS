@@ -357,9 +357,14 @@ TOOLS = [
           '**默认不唤醒不导航**——界面在哪就从哪直接开打；'
           '用户还在主界面 / 游戏没开时要先 skill_navigate 或 skill_wakeup，'
           '或传 wakeup=true 走全套。**调用前先跟用户确认要打哪些关**。'
-          '有突袭版的 EX 关默认排「先普通、后突袭」两条（MAA 进突袭的前提）；'
-          '只刷材料不要突袭就传 raid=false。返回 taskId。',
-          {'stages': {'type': 'array', 'items': {'type': 'string'}},
+          '**每关只打要打的那一档**：EX 关默认只打突袭；普通还没通关、要一次'
+          '打通就写 stages=["SV-EX-1@both"]；只刷材料写 @normal 或 raid="normal"。'
+          '返回 taskId。',
+          {'stages': {'type': 'array', 'items': {'type': 'string'},
+                      'description': '关卡代号，可加 @ 后缀逐关指定难度：'
+                                     '"SV-EX-1@raid" 只打突袭（默认）、'
+                                     '"SV-EX-1@both" 普通+突袭、'
+                                     '"SV-EX-1@normal" 只打普通。不带后缀走 raid 参数'},
            'mode': {'type': 'string', 'enum': ['copy', 'fight']},
            'wakeup': {'type': 'boolean',
                       'description': 'true=连唤醒+导航一起跑（默认 false 直跑）'},
@@ -367,11 +372,11 @@ TOOLS = [
                           'description': 'true=基础关的前置也一起补。默认只自动补 '
                                          'EX/S/MO 的前置；mode=fight 纯刷关默认一关'
                                          '都不补（刷材料时补上就是白烧理智）'},
-           'raid': {'type': 'boolean',
-                    'description': '突袭难度：默认（不传）有突袭版的关按「先普通、'
-                                   '后突袭」各打一遍（MAA 进突袭要求这关先通关普通）；'
-                                   'false=只打普通（刷材料时用）。主线磨难/险地'
-                                   '不是突袭，不受这个参数影响'},
+           'raid': {'type': 'string', 'enum': ['auto', 'both', 'normal'],
+                    'description': '没写 @ 后缀的关怎么打：auto（默认）=有突袭'
+                                   '作业就只打突袭；both=普通+突袭都打（普通还没'
+                                   '通关时用）；normal=只打普通（刷材料）。主线'
+                                   '磨难/险地不是突袭，不受这个参数影响'},
            'account': _ACC}, ['stages']),
     _tool('skill_weekly',
           '**周目编排（一站式）**：把一个活动从头打到尾——ST 剧情关自动过、'
@@ -1119,7 +1124,8 @@ def _precheck_fight(args):
     """
     from . import stageplan
     from . import skills as sk
-    stages = [s for s in (args.get('stages') or []) if s]
+    # stages 可能带 @raid/@both 后缀（逐关指定难度），预检只认纯关卡代号
+    stages, _wants = sk._parse_stages(args.get('stages'))
     if not stages:
         return None
     file = ''
@@ -1494,10 +1500,12 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
   启动（路径从 MAA 配置里读）。任务报「环境没准备好」时，把日志那句话原样转给
   用户让他手动开，别自己反复重试、也别去改 MAA 的连接设置
 - **突袭不是磨难**：EX/活动关的「突袭」和主线的「磨难/险地」是两回事（用户
-  2026-11-19 明确）。突袭要在 copilot 列表里**排在普通后面**才能进（MAA 的
-  前提是这关普通已通关）；skill_fight 默认对 EX 关自动排「普通 → 突袭」两条，
-  不要自己只排突袭、也不要跟用户说"突袭打不了"。只刷材料不想要突袭时传
-  raid=false。磨难/险地是主线独立难度，各排一条，不用这个参数。
+  2026-11-19 明确）。**默认每关只打真正要打的那一档**：EX 关有突袭作业就只打
+  突袭，不再先打一遍普通（用户实测抱怨过「说好只排突袭，结果又从头挂普通
+  EX-1」）。普通还没通关、要一次打通时，把那一关写成 ``SV-EX-1@both``。
+  同一次计划里可以逐关分开写：``["SV-EX-1@raid", "SV-EX-6@both"]``。
+  只刷材料写 ``@normal`` 或 raid=normal。磨难/险地是主线独立难度，不用后缀。
+  **不要**跟用户说「突袭打不了」——作业站有突袭作业就能排。
 - 不确定能配什么就先调 maa_capabilities，别猜
 - 回答用中文，简洁，别写长篇。不要输出 JSON 给用户看。
 - 涉及具体操作时，最后告诉用户去界面上哪看结果（跑机面板 / 左侧账号栏）

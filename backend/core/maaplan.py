@@ -530,7 +530,7 @@ def prepare_copilot(ops, maa_dir, log=None):
 
     log = log or (lambda *_: None)
     os.makedirs(_copilot_dir(maa_dir), exist_ok=True)
-    rows, done, seen = [], {}, {}
+    rows, done = [], {}
     for it in ops or []:
         cid = int(it['copilotId'])
         code = it.get('stageCode') or str(cid)
@@ -549,21 +549,15 @@ def prepare_copilot(ops, maa_dir, log=None):
         nav = _clean_stage(code)
         variants = copilot.entry_variants(flags, it.get('variant'), sname)
         for raid in variants:
-            # **突袭只能放在普通后面**（2026-11-19 用户口径）：MAA 单给一条
-            # is_raid=true 进不去，游戏里普通没通关就没有「突袭」按钮；手动
-            # 导作业集能挂突袭，靠的就是「EX-1 普通 → EX-1 突袭」这个顺序。
-            # 所以这里兜一道：突袭条目前面没有同关的普通条目时补一条。
-            if raid and seen.get(nav) is not False:
-                # 15+ 章的险地（#s）是主线自己的难度开关，不是突袭，不补普通
-                if not str(sname).endswith('#s') and (flags & copilot.DIFF_NORMAL):
-                    rows.append({'filename': path, 'stage_name': nav,
-                                 'is_raid': False})
-                    log('    %s 突袭前补一条普通（MAA 进突袭要先通关普通）' % nav)
-                else:
-                    log('    注意：%s 只有突袭作业，普通关没通过时 MAA 进不去突袭' % nav)
+            # 不再给突袭条目自动垫一条普通（2026-11-19 用户实测纠正）：
+            # MaaCore 拿到 is_raid=true 会自己点 ChangeToRaidDifficulty 切难度
+            # （asst.log 01:42 实证），垫普通只会让用户看到「又从头打了一遍
+            # 普通 EX-1」。普通真没通关时要一起打通，由调用方显式要 both
+            # （skill_fight 的 stages 写法 SV-EX-1@both）。
+            if raid and not str(sname).endswith('#s'):
+                log('    %s 打突袭（MAA 自己切突袭难度；普通没通关请用 @both）' % nav)
             rows.append({'filename': path, 'stage_name': nav,
                          'is_raid': bool(raid)})
-            seen[nav] = bool(raid)
     return rows
 
 

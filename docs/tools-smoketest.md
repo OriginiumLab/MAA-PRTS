@@ -120,21 +120,19 @@ mock 掉，验证闸门口径——
 - `skills._account_file('')`（每个 skill 开跑第一句）要能正常给出默认账号
 - `updater.scan_accounts` 同样不许被这些文件带崩
 
-### B41 突袭排在普通后面（2026-11-19）
+### B41 每关只打要打的档（2026-11-19 03:13 定稿）
 
-用户口径：「突袭的唯一条件就是放在普通的后面，例如 EX-1 突袭只能放在
-EX-1 普通后面」。asst.log 实证：只塞一条 `is_raid=true`（01:42 SV-EX-1）
-进不去突袭；手动导的作业集是 `MN-EX-1 false` 紧跟 `MN-EX-1 true`。
+用户实测：「说好只排突袭，结果又从头挂了一遍普通 EX-1」。asst.log 01:42 证明
+MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，不需要
+前面垫一条普通；上一版排「普通 → 突袭」两条就是白烧一次理智。
 
-- `_prepare_ops` 对每个有突袭版的关排「普通 → 突袭」两条，**顺序不能反**
-  （mock `copilot.search` 返回普通行/突袭行，断言 copilot_list 的
-  `(stage_name, is_raid)` 序列）
-- 不变量：任何 `is_raid=true` 条目前面，同一关最近的一条必须是普通
-- `raid=False` 只排普通
-- `prepare_copilot` 兜底：只有一条突袭条目时自动补普通（同一份作业文件，
-  日志有「突袭前补一条普通」）；作业本身只有突袭版（flags 没有普通）时不硬造，
-  只记「只有突袭作业」
-- 主线险地（`#s`）不是突袭：不补普通条目
+- 默认 `raid='auto'`：有突袭作业的关**只排突袭**一条
+- `raid='both'`：`普通 → 突袭` 两条，顺序不能反
+- `raid=False` / `'normal'`：只排普通
+- 逐关覆盖：`wants={'SV-EX-2': 'both'}` → EX-1 只突袭、EX-2 两条
+- `_parse_stages`：`@raid` / `@both` / `@normal` 后缀与 `{'raid': True}` 都认
+- `prepare_copilot` 不再自动补普通（断言日志里没有「补一条普通」）
+- 主线险地（`#s`）仍是单条 `is_raid=true`
 - B9 的 `entry_variants` 断言改成「选哪一行写哪一行」：`(2,'normal')=[False]`、
   `(1,'raid')=[True]`，防止再拿作业位标志改主意
 

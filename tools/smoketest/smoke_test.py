@@ -3765,18 +3765,21 @@ def check_config_globals(tmp):
 
 
 def check_raid_order(tmp):
-    """B41：突袭必须排在普通后面（MAA 进突袭的前提）
+    """B41：每关只打真正要打的那一档（默认突袭、可逐关指定）
 
-    用户 2026-11-19 两次强调：「EX 作业在作业集里导入突袭关卡就能挂突袭，
-    突袭的唯一条件就是放在普通的后面，例如 EX-1 突袭只能放在 EX-1 普通后面」。
-    asst.log 实证：01:42 那次 `SV-EX-1 is_raid: true` 单条独跑，进不去突袭；
-    11-17 手动导的作业集是 `MN-EX-1 false` 紧跟 `MN-EX-1 true`，正常。
+    用户 2026-11-19 03:13 实测反馈：「说好只排突袭，结果又从头挂了一遍普通
+    EX-1」。asst.log 01:42 证明 MaaCore 拿到 is_raid=true 会自己点
+    ChangeToRaidDifficulty 切难度，不需要前面垫一条普通；上一版排
+    「普通 → 突袭」两条，用户看到的就是白打一次普通。
 
-    这里钉四件事：
-    ① `_prepare_ops` 对每个有突袭版的关排「普通 → 突袭」两条，顺序不能反；
-    ② `raid=False` 只排普通（刷材料不烧突袭的理智）；
-    ③ `prepare_copilot` 兜底：突袭条目前面没有同关普通时自动补一条；
-    ④ 只有突袭作业（flags 不含普通）时不硬造普通条目，只在日志里说明。
+    这里钉六件事：
+    ① 默认 raid='auto'：有突袭作业的关**只排突袭**一条；
+    ② raid='both'：普通 → 突袭两条，顺序不能反；
+    ③ raid=False / 'normal'：只排普通；
+    ④ stages 支持 @raid / @both / @normal 逐关覆盖（agent 承诺的
+      「EX-1~5 只打突袭、EX-6/7 普通+突袭」要能落地）；
+    ⑤ prepare_copilot 不再自动给突袭垫普通；
+    ⑥ 主线险地（#s）仍是单条 is_raid=true。
     """
     _reset_config(tmp)
     from core import copilot, maaplan, skills
@@ -3814,19 +3817,35 @@ def check_raid_order(tmp):
         logs = []
         rows = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '', logs.append)
         seq = [(r['stage_name'], r['is_raid']) for r in rows]
-        assert seq == [('SV-EX-1', False), ('SV-EX-1', True),
-                       ('SV-EX-2', False), ('SV-EX-2', True)], seq
-        # 不变量：任何突袭条目前面，同一关最近的一条必须是普通
-        seen = {}
-        for r in rows:
-            if r['is_raid']:
-                assert seen.get(r['stage_name']) is False, \
-                    '突袭前面没有普通：%r' % (seq,)
-            seen[r['stage_name']] = r['is_raid']
+        # ① 默认只打突袭——不再先刷一遍普通
+        assert seq == [('SV-EX-1', True), ('SV-EX-2', True)], seq
 
-        # raid=False：只排普通
+        # ② both：普通 → 突袭两条，顺序不能反
+        rows_b = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='both')
+        seq_b = [(r['stage_name'], r['is_raid']) for r in rows_b]
+        assert seq_b == [('SV-EX-1', False), ('SV-EX-1', True)], seq_b
+
+        # ③ raid=False / 'normal'：只排普通
         rows2 = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid=False)
         assert [(r['stage_name'], r['is_raid']) for r in rows2] == [('SV-EX-1', False)]
+        rows2b = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='normal')
+        assert [(r['stage_name'], r['is_raid']) for r in rows2b] == [('SV-EX-1', False)]
+
+        # ④ 逐关覆盖：EX-1 只突袭、EX-2 普通+突袭（agent 承诺的混合计划）
+        want = {'SV-EX-1': 'raid', 'SV-EX-2': 'both'}
+        rows_w = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '', logs.append,
+                                     raid='auto', wants=want)
+        seq_w = [(r['stage_name'], r['is_raid']) for r in rows_w]
+        assert seq_w == [('SV-EX-1', True), ('SV-EX-2', False),
+                         ('SV-EX-2', True)], seq_w
+
+        # 解析 @ 后缀与 dict 写法
+        codes, wants = skills._parse_stages(
+            ['SV-EX-1@raid', 'SV-EX-2@both', 'SV-EX-3@normal',
+             {'stage': 'SV-EX-4', 'raid': True}, 'SV-EX-5'])
+        assert codes == ['SV-EX-1', 'SV-EX-2', 'SV-EX-3', 'SV-EX-4', 'SV-EX-5'], codes
+        assert wants == {'SV-EX-1': 'raid', 'SV-EX-2': 'both',
+                         'SV-EX-3': 'normal', 'SV-EX-4': 'both'}, wants
 
         # 某一关没作业 / 搜挂了：跳过它继续，别拖垮整批（预检标 unknown
         # 的关卡、作业站抽风时靠这条，否则一发请求失败整次挂机都不跑）
@@ -3839,28 +3858,18 @@ def check_raid_order(tmp):
 
         copilot.search = fake_search_mixed
         rows_skip = skills._prepare_ops(['SV-EX-1', 'XX-1'], '', logs_skip.append)
-        assert [r['stage_name'] for r in rows_skip] == ['SV-EX-1', 'SV-EX-1'], rows_skip
+        assert [r['stage_name'] for r in rows_skip] == ['SV-EX-1'], rows_skip
         assert any('跳过 XX-1' in x for x in logs_skip), logs_skip
         copilot.search = fake_search
 
-        # 兜底：只有一条突袭条目时补一条普通（同一份作业文件）
+        # ⑤ 突袭条目不再自动垫一条普通（上一版就是它让用户白打一遍普通）
+        logs3 = []
         rows3 = maaplan.prepare_copilot(
             [{'copilotId': 301, 'stageCode': 'SV-EX-3', 'variant': 'raid'}],
-            tmp, log=logs.append)
+            tmp, log=logs3.append)
         assert [(r['stage_name'], r['is_raid']) for r in rows3] == \
-            [('SV-EX-3', False), ('SV-EX-3', True)], rows3
-        assert rows3[0]['filename'] == rows3[1]['filename'], '补的普通用同一份作业'
-        assert any('突袭前补一条普通' in x for x in logs), logs
-
-        # 只有突袭作业（flags 里没有普通）：不硬造普通条目，只提示
-        logs4 = []
-        copilot.fetch_prepared = lambda cid: ({'stage_name': 'SV-EX-4'},
-                                              copilot.DIFF_RAID, 'SV-EX-4', [], True)
-        rows4 = maaplan.prepare_copilot(
-            [{'copilotId': 401, 'stageCode': 'SV-EX-4', 'variant': 'raid'}],
-            tmp, log=logs4.append)
-        assert [(r['stage_name'], r['is_raid']) for r in rows4] == [('SV-EX-4', True)]
-        assert any('只有突袭作业' in x for x in logs4), logs4
+            [('SV-EX-3', True)], rows3
+        assert not any('补一条普通' in x for x in logs3), logs3
 
         # 主线险地（#s）不是突袭：不补普通条目
         logs5 = []
@@ -3934,7 +3943,7 @@ def main():
         r.check('B38 设置页接口（token 读写/掩码/切号名归一）', lambda: check_settings_panel(tmp))
         r.check('B39 培养干员（练度导入/材料暂停/续跑/战斗日志）', lambda: check_oper_train(tmp))
         r.check('B40 全局 json 不炸账号列表（train-plan/畸形 account 段）', lambda: check_config_globals(tmp))
-        r.check('B41 突袭排在普通后面（EX 关拆两条/保险兜底/险地不算突袭）', lambda: check_raid_order(tmp))
+        r.check('B41 每关只打要打的档（默认突袭/@后缀逐关/不再垫普通）', lambda: check_raid_order(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
