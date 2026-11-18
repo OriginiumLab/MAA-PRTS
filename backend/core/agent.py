@@ -411,7 +411,8 @@ TOOLS = [
            'account': _ACC,
            'accountName': {'type': 'string',
                            'description': '切号名（官服=手机号后 4 位）。'
-                                          '不给就不切号'},
+                                          '账号已绑定尾号（list_accounts 的 '
+                                          'accountName 非空）时不用传，程序会自己用'},
            'switchAccount': {'type': 'boolean',
                              'description': 'false=只唤醒、不切号（用户说不用换号时传）'},
            'wakeup': {'type': 'boolean',
