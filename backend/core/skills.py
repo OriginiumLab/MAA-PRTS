@@ -96,7 +96,9 @@ def _account_name_tail(file):
         snap = accounts.get_account(file)
     except Exception:
         snap = {}
-    return ((snap.get('maa') or {}).get('accountName') or '').strip()
+    maa = snap.get('maa') if isinstance(snap, dict) else None
+    maa = maa if isinstance(maa, dict) else {}
+    return (maa.get('accountName') or '').strip()
 
 
 def _client_of(file):

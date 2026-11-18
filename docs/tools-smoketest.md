@@ -106,6 +106,20 @@ mock 掉，验证闸门口径——
   作业，`_lookup` 必须选 `variant=raid`；raid 行 blocked、normal 行 ready 时
   仍选 normal（可打性优先于变体）。防「挂 IW-EX 打的全是普通难度」的回归
 
+### B40 全局 json 不炸账号列表（2026-11-19）
+
+用户报「突然无法自动战斗」——唤醒 / 战斗 / 培养一起报
+`AttributeError: 'str' object has no attribute 'get'`。`config/train-plan.json`
+（`account` 是文件名字符串）被当成账号文件，把 `list_accounts` 整个炸掉。
+
+- 目录里摆上 `train-plan.json`、`{"account": "oops"}`、`{"account": ["oops"]}`、
+  `stats`/`maa`/`skd` 都是字符串的文件、顶层数组 json
+- `list_accounts` 只能列出真账号且**一个都不许抛**；字符串段当空处理
+  （`stats.charCount` 为 None、`maaAccountName` 为空）
+- `train-plan.json` 必须在 `updater.NON_ACCOUNT_JSON` 里（不是账号）
+- `skills._account_file('')`（每个 skill 开跑第一句）要能正常给出默认账号
+- `updater.scan_accounts` 同样不许被这些文件带崩
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

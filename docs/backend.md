@@ -537,6 +537,29 @@ MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），
   进干员列表。`switchAccount=false` 时 StartUp 照跑，但**不发** `account_name`
   （MaaCore 里给了这个参数就切号，没有单独的开关可关）。
 
+## config/ 里的全局 json 不是账号（2026-11-19）
+
+用户报「**突然无法自动战斗**」——唤醒、战斗、培养三个 skill 同时失败，日志
+清一色 `AttributeError: 'str' object has no attribute 'get'`。
+
+根因不在 skill，在 `accounts.list_accounts`：培养暂停时 `skills._save_train_plan`
+把 `config/train-plan.json` 落盘，里面 `"account": "灰bao#7986 官服.json"` 是
+**文件名字符串**；账号扫描把这个文件当账号读，`(snap.get('account') or {}).get('uid')`
+撞上字符串 → 整个账号列表抛异常。所有 skill 开跑第一句都是 `_account_file('')`
+→ 全部一起挂。这也解释了「突然」：文件是**上一次培养暂停时才生成**的，
+之前目录里没有它。
+
+修法两层，缺一不可：
+
+1. `updater.NON_ACCOUNT_JSON` 补 `train-plan.json` / `navcache.json` /
+   `appupdate.json`——我们自己写在 config/ 根目录的全局文件都登记进去；
+2. `list_accounts` / `scan_accounts` / `find_by_uid` / `char_path` /
+   `merge_preserved` 里的 `account` 段一律 `isinstance(..., dict)` 才算账号，
+   `stats` / `maa` / `skd` 也走 `_dict()`。**`or {}` 挡不住字符串**，这是
+   这个 bug 的全部原因；以后新增全局文件忘了登记也不会再连锁崩。
+
+B40 用「train-plan.json + account 为字符串/数组/缺 game 的文件」钉死。
+
 ## MAA 日志补全（2026-11-18）
 
 用户报「自动战斗没有日志，右边不知道 MAA 在干什么」。原因有两层，都补了：

@@ -32,6 +32,11 @@ def _load(path):
         return None
 
 
+def _dict(v):
+    """取子段：不是 dict（字符串/数组/null）一律当空对象，别让 `or {}` 骗过去"""
+    return v if isinstance(v, dict) else {}
+
+
 def list_accounts():
     out = []
     d = _accounts_dir()
@@ -43,9 +48,16 @@ def list_accounts():
         if name in updater.NON_ACCOUNT_JSON:      # 同层的全局文件，不是账号
             continue
         snap = _load(os.path.join(d, name))
-        if not snap or not (snap.get('account') or {}).get('uid'):
+        # account 段必须真的是对象：config/ 下还有我们自己的全局文件
+        # （train-plan.json 的 account 是**文件名字符串**），`or {}` 挡不住
+        # 字符串，.get 直接把整个账号列表炸掉——所有 skill 一起挂
+        # （2026-11-19 01:24 用户实测：培养暂停落盘 train-plan.json 之后，
+        # 连「开始唤醒」「自动战斗」都报 'str' object has no attribute 'get'）
+        a = snap.get('account') if snap else None
+        if not isinstance(a, dict) or not a.get('uid'):
             continue
-        a, s = snap.get('account') or {}, snap.get('stats') or {}
+        s = snap.get('stats')
+        s = s if isinstance(s, dict) else {}
         out.append({
             'file': name,
             'uid': str(a.get('uid')),
@@ -57,15 +69,15 @@ def list_accounts():
             'serverId': a.get('serverId') or '',   # 终末地签到要 gameId_roleId_serverId 三件套
             'level': a.get('level'),
             # 有没有可用的森空岛 token：抽卡统计/签到都要它，MAA 导入的账号没有
-            'hasToken': bool((snap.get('skd') or {}).get('data')),
+            'hasToken': bool(_dict(snap.get('skd')).get('data')),
             'secretary': a.get('secretary') or {},
-            'maaProfile': (snap.get('maa') or {}).get('profile') or '',
+            'maaProfile': _dict(snap.get('maa')).get('profile') or '',
             # MAA 切号名：官服是手机号掩码（181****5505），B 服是游戏内用户名。
             # 存下来就不用每次挂机都问一遍——这是唯一必须问用户的字段，
             # 猜错的表现是切号死循环（MAA 找不到账号名，重试到超时）。
-            'maaAccountName': (snap.get('maa') or {}).get('accountName') or '',
-            'maaDir': (snap.get('maa') or {}).get('dir') or '',
-            'syncedAt': (snap.get('sync') or {}).get('syncedAt'),
+            'maaAccountName': _dict(snap.get('maa')).get('accountName') or '',
+            'maaDir': _dict(snap.get('maa')).get('dir') or '',
+            'syncedAt': _dict(snap.get('sync')).get('syncedAt'),
             # 关卡进度摘要（主线还差几关、活动几个区、剿灭几张没满）；
             # 明细在 account_detail 里，列表页只放这几个数字
             'progress': progress.summary(snap.get('progress')),

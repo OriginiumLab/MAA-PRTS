@@ -3706,7 +3706,65 @@ def check_oper_train(tmp):
     assert 'accountName' in (lc.get('hint') or ''), 'hint 没提示已有尾号就别问'
 
 
+def check_config_globals(tmp):
+    """B40：config/ 里的全局 json 不许把账号列表炸掉
+
+    2026-11-19 01:24 用户实测「突然无法自动战斗」：培养暂停时 skills 把
+    ``train-plan.json`` 落进 config/（里面 ``account`` 是**文件名字符串**），
+    ``accounts.list_accounts`` 的 ``(snap.get('account') or {}).get('uid')``
+    正好撞上字符串 → 整个账号列表抛 AttributeError → 唤醒 / 战斗 / 培养
+    全部报「'str' object has no attribute 'get'」。
+
+    这里把「我们自己的全局文件」和「畸形 account 段」都摆进目录，断言只有
+    真账号被列出、且谁都不抛。
+    """
+    _reset_config(tmp)
+    from core import accounts, skills, updater
+    cfg = os.path.join(tmp, 'config')
+
+    def dump(name, obj):
+        with open(os.path.join(cfg, name), 'w', encoding='utf-8') as f:
+            json.dump(obj, f, ensure_ascii=False)
+
+    dump('good.json', {'account': {'uid': '42', 'nickName': '冒烟',
+                                   'channelName': '官服'},
+                       'maa': {'accountName': '181****5505'},
+                       'stats': {'charCount': 3}})
+    # 真正踩雷的那个：account 是文件名字符串
+    dump('train-plan.json', {'account': 'good.json', 'savedAt': '',
+                             'plans': [{'name': '山'}]})
+    dump('str-account.json', {'account': 'oops'})
+    dump('list-account.json', {'account': ['oops']})
+    dump('bad-segs.json', {'account': {'uid': '43'},
+                           'stats': 'oops', 'maa': 'oops', 'skd': 'oops'})
+    dump('arr.json', [1, 2, 3])
+
+    assert 'train-plan.json' in updater.NON_ACCOUNT_JSON, \
+        '培养计划文件必须登记成全局文件，不是账号'
+
+    rows = accounts.list_accounts()
+    files = sorted(r['file'] for r in rows)
+    assert files == ['bad-segs.json', 'good.json'], files
+
+    bad = next(r for r in rows if r['file'] == 'bad-segs.json')
+    assert bad['stats']['charCount'] is None, 'stats 是字符串时应当当空'
+    assert bad['maaAccountName'] == '', 'maa 是字符串时应当当空'
+    assert bad['hasToken'] is False
+
+    good = next(r for r in rows if r['file'] == 'good.json')
+    assert good['maaAccountName'] == '181****5505'
+
+    # 每个 skill 开跑第一句都是 _account_file('')
+    assert skills._account_file('') == 'good.json'
+    assert skills._account_file('冒烟') == 'good.json'
+
+    # 同步侧扫描 / 同名改名也不能被这些文件带崩
+    assert sorted(updater.scan_accounts(cfg)) == ['42', '43']
+
+
 # ---------------------------------------------------------------- 入口
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -3762,6 +3820,7 @@ def main():
         r.check('B37 环境检测（配置来源/静默/替用户启动/任务前闸门）', lambda: check_envcheck(tmp))
         r.check('B38 设置页接口（token 读写/掩码/切号名归一）', lambda: check_settings_panel(tmp))
         r.check('B39 培养干员（练度导入/材料暂停/续跑/战斗日志）', lambda: check_oper_train(tmp))
+        r.check('B40 全局 json 不炸账号列表（train-plan/畸形 account 段）', lambda: check_config_globals(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
