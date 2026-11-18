@@ -906,6 +906,18 @@ def run_core(spec, tid=None, timeout=None):
             eng.stop()
         if state.get('pause'):
             log('已暂停：%s' % state['pause'])
+        # 培养中途失败 / 暂停时，MaaCore 停在干员档案的精英化页（用户看到的
+        # 「卡在升级等级的界面」就是这个）。等它真的停下来，再把界面退回
+        # 主界面——不然用户切回模拟器，看到游戏卡在半开的页面，只会以为
+        # 程序把游戏点坏了。
+        train_bad = [c for c in eng.chains
+                     if c.get('chain') == 'OperProgress' and not c.get('ok')]
+        if state.get('pause') or train_bad:
+            t_end = time.time() + 5
+            while eng.running() and time.time() < t_end:
+                time.sleep(0.2)
+            if eng.back_to_home():
+                log('界面已退回主界面')
         # 成功与否只看有没有任务链报错：AllTasksCompleted 在链报错后照样会来，
         # 单纯等它等于「永远成功」。次数打满被 Stop 的那次是正常结束。
         bad = [c for c in eng.chains if not c.get('ok')]
@@ -1054,6 +1066,29 @@ _DETAIL_CN = {
     'Completed': '完成',
 }
 
+# 「该去补东西」的结果 → (暂停原因, 怎么补)。命中就暂停，不再让 MAA 一条条
+# 试下去（精英化没成，后面的技能/专精必然 PrerequisiteNotMet，刷屏没意义）。
+#
+# ChipNotCraftable 的来历（2026-11-19 用户实测「卡在升级界面报错」）：
+# MaaCore 6.20.1 的 OperProgressProcessTask 在 E0→E1 缺普通芯片时直接
+# ``return ChipNotCraftable``，不去走加工站合成（上游 issue #18612）。
+# 也就是说 MAA 自己的 GUI 手动跑同样会停在这一步 —— 用户手动成功的那几次
+# 都是芯片齐备的。别让日志把它说成「程序坏了」，要说成「缺什么、怎么补」。
+_TRAIN_NEED_MORE = {
+    'ResourceInsufficient': (
+        '材料不足',
+        '龙门币 / 经验卡 / 精英化材料不够。补齐后说一声「继续培养」接着做'),
+    'ChipNotCraftable': (
+        '缺精英化芯片',
+        'MAA 这一版（6.20.1）缺芯片时不会自己去加工站合成，会直接停下'
+        '（上游 issue #18612，MAA 自己的界面跑也一样）。'
+        '最简单的办法：在游戏里手动精英化这张卡一次，再说「继续培养」；'
+        '或者先去加工站把芯片做出来'),
+    'FormulaLocked': (
+        '材料配方没解锁',
+        '加工站里的合成配方还没解锁。先解锁配方，再说「继续培养」'),
+}
+
 
 def _detail_key(v):
     """result_detail → 枚举名字（字符串直接用，数字按 MaaCore 的声明顺序换）"""
@@ -1119,24 +1154,36 @@ def _on_train_detail(data, log, state):
         log('· %s：跳过（%s）' % (name, _DETAIL_CN.get(detail, detail or '训练室占用')))
         return
 
+    # 已经因为「该去补东西」暂停过了：MaaCore 会把同一名干员的后续子目标
+    # 一条条报下来（精英化失败 → 技能/专精全 PrerequisiteNotMet 刷屏），
+    # 这些不是新信息，静默掉。
+    if state and state.get('pause'):
+        return
+
     why = _DETAIL_CN.get(detail, detail or '失败')
     tail = ('（计划 %s）' % plan_brief(plan)) if plan else ''
     log('✘ %s：%s%s' % (name, why, tail))
-    if detail != 'ResourceInsufficient' or state is None:
+    if detail not in _TRAIN_NEED_MORE or state is None:
         return
-    # 材料不足不是「跑挂了」，是「该去补材料」：MAA 自己会接着试下一条计划，
-    # 那样只会一路失败下去。这里把它停住（暂停），把缺什么写清楚。
-    if not state.get('pause'):
-        state['pause'] = '%s 材料不足' % name
-        state['pause_detail'] = tail
-        log('材料不足，暂停培养。补齐材料后说一声「继续培养」，'
-            '会按没做完的部分接着来')
-        stop = state.get('stop')
-        if stop:
-            # 不能在回调线程里同步 AsstStop（它会等工作线程收尾，有互锁风险），
-            # 丢给一个短命线程去叫停
-            threading.Thread(target=stop, daemon=True,
-                             name='maa-pause-stop').start()
+    # 这三种不是「跑挂了」，是「该去补东西」：MAA 自己会接着试下一条计划，
+    # 那样只会一路失败下去（精英化没成，专精必然 PrerequisiteNotMet）。
+    # 直接暂停，把要补的东西写清楚。
+    #
+    # ChipNotCraftable 尤其要说清楚：MAA 6.20.1 在 E0→E1 缺普通芯片时直接
+    # 放弃、不去加工站合成（上游 issue #18612），MAA 自己的 GUI 跑也一样。
+    # 用户手动能成功的那几次都是芯片齐的，容易误以为我们这边坏了。
+    label, tip = _TRAIN_NEED_MORE[detail]
+    state['pause'] = '%s %s' % (name, label)
+    state['pause_detail'] = tail
+    log('%s，暂停培养。%s' % (label, tip))
+    log('后面没做完的部分已经存下来了，补完之后说一声「继续培养」，'
+        '不用重新报练度')
+    stop = state.get('stop')
+    if stop:
+        # 不能在回调线程里同步 AsstStop（它会等工作线程收尾，有互锁风险），
+        # 丢给一个短命线程去叫停
+        threading.Thread(target=stop, daemon=True,
+                         name='maa-pause-stop').start()
 
 
 def _on_core_event(ev, log, tid, state=None):
@@ -1250,6 +1297,7 @@ def _wait_run(eng, total, log, state):
     """
     deadline = time.time() + total
     t0 = time.time()
+    restarts = 0
     while True:
         left = deadline - time.time()
         if left <= 0:
@@ -1257,7 +1305,18 @@ def _wait_run(eng, total, log, state):
         if eng.wait(timeout=min(60.0, left), poll=0.5):
             return True
         if not eng.running():
-            return eng.wait(timeout=1.0, poll=0.2)
+            # 队列没人跑、也还没收到 AllTasksCompleted：可能是 start 撞上
+            # 「上一批收尾」窗口时判断成「已被接上」，其实那条任务没人取
+            # （见 Engine.start 的 a)/b) 说明）。补一次 start，最多一次。
+            # **暂停（材料不足 / 缺芯片）时绝不重排**——那是我们主动叫停的，
+            # 重排等于把刚停下的任务又拉起来。
+            if (restarts < 1 and not (state or {}).get('pause')
+                    and not eng.wait(timeout=1.0, poll=0.2)):
+                restarts += 1
+                log('队列没跑起来，重新排一次…')
+                if eng.start():
+                    continue
+            return False
         if time.time() - (state or {}).get('last_log', t0) >= HEARTBEAT_SECONDS:
             cost = int(time.time() - t0)
             where = (state or {}).get('stage') or ''

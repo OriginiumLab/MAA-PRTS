@@ -121,6 +121,9 @@ class Engine:
         self.chains = []
         self.errors = []
         self._cur_chain = ''
+        # 收到过多少次 TaskChainStart。start() 用它判断「AsstStart 返回 false
+        # 之后新任务到底有没有被接上」（见 start 的注释）。
+        self._chain_starts = 0
         self.connected = False
 
     # ---------------------------------------------------------- 绑定
@@ -237,6 +240,7 @@ class Engine:
             return None
         if msg == MSG_TASK_START:
             self._cur_chain = chain
+            self._chain_starts += 1
             return {'t': t, 'kind': 'chain_start', 'chain': chain,
                     'text': '开始：%s' % _chain_cn(chain)}
         if msg == MSG_TASK_COMPLETED:
@@ -328,26 +332,44 @@ class Engine:
         return tid
 
     def start(self, settle=15.0):
-        """开始跑队列；返回 False 表示 MaaCore 真的不收
+        """开始跑队列；返回 False 表示 MaaCore 真的没接
 
-        **为什么要重试**：MaaCore 的 ``AllTasksCompleted`` 是在工作线程收尾前
-        发的，这时 ``AsstRunning`` 还是 true、``AsstStart`` 直接返回 false。
-        run_core 的两段式执行正好卡在这个窗口：唤醒链一完成就 append 培养 /
-        作业再 start → false → 任务报「AsstStart 返回失败」，一步没跑
-        （2026-11-18 用户实测：StartUp 完成 → 排队培养 → 立刻失败）。
-        这里在返回 false 时先等它退干净（最多 ``settle`` 秒）再重试一次；
-        真的还在跑别的任务就不硬来，老老实实返回 False。
+        ``AsstStart`` 返回 false 有两种完全不同的处境，以前混在一起判，
+        结果「任务明明跑起来了，日志却报 AsstStart 返回失败」
+        （2026-11-19 用户实测，三次培养全中）：
+
+        a) **上一批还在收尾**：``AllTasksCompleted`` 是在工作线程退出前发的，
+           这时 ``AsstRunning`` 还是 true，MaaCore 打一行 ``Start | block``
+           就把 ``AsstStart`` 挡了。可它自己还活着、会继续消费队列 ——
+           我们刚 append 的那条照样在几十毫秒后开跑。asst.log 实证：
+           ``00:25:09.674 Start | block`` → ``00:25:09.776 TaskChainStart``。
+           判据：**新任务链开始了**（``self._chain_starts`` 增加）。
+        b) **真的没接**：工作线程已经退干净（``running`` 变 false），队列里那
+           一条没人取。这时才需要重试一次 ``AsstStart``。
+
+        以前只处理 b)：等 running 变 false 再重试。碰上 a) 时 running 一直
+        true（任务正在跑），等满 ``settle`` 秒后当失败抛错——用户看到的
+        「X RuntimeError: AsstStart 返回失败」就是这么来的，任务其实在跑。
         """
         if not self._handle:
             raise EngineError('还没 open()')
         self._done.clear()
         if self._lib.AsstStart(self._handle):
             return True
+        mark = self._chain_starts
         deadline = time.time() + max(0.0, settle)
-        while time.time() < deadline and self.running():
-            time.sleep(0.2)
+        while time.time() < deadline:
+            if self._chain_starts > mark:
+                return True                 # a)：新任务链已经开跑
+            if not self.running():
+                break                       # b)：退干净了，重试
+            time.sleep(0.1)
+        if self._chain_starts > mark:
+            return True
         if self.running():
-            return False
+            # 还在跑但没看到新链：交给 _wait_run 的心跳/重排兜底，
+            # 不在这里判死（误判一次就是一整轮白跑）
+            return True
         self._done.clear()
         return bool(self._lib.AsstStart(self._handle))
 

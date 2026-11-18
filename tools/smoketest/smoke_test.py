@@ -2142,6 +2142,7 @@ def check_maaplan(tmp):
     # 8) 引擎事件翻译（纯函数，不碰设备）
     eng = maacore.Engine.__new__(maacore.Engine)
     eng.connected = False
+    eng._chain_starts = 0
     ev = eng._translate(maacore.MSG_CONNECTION_INFO, {'what': 'Connected'})
     assert ev['kind'] == 'connected' and eng.connected, ev
     ev = eng._translate(maacore.MSG_CONNECTION_INFO, {'what': 'ConnectFailed'})
@@ -3481,6 +3482,46 @@ def check_oper_train(tmp):
     skills._save_train_plan('smoke-acc.json', [])
     assert skills._load_train_plan() is None
 
+    # 4b) 缺芯片 = 「该去补芯片」，不是崩。MaaCore 6.20.1 在 E0→E1 缺普通
+    #     芯片时直接返回 ChipNotCraftable、不去加工站合成（上游 issue #18612，
+    #     MAA 自己的界面跑也一样）。2026-11-19 用户看到的「卡在升级界面报错」
+    #     就是这条 + 下面 start 的误判。日志要写清「缺什么、怎么补」，
+    #     精英化没成之后的连环 PrerequisiteNotMet 不许刷屏。
+    calls2 = []
+    st3 = {'plans': plans, 'done': {}, 'stop': lambda: calls2.append('stop')}
+    out3 = []
+    maaplan._on_core_event({'kind': 'extra', 'what': 'OperProgressDetail',
+                            'data': {'name': '泥岩', 'result': 'Failed',
+                                     'result_detail': 'ChipNotCraftable'}},
+                           out3.append, 't', st3)
+    assert '芯片' in st3['pause'], st3
+    assert any('加工站' in x for x in out3), out3
+    assert calls2 == ['stop'], calls2
+    out4 = []
+    maaplan._on_core_event({'kind': 'extra', 'what': 'OperProgressDetail',
+                            'data': {'name': '泥岩', 'result': 'Failed',
+                                     'result_detail': 'PrerequisiteNotMet'}},
+                           out4.append, 't', st3)
+    assert out4 == [], out4
+
+    # 4c) 暂停后 _wait_run 不许「重排一次」把刚停下的任务又拉起来
+    class _StubEng:
+        starts = 0
+
+        def wait(self, timeout=None, poll=1.0):
+            return False
+
+        def running(self):
+            return False
+
+        def start(self, settle=15.0):
+            type(self).starts += 1
+            return True
+
+    assert maaplan._wait_run(_StubEng(), 5, lambda *_: None,
+                             {'pause': '泥岩 缺精英化芯片'}) is False
+    assert _StubEng.starts == 0, '暂停还被重排了'
+
     # 5) MAA 日志桥：只翻有信息量的行，噪音（识别框为空 / 缺 pipeline）全丢
     tap = maalog.Tap(None)
     msg = tap.translate('[2026-11-18 14:41:00.533][ERR][Px1][Tx2] '
@@ -3609,6 +3650,7 @@ def check_oper_train(tmp):
     eng3 = object.__new__(maacore.Engine)
     eng3._done = threading.Event()
     eng3._handle = 1
+    eng3._chain_starts = 0
     st = {'start_calls': 0, 'running': 3}
 
     def _asst_start(h):
@@ -3625,13 +3667,34 @@ def check_oper_train(tmp):
     assert eng3.start(settle=5) is True, '退干净后要能重试成功'
     assert st['start_calls'] == 2, st
 
-    # 真在跑别的任务（一直 running）：不许假装成功，交给调用方报错
+    # AsstStart 被拒、但实例一直在跑：这是「上一批还在收尾、队列继续被消费」，
+    # **不是**失败。2026-11-19 用户报「培养卡在升级界面报错」，三次全是这条：
+    # asst.log 里 00:25:09.674 Start | block（返回 false）→ 00:25:09.776
+    # TaskChainStart（任务照跑），我们在 15 秒后把它判成失败抛错。
     eng4 = object.__new__(maacore.Engine)
     eng4._done = threading.Event()
     eng4._handle = 1
+    eng4._chain_starts = 0
     eng4._lib = SimpleNamespace(AsstStart=lambda h: False,
                                 AsstRunning=lambda h: True)
-    assert eng4.start(settle=0.2) is False, '一直 running 时返回 False'
+    assert eng4.start(settle=0.2) is True, \
+        '一直 running = 队列还在被消费，不许判成「AsstStart 返回失败」'
+
+    # 更准的判据：新任务链开始（_chain_starts 增加）就立刻返回，不干等 settle
+    eng5 = object.__new__(maacore.Engine)
+    eng5._done = threading.Event()
+    eng5._handle = 1
+    eng5._chain_starts = 0
+
+    def _deny_then_chain(h):
+        threading.Timer(0.1, lambda: setattr(eng5, '_chain_starts', 1)).start()
+        return False
+
+    eng5._lib = SimpleNamespace(AsstStart=_deny_then_chain,
+                                AsstRunning=lambda h: True)
+    t0 = time.time()
+    assert eng5.start(settle=5) is True
+    assert time.time() - t0 < 2, '看到新链开始就该立刻返回'
 
     # 11) 账号列表要带出已绑定的切号名：用户设置里配过尾号，助手还追问过一次
     #     （2026-11-18）——列表里有值，模型才不会重复问

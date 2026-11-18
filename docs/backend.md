@@ -476,10 +476,16 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
    认「running 变 False = 停了」；没见过时给 15 秒启动宽限。
    **同一处还有第二个窗口**（2026-11-18 22:35 用户实测）：唤醒链一完成
    （`AllTasksCompleted` 早于工作线程收尾，`AsstRunning` 仍为 true），run_core
-   第二段 append 培养再 `AsstStart` → **直接返回 false**，日志是「StartUp
-   完成 → 排队培养 → AsstStart 返回失败」，培养一步没跑。修复：
-   `Engine.start()` 返回 false 且仍在 running 时，先等它退干净（最多 15 秒）
-   再重试一次；真在跑别的任务就照旧返回 False，不硬来。
+   第二段 append 培养再 `AsstStart` → **直接返回 false**。第一次修的是「false
+   就等 running 变 false 再重试」，方向反了：MaaCore 被挡时并不会停，它继续
+   消费队列，我们刚 append 的那条几十毫秒后就开跑（asst.log：
+   `00:25:09.674 Start | block` → `00:25:09.776 TaskChainStart`）。于是
+   `running` 一直 true → 等满 15 秒 → 判成失败 → 用户看到「X RuntimeError:
+   AsstStart 返回失败」，可任务其实在跑（2026-11-19 三次培养全中）。
+   **现在的判据**：`AsstStart` 返回 false 后盯 `_chain_starts`（收到
+   `TaskChainStart` 的次数）——新链开始了就直接算成功；`running` 变 false
+   才是「真没接」，这时才重试一次；`running` 一直是 true 也当成功（队列在被
+   消费），交给 `_wait_run` 兜底重排一次，宁可多等一秒也不误判。
 3. **「设置里配过手机尾号，助手每次还问」**——`list_accounts` 没带切号名。
    模型看不到账号绑定的 `maa.accountName`，只能按提示再问一遍。修复：
    工具输出补 `accountName`，`hint` 和系统提示都写明「非空的直接沿用，别
@@ -515,6 +521,14 @@ MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），
   `result_detail=ResourceInsufficient` 一到，`_on_train_detail` 置
   `state['pause']` 并另起线程 `AsstStop`（不能在回调线程里同步 stop，会等
   工作线程收尾）。`run_core` 收尾时不再刷一串 `[失败]`，只报「已暂停：XX 材料不足」。
+  **`ChipNotCraftable` / `FormulaLocked` 同样算「该去补东西」**（2026-11-19
+  用户报「卡在升级等级的界面报错」）：MaaCore 6.20.1 在 E0→E1 缺普通芯片时
+  直接 `return ChipNotCraftable`，不走加工站合成（上游 issue #18612，MAA
+  自己的 GUI 手动跑也一样，只有芯片齐备时才成功）。日志写清「缺芯片 / 怎么补」
+  并暂停；暂停后同一干员的连环 `PrerequisiteNotMet` 静默，不刷屏。
+- **暂停/失败要把界面拉回来**：培养中止时 MaaCore 停在干员档案的精英化页，
+  用户切回模拟器以为卡死。`run_core` 收尾等 `running` 变 false（最多 5 秒）
+  后调 `AsstBackToHome`，日志补一句「界面已退回主界面」。
 - **剩下的计划落盘** `config/train-plan.json`（`_remain_plans` 用 MAA 报回来的
   成功项相减），用户补完材料说「继续培养」→ `skill_train(resume=true)` 接着做，
   不用重报练度；全部做完就把文件删掉。
