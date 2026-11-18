@@ -95,6 +95,13 @@ mock 掉，验证闸门口径——
 - **`Engine.wait` 启动宽限**：mock `AsstRunning` 前 4 次 False——「还没开始
   跑」不能当「跑完」（AsstStart 异步生效）；跑过之后变 False 才算停。防
   「培养任务排进队列同一毫秒就被 close 杀掉」的回归
+- **`Engine.start` 收尾重试**：mock `AsstStart` 在 running 时返回 false、
+  `AsstRunning` 递减到 False——start 要等它退干净后重试成功（调用两次）；
+  一直 running（真在跑别的任务）时必须返回 False，不许假装成功。防
+  「唤醒刚完成就排培养 → AsstStart 返回失败、培养一步没跑」的回归
+- **账号列表带切号名**：`_tool_list_accounts` 的每行必须有 `accountName`，
+  `hint` 里要写明「非空直接沿用、别再问」。防「设置里配过手机尾号、助手
+  每次还追问」的回归
 - **突袭行优先**：mock copilot.search 返回 normal/raid 两行同 band 的通用位
   作业，`_lookup` 必须选 `variant=raid`；raid 行 blocked、normal 行 ready 时
   仍选 normal（可打性优先于变体）。防「挂 IW-EX 打的全是普通难度」的回归

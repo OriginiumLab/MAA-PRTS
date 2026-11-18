@@ -327,9 +327,27 @@ class Engine:
                               % (task_type, json.dumps(params or {}, ensure_ascii=False)[:200]))
         return tid
 
-    def start(self):
+    def start(self, settle=15.0):
+        """开始跑队列；返回 False 表示 MaaCore 真的不收
+
+        **为什么要重试**：MaaCore 的 ``AllTasksCompleted`` 是在工作线程收尾前
+        发的，这时 ``AsstRunning`` 还是 true、``AsstStart`` 直接返回 false。
+        run_core 的两段式执行正好卡在这个窗口：唤醒链一完成就 append 培养 /
+        作业再 start → false → 任务报「AsstStart 返回失败」，一步没跑
+        （2026-11-18 用户实测：StartUp 完成 → 排队培养 → 立刻失败）。
+        这里在返回 false 时先等它退干净（最多 ``settle`` 秒）再重试一次；
+        真的还在跑别的任务就不硬来，老老实实返回 False。
+        """
         if not self._handle:
             raise EngineError('还没 open()')
+        self._done.clear()
+        if self._lib.AsstStart(self._handle):
+            return True
+        deadline = time.time() + max(0.0, settle)
+        while time.time() < deadline and self.running():
+            time.sleep(0.2)
+        if self.running():
+            return False
         self._done.clear()
         return bool(self._lib.AsstStart(self._handle))
 

@@ -474,7 +474,17 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
    开始跑」当成「已经跑完」，`_wait_run` 两层立刻返回，run_core 收尾 close
    把刚排队的任务当场杀掉。修复：`wait()` 只在**见过 running=True** 之后才
    认「running 变 False = 停了」；没见过时给 15 秒启动宽限。
-3. **「只推荐普通难度，说突袭打不了」——作业变体永远落 normal**。突袭关
+   **同一处还有第二个窗口**（2026-11-18 22:35 用户实测）：唤醒链一完成
+   （`AllTasksCompleted` 早于工作线程收尾，`AsstRunning` 仍为 true），run_core
+   第二段 append 培养再 `AsstStart` → **直接返回 false**，日志是「StartUp
+   完成 → 排队培养 → AsstStart 返回失败」，培养一步没跑。修复：
+   `Engine.start()` 返回 false 且仍在 running 时，先等它退干净（最多 15 秒）
+   再重试一次；真在跑别的任务就照旧返回 False，不硬来。
+3. **「设置里配过手机尾号，助手每次还问」**——`list_accounts` 没带切号名。
+   模型看不到账号绑定的 `maa.accountName`，只能按提示再问一遍。修复：
+   工具输出补 `accountName`，`hint` 和系统提示都写明「非空的直接沿用，别
+   再问」。真正开跑时 `skills._account_name_tail` 本来就优先读账号绑定。
+4. **「只推荐普通难度，说突袭打不了」——作业变体永远落 normal**。突袭关
    （含 IW-EX 这类有 `#f#` 突袭 id 的活动关）在作业站拆普通/突袭两行，同一份
    通用位（difficulty=3）作业两行都有。`stageplan._lookup` 与
    `skills._prepare_ops` 挑行时 band 相同先到先得、行序普通在前（且

@@ -482,6 +482,10 @@ def _tool_list_accounts(args):
             'channel': c.get('channelName') or '',
             'level': c.get('level'),
             'maaProfile': c.get('maaProfile') or '',
+            # 已绑定的切号名（手机尾号）必须给出来：用户 2026-11-18 报
+            # 「设置里配过尾号，助手每次还问」——列表里带出来，模型就不用
+            # 再开口问；只有这里是空的才轮到问用户。
+            'accountName': c.get('maaAccountName') or '',
             # 字段名对齐 progress.summary()：mainRemaining / activityLeft /
             # activityStages 才是真名（曾经写成 mainLeft / activityZones，
             # 结果每个账号都返回 null，模型只能挨个再问一遍 account_progress）
@@ -493,8 +497,9 @@ def _tool_list_accounts(args):
             'activityStages': p.get('activityStages'),
         })
     return {'accounts': out, 'count': len(out),
-            'hint': '要挂多账号时，先问用户每个账号的手机号后 4 位'
-                    '（如 5505；B 服问游戏内用户名）'}
+            'hint': 'accountName 就是已绑定的切号名（手机尾号）：**非空的直接按它跑，'
+                    '不要再问用户**；只有为空的账号才问「手机号后 4 位」'
+                    '（B 服问游戏内用户名）'}
 
 
 def _tool_list_activities(args):
@@ -1374,7 +1379,9 @@ startup recruit infrast fight copilot mall award reclamation roguelike
 ## 常见对话怎么做
 
 **「帮我把所有账号挂上 TL-5」**
-1. list_accounts
+1. list_accounts —— **先看 accountName（已绑定的手机尾号）**：非空的账号
+   直接沿用，**绝对不要再问一遍**（用户 2026-11-18 报过这个：设置里配过
+   尾号，助手还在问）
 2. build_run（accounts=[]、mode=copy、keyword=TL-5）
 3. 返回 need_info 时：**一次性把所有缺的账号列出来问**。官服只问
    「手机号后 4 位」（如 5505），B 服问游戏内用户名。
@@ -1472,7 +1479,9 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
 - skill_fight / skill_skip_story / skill_weekly / skill_train 同样要先确认再跑
   （工具会自动摆确认卡）
 - 多账号缺切号名时，明确说「这个信息森空岛拿不到，得你告诉我」；
-  官服只要**手机号后 4 位**（如 5505），不要要求用户拼星号
+  官服只要**手机号后 4 位**（如 5505），不要要求用户拼星号。
+  **问之前先看 list_accounts 的 accountName**：非空就是已经绑好的，
+  直接用，别重复问（用户设置里配过的东西，助手再问一遍很烦）
 - 多账号是**串行**的（一个模拟器同时只能登一个号），一个跑完自动切下一个
 - **模拟器不用你操心**：每个 skill 开跑前会自动确认模拟器在不在、没开就替用户
   启动（路径从 MAA 配置里读）。任务报「环境没准备好」时，把日志那句话原样转给

@@ -3602,6 +3602,46 @@ def check_oper_train(tmp):
     assert eng2.wait(timeout=10, poll=0.01) is False, \
         '跑过之后 running 变 False → 停（_done 未 set）'
 
+    # 10) Engine.start 的收尾重试：上一次任务刚跑完时 AsstStart 会返回 false
+    #     （AllTasksCompleted 早于工作线程收尾，AsstRunning 仍为 true）——
+    #     run_core 第二段「唤醒完了再排培养」正好撞这个窗口，用户 2026-11-18
+    #     看到的就是 StartUp 完成 → 排队培养 → AsstStart 返回失败。
+    eng3 = object.__new__(maacore.Engine)
+    eng3._done = threading.Event()
+    eng3._handle = 1
+    st = {'start_calls': 0, 'running': 3}
+
+    def _asst_start(h):
+        st['start_calls'] += 1
+        return st['running'] <= 0        # 还没退干净就拒
+
+    def _asst_running(h):
+        if st['running'] > 0:
+            st['running'] -= 1
+            return True
+        return False
+
+    eng3._lib = SimpleNamespace(AsstStart=_asst_start, AsstRunning=_asst_running)
+    assert eng3.start(settle=5) is True, '退干净后要能重试成功'
+    assert st['start_calls'] == 2, st
+
+    # 真在跑别的任务（一直 running）：不许假装成功，交给调用方报错
+    eng4 = object.__new__(maacore.Engine)
+    eng4._done = threading.Event()
+    eng4._handle = 1
+    eng4._lib = SimpleNamespace(AsstStart=lambda h: False,
+                                AsstRunning=lambda h: True)
+    assert eng4.start(settle=0.2) is False, '一直 running 时返回 False'
+
+    # 11) 账号列表要带出已绑定的切号名：用户设置里配过尾号，助手还追问过一次
+    #     （2026-11-18）——列表里有值，模型才不会重复问
+    from core import agent as agent_mod
+    lc = agent_mod._tool_list_accounts({})
+    row = next((a for a in lc['accounts'] if a['file'] == 'smoke-acc.json'), None)
+    assert row is not None, lc
+    assert 'accountName' in row, '账号列表少了 accountName 字段'
+    assert 'accountName' in (lc.get('hint') or ''), 'hint 没提示已有尾号就别问'
+
 
 # ---------------------------------------------------------------- 入口
 def main():
