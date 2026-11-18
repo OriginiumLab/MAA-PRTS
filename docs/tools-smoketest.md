@@ -83,6 +83,16 @@ mock 掉，验证闸门口径——
   中文；裸名与带 `<Chain>@` 前缀的都要能命中；`BattleQuickFormationRole-*`
   统一归「编队·按职业筛选」；插件类名节点静默。这条专门防「照源码猜
   pipeline 名、跟真实日志对不上、战斗一整段没日志」的回归
+- **切号名 fallback 链**（2026-11-18 晚三连修）：`maa.accountName` → MAA 当前
+  档案 StartUp 的 `AccountName` → 档案名是纯数字尾号直接用；都没有时空串，
+  **绝不用昵称顶**（官服切号认手机号）。防「读错字段切号名永远空、唤醒 2 秒
+  完成、号没切」的回归
+- **`Engine.wait` 启动宽限**：mock `AsstRunning` 前 4 次 False——「还没开始
+  跑」不能当「跑完」（AsstStart 异步生效）；跑过之后变 False 才算停。防
+  「培养任务排进队列同一毫秒就被 close 杀掉」的回归
+- **突袭行优先**：mock copilot.search 返回 normal/raid 两行同 band 的通用位
+  作业，`_lookup` 必须选 `variant=raid`；raid 行 blocked、normal 行 ready 时
+  仍选 normal（可打性优先于变体）。防「挂 IW-EX 打的全是普通难度」的回归
 
 ## 什么时候跑
 

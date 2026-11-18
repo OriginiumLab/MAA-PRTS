@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -3127,6 +3128,32 @@ def check_stage_precheck(tmp):
     finally:
         cp.search = orig_search
 
+    # 4.3) 同样能打时优先突袭行：通用位（difficulty=3）作业以前永远落
+    #      variant=normal，写进 MAA 一律 IsRaid=false，挂 IW-EX 打的全是
+    #      普通难度（2026-11-18 用户实测「只推荐普通难度，说突袭打不了」，
+    #      其实作业就叫「IW-EX-1突袭五人」）。可打性仍优先于变体：突袭行
+    #      全打不了、普通行能打时，照旧选普通。
+    try:
+        good = {'copilotId': 9, 'mode': 'ready', 'missing': [], 'training': [],
+                'total': 11, 'rating': 9, 'title': 'x', 'difficulty': 3}
+        cp.search = lambda *a, **k: {'mode': 'stage', 'stages': [
+            {'stage': {'code': 'IW-EX-1', 'variant': 'normal'},
+             'ops': [dict(good)], 'best': dict(good)},
+            {'stage': {'code': 'IW-EX-1', 'variant': 'raid'},
+             'ops': [dict(good)], 'best': dict(good)}]}
+        v = stageplan._lookup('IW-EX-1', {'chars': []}, use_cache=False)
+        assert (v.get('op') or {}).get('variant') == 'raid', v
+        bad = dict(good, copilotId=2, mode='blocked', missing=['甲', '乙'])
+        cp.search = lambda *a, **k: {'mode': 'stage', 'stages': [
+            {'stage': {'code': 'IW-EX-1', 'variant': 'normal'},
+             'ops': [dict(good)], 'best': dict(good)},
+            {'stage': {'code': 'IW-EX-1', 'variant': 'raid'},
+             'ops': [dict(bad)], 'best': dict(bad)}]}
+        v = stageplan._lookup('IW-EX-1', {'chars': []}, use_cache=False)
+        assert (v.get('op') or {}).get('variant') == 'normal', v
+    finally:
+        cp.search = orig_search
+
     # 5) 卡在哪一关：作业文件名 → 代号（MAA 只给文件路径）
     assert maaplan._stage_of_file({'file_name': r'C:\x\BB-S-3_10531.json'}) == 'BB-S-3'
     assert maaplan._stage_of_file(
@@ -3512,6 +3539,67 @@ def check_oper_train(tmp):
     # 按职业筛选的十几种后缀统一归一类
     assert (maaplan._subtask_label('Copilot@BattleQuickFormationRole-Caster')
             == '编队·按职业筛选')
+
+    # 8) 切号名 fallback 链：设置页 maa.accountName → MAA 当前档案 StartUp 的
+    #    AccountName → 档案名本身是纯数字尾号（136/157/165…）。2026-11-18 踩过：
+    #    旧代码读顶层 accountName/nickName（快照里根本不存在这两个字段），
+    #    切号名永远空，StartUp 不带 account_name，主界面 2 秒「完成」像
+    #    「唤醒根本没跑」。昵称绝不能顶——官服切号认手机号。
+    from core import maa as maa_mod
+    orig_load, orig_dmd = maa_mod._load_cfg, skills._default_maa_dir
+    skills._default_maa_dir = lambda: 'X:/maa'
+    try:
+        maa_mod._load_cfg = lambda *a, **k: {'Current': 'moren',
+            'Configurations': {'moren': {'TaskQueue': [
+                {'TaskType': 'StartUp', 'AccountName': ''}]},
+                '157': {'TaskQueue': [{'TaskType': 'StartUp',
+                                       'AccountName': '3635'}]}}}
+        assert skills._account_name_tail('smoke-acc.json') == '', \
+            'moren 切号名空、档案名不是数字 → 空串，不许拿昵称顶'
+        maa_mod._load_cfg = lambda *a, **k: {'Current': '157',
+            'Configurations': {'157': {'TaskQueue': [
+                {'TaskType': 'StartUp', 'AccountName': '3635'}]}}}
+        assert skills._account_name_tail('smoke-acc.json') == '3635'
+        maa_mod._load_cfg = lambda *a, **k: {'Current': '136',
+            'Configurations': {'136': {'TaskQueue': [
+                {'TaskType': 'StartUp', 'AccountName': ''}]}}}
+        assert skills._account_name_tail('smoke-acc.json') == '136', \
+            '档案名就是纯数字尾号时直接当切号名'
+    finally:
+        maa_mod._load_cfg, skills._default_maa_dir = orig_load, orig_dmd
+
+    # 9) Engine.wait 的启动宽限：AsstStart 异步生效，刚 start 完 AsstRunning
+    #    还是 False——以前这里直接 return，把「还没开始跑」当「跑完」，
+    #    run_core 收尾 close，培养任务排进队列的同一毫秒就被析构（17:02
+    #    用户实测：OperProgress 一步没跑，任务报错）。
+    from types import SimpleNamespace
+    from core import maacore
+    eng = object.__new__(maacore.Engine)
+    eng._done = threading.Event()
+    eng._handle = 1
+    calls = {'n': 0}
+
+    def _running():
+        calls['n'] += 1
+        if calls['n'] > 4:             # running 生效后任务正常跑完
+            eng._done.set()
+            return True
+        return False                   # 前 4 次 False（AsstStart 还没生效）
+
+    eng._lib = SimpleNamespace(AsstRunning=lambda h: _running())
+    assert eng.wait(timeout=10, poll=0.01) is True, '启动宽限内等到 running'
+    eng2 = object.__new__(maacore.Engine)
+    eng2._done = threading.Event()
+    eng2._handle = 1
+    flip = {'n': 0}
+
+    def _flip():
+        flip['n'] += 1
+        return flip['n'] <= 3          # 先跑起来，然后被停
+
+    eng2._lib = SimpleNamespace(AsstRunning=lambda h: _flip())
+    assert eng2.wait(timeout=10, poll=0.01) is False, \
+        '跑过之后 running 变 False → 停（_done 未 set）'
 
 
 # ---------------------------------------------------------------- 入口

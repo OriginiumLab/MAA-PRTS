@@ -444,6 +444,38 @@ resolve 的默认视图查不到它们）。
 （确认标记 `_confirmed` 放进 pending args，重入直接跑不再二次确认）。
 MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与助手都能看到卡在哪。
 
+## 用户实测三连修（2026-11-18 晚）
+
+用户跑完真机测报了三个 bug，根因都在 MAA 日志（asst.log）里看得清清楚楚：
+
+1. **「MAA 根本没跑开始唤醒」——切号名永远为空**。`skills._account_name_tail`
+   读的是 `snap['accountName'] / ['nickName']`，可快照顶层**根本没有这两个
+   字段**（昵称在 `account.nickName`、切号名在 `maa.accountName`）——切号名
+   永远拿不到，StartUp 不带 `account_name`：游戏已在主界面时这条链 2 秒就
+   「完成」，什么都没做，用户看到的就是「没唤醒就开始导航/培养」。修复后
+   fallback 链：设置页 `maa.accountName` → MAA 当前档案 StartUp 任务的
+   `AccountName` → 档案名本身是纯数字尾号（136/157/165…，用户的档案就是
+   这么命名的）→ 都没有给空串并在日志里提示去设置页填。**昵称绝不能顶**：
+   官服切号认手机号，拿昵称 MAA 在账号列表里翻不到。`skill_wakeup` 也补了
+   同样的 fallback（以前只看入参）。
+2. **「培养干员没进去就报错」——`Engine.wait` 启动竞态**。asst.log 现场：
+   StartUp 完成 → append OperProgress → `start` → **同一毫秒 `~Assistant`
+   析构**，任务「完成」但培养一步没跑。原因：AsstStart 异步生效，刚 start
+   完的头几百毫秒 `AsstRunning` 还是 False，而 `_done` 刚被 `start()` clear，
+   `wait()` 的 `if not self.running(): return self._done.is_set()` 把「还没
+   开始跑」当成「已经跑完」，`_wait_run` 两层立刻返回，run_core 收尾 close
+   把刚排队的任务当场杀掉。修复：`wait()` 只在**见过 running=True** 之后才
+   认「running 变 False = 停了」；没见过时给 15 秒启动宽限。
+3. **「只推荐普通难度，说突袭打不了」——作业变体永远落 normal**。突袭关
+   （含 IW-EX 这类有 `#f#` 突袭 id 的活动关）在作业站拆普通/突袭两行，同一份
+   通用位（difficulty=3）作业两行都有。`stageplan._lookup` 与
+   `skills._prepare_ops` 挑行时 band 相同先到先得、行序普通在前（且
+   `_prepare_ops` 干脆只取第一行），于是 variant 永远是 normal，写进 MAA
+   一律 `IsRaid=false`——用户挂 IW-EX 打的全是普通难度，作业明明叫
+   「IW-EX-1突袭五人」。修复：同样能打时**优先突袭行**（可打性仍优先于
+   变体：突袭行全打不了、普通行能打时照旧选普通）。
+
+
 ## 培养干员 skill（`train`，2026-11-18）
 
 MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），能力是

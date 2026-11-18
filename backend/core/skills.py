@@ -37,6 +37,7 @@ import time
 from . import accounts
 from . import atomicio
 from . import envcheck
+from . import maa
 from . import maaplan
 from . import resources
 from . import settings
@@ -75,12 +76,52 @@ def _account_file(name):
 
 
 def _account_name_tail(file):
-    """账号的切号名（官服=手机号（含尾号），B 服=游戏内用户名），没有给空串"""
+    """账号的切号名（MAA StartUp 切号用的那个）
+
+    来源优先级：
+      1. 设置页「MAA 路径」给账号填的 ``maa.accountName``（按游戏账号绑定，
+         最准——程序里两个游戏账号对 MAA 里 5 个尾号档案，只有这里能说清
+         谁是谁）；
+      2. MAA 当前档案「开始唤醒」任务里配的 ``AccountName``（用户在 MAA 里
+         填过 3635 这类尾号，直连跑也应遵从同一设置）；
+      3. 当前档案名本身就是纯数字尾号（136 / 157 / 165…，用户的档案就是
+         这么命名的）时直接用档案名。
+
+    都没有给空串——StartUp 照跑，只是不开切号开关，调用方要提示用户去
+    设置页填。**昵称绝不能拿来顶**：官服切号认的是手机号，拿昵称 MAA 在
+    账号列表里翻不到，acctname.check 会当场拒。
+
+    以前读 ``snap['accountName'] / ['nickName']``——**顶层根本没有这两个
+    字段**（昵称在 ``account.nickName``，切号名在 ``maa.accountName``），切号名
+    永远拿不到，StartUp 不带 account_name：游戏已在主界面时这条链 2 秒就
+    「完成」，什么都没做，用户看到的就是「唤醒根本没跑」（2026-11-18 实测：
+    19:26 挂 IW-EX、17:02 培养两次的 StartUp 参数里都没有切号名，而旧路径
+    02:28 的有 3635）。
+    """
     try:
         snap = accounts.get_account(file)
     except Exception:
-        return ''
-    return (snap.get('accountName') or snap.get('nickName') or '').strip()
+        snap = {}
+    name = ((snap.get('maa') or {}).get('accountName') or '').strip()
+    if name:
+        return name
+    try:
+        d = _default_maa_dir()
+        cfg = maa._load_cfg(d) if d else {}
+        prof_name = cfg.get('Current') or ''
+        prof = (cfg.get('Configurations') or {}).get(prof_name) or {}
+        for t in (prof.get('TaskQueue') or []):
+            if t.get('TaskType') == 'StartUp':
+                name = (t.get('AccountName') or '').strip()
+                if name:
+                    return name
+                break
+        # 档案名就是尾号（136/157/181 这类纯数字），直接当切号名
+        if re.fullmatch(r'\d{3,4}', prof_name or ''):
+            return prof_name
+    except Exception:
+        pass                    # MAA 配置读不了就算了，别拖垮任务
+    return ''
 
 
 def _client_of(file):
@@ -165,7 +206,8 @@ def skill_wakeup(params, log, tid=None):
     自己处理——stagenav.restart_app）。
     """
     file = _account_file(params.get('account') or '')
-    tail = (params.get('accountName') or params.get('tail') or '').strip()
+    tail = (params.get('accountName') or params.get('tail')
+            or _account_name_tail(file)).strip()
     if tail:
         spec = {'tasks': ['startup'], 'accountName': tail,
                 'maaDir': _default_maa_dir()}
@@ -178,6 +220,12 @@ def skill_wakeup(params, log, tid=None):
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
                        package=stagenav.game_package(client))
+    alive, detail = t.ready()
+    log('adb：%s' % detail)
+    if not alive:
+        raise RuntimeError(detail)
+    log('没找到切号名（设置 → MAA 路径里给这个账号填手机尾号就能切号），'
+        '直接重启游戏')
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -252,13 +300,20 @@ def _prepare_ops(stages, file, log):
     ops = []
     for st in stages:
         res = copilot.search(st, snap or {}, pages=1, limit=6)
+        packeds = [p for p in (res.get('stages') or [])
+                   if ((p.get('stage') or {}).get('code') or '').upper()
+                   == st.upper()]
+        if not packeds:
+            packeds = [p for p in (res.get('stages') or []) if p.get('ops')]
+        # 行间挑选**不能只取第一行**（第一行永远是普通难度）：同样能打时优先
+        # 突袭行，理由见 stageplan._lookup 的注释——通用位作业以前永远落
+        # normal，MAA 打的永远是普通难度（2026-11-18 用户实测）
         packed = None
-        for p in (res.get('stages') or []):
-            if ((p.get('stage') or {}).get('code') or '').upper() == st.upper():
-                packed = p
-                break
-        if packed is None:
-            packed = (res.get('stages') or [None])[0]
+        if packeds:
+            packed = min(packeds, key=lambda p: (
+                min((band.get(o.get('mode'), 9) for o in (p.get('ops') or [])),
+                    default=9),
+                0 if (p.get('stage') or {}).get('variant') == 'raid' else 1))
         candidates = [p for p in (packed.get('ops') or [])] if packed else []
         if not candidates:
             raise ValueError('%s 没搜到能用的作业（换 mode=fight 纯刷关，'
@@ -371,6 +426,9 @@ def skill_fight(params, log, tid=None):
             '（要全套流程就说「带唤醒」）')
     if tail:
         log('切号名：%s' % tail)
+    else:
+        log('没找到切号名，唤醒不切号（要切号去设置 → MAA 路径里给账号填'
+            '手机尾号）')
     # 兜底超时：MAA 卡在编队/加载界面时不会自己停（用户实测挂过 480 分钟），
     # 两小时还没跑完就停下，别让整个任务僵尸化。
     r = maaplan.run_core(spec, tid=tid,
@@ -769,7 +827,8 @@ def skill_train(params, log, tid=None):
     elif switch:
         log('先开始唤醒，切到 %s' % tail)
     else:
-        log('先开始唤醒（不切号）')
+        log('先开始唤醒（不切号%s）' % ('；要切号去设置 → MAA 路径里给账号'
+            '填手机尾号' if not tail else ''))
 
     spec = {
         'tasks': (['startup', 'operprogress'] if wakeup else ['operprogress']),

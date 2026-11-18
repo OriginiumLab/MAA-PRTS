@@ -390,13 +390,31 @@ class Engine:
             return False
 
     def wait(self, timeout=None, poll=1.0):
-        """等全部任务结束。返回 True=跑完，False=超时/被停"""
+        """等全部任务结束。返回 True=跑完，False=超时/被停
+
+        「running 变 False」只有在**见过 running=True** 之后才算停：AsstStart
+        是异步生效的，刚 start 完的头几百毫秒 AsstRunning 还是 False——以前
+        在这里直接 ``return self._done.is_set()``，把「还没开始跑」当成
+        「已经跑完」，``_wait_run`` 两层立刻返回，run_core 就收尾 close，把刚
+        排进队列的任务当场杀掉（2026-11-18 用户实测：培养干员 append 完
+        start 后同一毫秒 Assistant 就被析构，任务报错但 OperProgress 一步
+        都没跑）。没见到 running 的宽限给 15 秒，超过还没跑起来才认输。
+        """
         deadline = time.time() + timeout if timeout else None
+        seen_running = False
+        quiet_since = None
         while True:
             if self._done.is_set():
                 return True
-            if not self.running():
-                # 已经在跑但程序说停了：可能是 stop() 或异常退出
+            if self.running():
+                seen_running = True
+                quiet_since = None
+            elif seen_running:
+                # 跑过之后程序说停了：stop() 或异常退出
+                return self._done.is_set()
+            elif quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since > 15:
                 return self._done.is_set()
             if deadline and time.time() > deadline:
                 return False

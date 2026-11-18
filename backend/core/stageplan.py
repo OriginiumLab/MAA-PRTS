@@ -252,13 +252,21 @@ def _lookup(code, snap, acct='', use_cache=True):
                     == code.upper()]
             if not rows:
                 rows = res.get('stages') or []
-            best, best_op = None, None
+            best, best_op, best_key = None, None, None
             for p in rows:
                 op = p.get('best') or (p.get('ops') or [None])[0]
                 if not op:
                     continue
-                if best is None or _band(op) < _band(best_op):
-                    best, best_op = p, op
+                # 同样能打时优先突袭行：作业站「突袭」掉落多，前端导入作业集
+                # 用户拿的也是突袭行。以前 band 相同先到先得、行序普通在前，
+                # 通用位（difficulty=3）的作业永远落 variant=normal，写进 MAA
+                # 一律 IsRaid=false——用户挂 IW-EX 拿到的全是普通难度
+                # （2026-11-18 实测：「只推荐普通难度，说突袭打不了」，其实
+                # 作业就是「IW-EX-1突袭五人」这种通用位作业）。
+                key = (_band(op),
+                       0 if (p.get('stage') or {}).get('variant') == 'raid' else 1)
+                if best is None or key < best_key:
+                    best, best_op, best_key = p, op, key
             if best_op:
                 payload = {'copilotId': best_op.get('copilotId'),
                            'stageCode': code.upper(),
