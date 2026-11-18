@@ -3350,6 +3350,170 @@ def check_settings_panel(tmp):
     assert boot['paths']['logs'].replace('/', '\\').endswith('debug')
 
 
+# ---------------------------------------------------------------- B39 培养干员
+def check_oper_train(tmp):
+    """B39：培养干员（练度导入 / 材料不足暂停 / 续跑 / 战斗日志补全）
+
+    2026-11-18 用户要求「新增培养干员 skill：导入需要培养的练度，材料不足
+    会暂停」，同时报「自动战斗没有日志」。这里钉住四件最容易错的：
+
+    ① 专精目标是**绝对等级**（``[0,3,0]`` = 二技能专三），不是「再升三级」；
+    ② 已经达标的项要从计划里剔掉，否则 MAA 白跑一趟还报一串「失败」；
+    ③ 材料不足 = 暂停而不是失败：剩下的计划要落盘，``resume`` 能接着来；
+    ④ 战斗过程（编队 / 部署 / 开技能）必须出日志，重复动作不能刷屏。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import maalog, maaplan, skills
+
+    _reset_config(tmp)
+    cfg = os.path.join(tmp, 'config')
+    path = os.path.join(cfg, 'smoke-acc.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '1', 'nickName': '冒烟',
+                               'channelName': '官服'},
+                   'chars': [
+                       {'name': '泥岩', 'profession': '重装', 'elite': 1,
+                        'skillLevel': 4,
+                        'skills': [{'mastery': 0}, {'mastery': 1}, {'mastery': 0}]},
+                       {'name': '银灰', 'profession': '近卫', 'elite': 2,
+                        'skillLevel': 7,
+                        'skills': [{'mastery': 0}, {'mastery': 3}, {'mastery': 3}]},
+                   ]}, f, ensure_ascii=False)
+
+    # 1) 专精写法统一吃下（列表 / 字典 / 冒号 / 中文）
+    assert skills._norm_mastery([0, 3, 0]) == [0, 3, 0]
+    assert skills._norm_mastery({'2': 3}) == [0, 3, 0]
+    assert skills._norm_mastery('2:3') == [0, 3, 0]
+    assert skills._norm_mastery('技能2专精3') == [0, 3, 0]
+    assert skills._norm_mastery('二技能专三') == [0, 3, 0]
+    assert skills._norm_mastery(None) is None
+    for bad in ('看不懂', [0, 9, 0], {'9': 1}):
+        try:
+            skills._norm_mastery(bad)
+            raise AssertionError('非法专精目标没被拦：%r' % (bad,))
+        except ValueError:
+            pass
+
+    # 2) 入参三种写法 → 同一条计划；已达标项剔掉；未知干员当场拦
+    rows = skills._train_rows({'operator': '泥岩', 'elite': 2,
+                               'skillLevel': 7, 'mastery': [0, 3, 0]})
+    assert rows == [{'name': '泥岩', 'elite': 2, 'skillLevel': 7,
+                     'mastery': [0, 3, 0]}], rows
+    logs = []
+    plans = skills._train_plans(rows, 'smoke-acc.json', log=logs.append)
+    assert plans == [{'name': '泥岩', 'role': 'Tank', 'elite': 2,
+                      'skill_level': 7, 'skill_mastery': [0, 3, 0]}], plans
+
+    done_rows = skills._train_rows({'operator': '银灰', 'elite': 2,
+                                    'skillLevel': 7, 'mastery': [0, 3, 0]})
+    assert skills._train_plans(done_rows, 'smoke-acc.json',
+                               log=logs.append) == []
+    assert any('不用培养' in x for x in logs), logs
+    try:
+        skills._train_plans([{'name': '不存在的干员'}], 'smoke-acc.json',
+                            log=lambda *_: None)
+        raise AssertionError('未知干员没被拦')
+    except ValueError as e:
+        assert '没有' in str(e), e
+
+    # 3) core_tasks：plans 原样进 OperProgress；noStartUp 时不补唤醒
+    seq = maaplan.core_tasks({'tasks': ['operprogress'], 'plans': plans,
+                              'noStartUp': True})
+    assert seq == [('OperProgress', {'plans': plans})], seq
+    seq = maaplan.core_tasks({'tasks': ['operprogress'], 'plans': plans,
+                              'accountName': '5505'})
+    assert [t for t, _ in seq] == ['StartUp', 'OperProgress'], seq
+
+    # 4) 材料不足 → 暂停（不是失败），剩下计划落盘、resume 读得回来
+    calls = []
+    st = {'plans': plans, 'done': {}, 'stop': lambda: calls.append('stop')}
+    maaplan._on_core_event({'kind': 'extra', 'what': 'OperProgressDetail',
+                            'data': {'name': '泥岩', 'result': 'Success',
+                                     'elite': 2}}, lambda *_: None, 't', st)
+    assert st['done']['泥岩']['elite'] == 2, st['done']
+    maaplan._on_core_event({'kind': 'extra', 'what': 'OperProgressDetail',
+                            'data': {'name': '泥岩', 'result': 'Failed',
+                                     'result_detail': 'ResourceInsufficient'}},
+                           lambda *_: None, 't', st)
+    assert '材料不足' in st['pause'], st
+    assert calls == ['stop'], calls
+    left = skills._remain_plans(plans, st['done'])
+    # 精英化已经做完 → 只剩技能与专精（绝对等级，不扣减）
+    assert left == [{'name': '泥岩', 'role': 'Tank', 'skill_level': 7,
+                     'skill_mastery': [0, 3, 0]}], left
+    skills._save_train_plan('smoke-acc.json', left)
+    got = skills._load_train_plan()
+    assert got and got['account'] == 'smoke-acc.json' and got['plans'] == left, got
+    skills._save_train_plan('smoke-acc.json', [])
+    assert skills._load_train_plan() is None
+
+    # 5) MAA 日志桥：只翻有信息量的行，噪音（识别框为空 / 缺 pipeline）全丢
+    tap = maalog.Tap(None)
+    msg = tap.translate('[2026-11-18 14:41:00.533][ERR][Px1][Tx2] '
+                        'asst::MultiCopilotTaskPlugin::confirm_stage_name '
+                        'confirm stage name failed after retrying 3 times, '
+                        'stage name: MN-EX-6')
+    assert msg and 'MN-EX-6' in msg[1], msg
+    assert tap.translate('[2026-11-18 14:41:00.533][WRN][Px1][Tx2] '
+                         'asst::VisionHelper::correct_rect roi is empty') is None
+    assert tap.translate('[2026-11-18 14:41:00.533][ERR][Px1][Tx2] '
+                         'Unknown task: FightSeries-OldMethodFlag') is None
+    assert tap.translate('[2026-11-18 14:41:00.533][TRC][Px1][Tx2] x') is None
+
+    # 6) 战斗过程要有日志：编队 / 部署 / 开技能各一条，重复的部署不刷屏
+    out = []
+    st2 = {'actions': {}, 'deployed': []}
+    for ev in ({'kind': 'extra', 'what': 'BattleFormation',
+                'data': {'formation': ['银灰', '泥岩']}},
+               {'kind': 'extra', 'what': 'CopilotAction',
+                'data': {'action': 'Deploy', 'target': '银灰'}},
+               {'kind': 'extra', 'what': 'CopilotAction',
+                'data': {'action': 'Deploy', 'target': '银灰'}},
+               {'kind': 'extra', 'what': 'CopilotAction',
+                'data': {'action': 'UseSkill'}}):
+        maaplan._on_core_event(ev, out.append, 't', st2)
+    assert out == ['编队：银灰、泥岩', '部署 银灰', '开技能'], out
+    # Output / SkillUsage 这类内部记账不该把英文原文写进面板
+    out = []
+    maaplan._on_core_event({'kind': 'extra', 'what': 'CopilotAction',
+                            'data': {'action': 'Output'}},
+                           out.append, 't', {'actions': {}})
+    assert out == [], out
+
+    # 7) SubTaskStart 的 pipeline 名必须跟真实 asst.log 对得上。
+    #    2026-11-18 踩过：映射表的键是照源码猜的（Copilot@BattleStartPreFlag），
+    #    而 asst.log 里 first[0] 实际是 BattleStartAll / BattleQuickFormation，
+    #    结果战斗一整段没日志。这里把「真实 JSON → maacore._translate →
+    #    中文进度」整条链走一遍，键再错位会直接红。
+    from core import maacore
+    eng = object.__new__(maacore.Engine)   # 不 open，只借 _translate（不碰 DLL）
+    samples = [
+        ({'first': ['Copilot@WaitUntilEndOfAction'], 'taskchain': 'Copilot'}, '战斗中'),
+        ({'first': ['Copilot@FullStageNavigation'], 'taskchain': 'Copilot'}, '找关卡'),
+        ({'first': ['Copilot@StageNavigationSlowlySwipeLeft'],
+          'taskchain': 'Copilot'}, '滑动找关卡'),
+        ({'first': ['BattleStartAll'], 'taskchain': 'Copilot'}, '开始行动'),
+        ({'first': ['BattleQuickFormation'], 'taskchain': 'Copilot'}, '快速编队'),
+        ({'first': ['UseMedicine'], 'taskchain': 'Fight'}, '吃理智药'),
+        ({'first': ['OperProgress@EliteUp'], 'taskchain': 'OperProgress'}, '精英化'),
+    ]
+    for d, want in samples:
+        ev = eng._translate(maacore.MSG_SUBTASK_START, d)
+        assert ev and ev.get('kind') == 'node', (d, ev)
+        out = []
+        maaplan._on_core_event(ev, out.append, 't', {'nodes': {}})
+        assert out == ['· ' + want], (d, out)
+    # 插件类名节点（不是用户能看懂的阶段）静默
+    ev = eng._translate(maacore.MSG_SUBTASK_START,
+                        {'first': ['BattleProcessTask'], 'taskchain': 'Copilot'})
+    out = []
+    maaplan._on_core_event(ev, out.append, 't', {'nodes': {}})
+    assert out == [], out
+    # 按职业筛选的十几种后缀统一归一类
+    assert (maaplan._subtask_label('Copilot@BattleQuickFormationRole-Caster')
+            == '编队·按职业筛选')
+
+
 # ---------------------------------------------------------------- 入口
 def main():
     try:
@@ -3405,6 +3569,7 @@ def main():
         r.check('B36 打关预检（前置关/练度/连锁/卡在哪关）', lambda: check_stage_precheck(tmp))
         r.check('B37 环境检测（配置来源/静默/替用户启动/任务前闸门）', lambda: check_envcheck(tmp))
         r.check('B38 设置页接口（token 读写/掩码/切号名归一）', lambda: check_settings_panel(tmp))
+        r.check('B39 培养干员（练度导入/材料暂停/续跑/战斗日志）', lambda: check_oper_train(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

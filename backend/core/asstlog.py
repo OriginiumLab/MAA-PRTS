@@ -148,6 +148,18 @@ class Tail:
         self._skip_first = False
         self._fp = self._fingerprint()
 
+    def seek_end(self):
+        """直接定位到文件末尾：只要「从现在开始」的新行
+
+        ``_begin()`` 是「尾部 4MB 兜底」，给回放/状态推导用；实时跟日志的
+        场景（maalog.Tap）不能那样——上一轮跑了几小时，一开跑就把 4MB
+        历史全吐到任务日志里。
+        """
+        self._started = True
+        self.offset = self.size()
+        self._skip_first = False
+        self._fp = self._fingerprint()
+
     def read_new(self):
         """返回新增的完整行。没有新增返回 []。"""
         if not self.path:

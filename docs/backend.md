@@ -33,6 +33,7 @@
 | `core/tasks.py` | 内存任务表：状态、日志、结果，供前端轮询 |
 | `core/progress.py` | 森空岛 `player/info` → 关卡进度：主线推到哪（含剧情关落点）、后续关卡、活动 zone 已打/总数、剿灭最高击杀、日常周常。只做 zone 级余量判断，不拿计数切关卡列表（两边口径含剧情关/突袭关，会错位） |
 | `core/asstlog.py` | MAA 日志观测：`debug/asst.log` 的回调 JSON + `debug/gui.log` 的 `Start/Completed Task Chain` → 结构化事件流；增量读、轮转识别、状态推导（idle/running/stalled/failed/done）、`failures()` 还原「跑过哪几关、哪几关没跑完」 |
+| `core/maalog.py` | 直连跑机时的 MAA 日志桥：`maalog.Tap` 从 `asst.log` **末尾**开始增量读（`Tail.seek_end()`，不重放历史），只把 `[ERR]/[WRN]` 里能解释问题的行翻成人话（认不出关卡名 / 干员不存在 / 参数不合法），噪行丢弃、同句 20 秒去重。回调 JSON 行不读——那部分由 `maacore` 回调负责，避免同一件事写两遍 |
 | `core/watch.py` | 自愈层：后台线程盯 `asstlog` 的状态，判停滞就关 MAA → 从当前关续写作业列表 → 重启。同一关连续 3 次救不回来就停手报给用户 |
 | `core/acctname.py` | 切号名（MAA `AccountName`）的归一化与校验，**唯一一份规则**。MAA 是拿它和登录界面那行 OCR 做子串匹配，所以 `5505` / `136` / `23****45` / `181****5505` 都合法；用户给全号、带横线、全角数字、星号数量不对都归一成 `前3****后4`。官服只拦「填了昵称」（拿昵称切号会死循环几十次然后失败），B 服不拦 |
 | `core/multiacct.py` | 多账号编排：MAA「一个配置档案 = 一个账号」，按各账号练度各挑作业，串行切换执行。档案一律新建 `PRTS-` 前缀的那份，用户自己的档案一个字段都不动。切号名统一走 `acctname.check()`；`maaProfile` 是档案名不是切号名，别混用 |
@@ -422,6 +423,7 @@ MAA 运行时会周期性回写配置文件，所以必须先关进程再改，�
 2026-11-17 把挂关流程拆成六个可独立调度的 skill，由 `run_skill(name, params)`
 统一跑成后台任务（`tasks.create`），返回 taskId 给前端 / 助手轮询 `/api/task`。
 API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET /api/skill/list`。
+2026-11-18 增加第七个 `train`（培养干员）。
 
 | skill | 能力 | 实现依托 |
 |---|---|---|
@@ -431,15 +433,76 @@ API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET
 | `skip_story` | 过剧情关（MN-ST-1 这类 ST 关）：MAA fight 单关当「点关探针」，剧情播放页出现后 `stagenav._skip_story_replay` 连续跳幕 | adb 跳幕 |
 | `signin` | 森空岛签到（单号 / 全部） | `signin.run` |
 | `weekly` | 周目编排：ST 关自动过剧情、连续战斗关合并成 fight 批次、EX 收尾；**任何一步失败立即停**并在日志写明卡在哪关 | 本文件 `_cycle_rows` + `_cycle_sort_key` |
+| `train` | 培养干员：精英化 / 技能基础等级 / 专精，可一次排多个；材料不足**暂停**并落盘剩下的计划 | `maaplan.run_core` 的 `OperProgress` 任务 |
 
 排序规则（`_cycle_sort_key`）：`ST-N → 主线 1..N → EX`，正好是 MN 这类周目的
 推图顺序；关卡清单来自 `resources._stages(True)`（含 story=True 的 208 条剧情关，
 resolve 的默认视图查不到它们）。
 
 助手侧（`agent.py`）注册了对应工具：`skill_wakeup / skill_navigate / skill_signin`
-免确认直接跑；`skill_fight / skill_skip_story / skill_weekly` 走 `_guard` 确认卡
+免确认直接跑；`skill_fight / skill_skip_story / skill_weekly / skill_train` 走 `_guard` 确认卡
 （确认标记 `_confirmed` 放进 pending args，重入直接跑不再二次确认）。
 MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与助手都能看到卡在哪。
+
+## 培养干员 skill（`train`，2026-11-18）
+
+MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），能力是
+「按计划把干员升到目标练度」：精英化、技能基础等级、技能 1/2/3 专精，还会
+自己跳加工站/制造站补材料（材料够的话）。`skills.skill_train` 就是它的封装：
+
+```python
+{"operators": [{"name": "泥岩", "elite": 2, "skillLevel": 7, "mastery": [0, 3, 0]}],
+ "account": "xxx 官服.json", "accountName": "5505",
+ "switchAccount": True, "wakeup": True}
+```
+
+- **专精是绝对等级**（`[0,3,0]` = 二技能专三），不是「再升三级」；`mastery`
+  也吃 `{"2":3}` / `"2:3"` / `"技能2专精3"` / `"二技能专三"`（`_norm_mastery`）。
+- **先跟账号快照对一遍**（`_train_plans`）：已经精二 / 技能已到 / 技能已专到
+  的项直接剔掉，一条不剩就压根不跑 MAA；名字在快照里找不到（写错字 / 新干员
+  / 没同步）当场报错，别让 MAA 翻完列表再说「干员不存在」。
+- **材料不足 = 暂停，不是失败**：`OperProgressDetail` 的
+  `result_detail=ResourceInsufficient` 一到，`_on_train_detail` 置
+  `state['pause']` 并另起线程 `AsstStop`（不能在回调线程里同步 stop，会等
+  工作线程收尾）。`run_core` 收尾时不再刷一串 `[失败]`，只报「已暂停：XX 材料不足」。
+- **剩下的计划落盘** `config/train-plan.json`（`_remain_plans` 用 MAA 报回来的
+  成功项相减），用户补完材料说「继续培养」→ `skill_train(resume=true)` 接着做，
+  不用重报练度；全部做完就把文件删掉。
+- `wakeup=false`（用户说游戏已经开着）时不排 StartUp（`spec['noStartUp']`，
+  core_tasks 不再强制补）；`OperProgress` 自己会走 `OperBoxBegin` 从任意页面
+  进干员列表。`switchAccount=false` 时 StartUp 照跑，只是不开切号开关。
+
+## MAA 日志补全（2026-11-18）
+
+用户报「自动战斗没有日志，右边不知道 MAA 在干什么」。原因有两层，都补了：
+
+1. **回调侧**（`maaplan._on_core_event`）：以前只写「换作业 / 掉落 / 理智 /
+   打满」，一场战斗 3 分钟面板上只有一行「开始执行」。现在补上
+   `CopilotAction`（部署 / 开技能 / 二倍速 / 技能就绪自动开）、`BattleFormation`
+   （编队名单）、`SubTaskStart` 的关键阶段（找关卡 / 开始行动 / 战斗中 / 结算）、
+   `ExceededLimit`（重试到上限）和 `OperProgressDetail/Summary`（培养结果）。
+   开技能 15 秒内只说一次、同一个干员只报一次部署，避免刷屏。
+
+   `SubTaskStart` 的 `subtask` 字段只是插件类名（`ProcessTask` /
+   `BattleProcessTask`），真正能给人看的阶段在 **`first[0]`**（`maacore._translate`
+   取它），形如 `Copilot@WaitUntilEndOfAction` / `BattleStartAll`。注意名字有的
+   本来就带 `<TaskChain>@` 前缀、有的不带（后者会被补上前缀），所以
+   `_subtask_label()` 按裸名查表，两种都能命中。这张表**必须按
+   `<MAA>/debug/asst.log` 里实际出现的 `first[0]` 统计来写**，不能照源码猜——
+   第一版猜成 `Copilot@BattleStartPreFlag`，跟真实日志全对不上，战斗过程依旧
+   一片空白。按真实日志校准后关键阶段覆盖率 93.8%，剩下 6% 是
+   `BattleProcessTask` / `StartGameTask` 这类插件类名，静默跳过才不刷屏。
+   `CopilotAction` 里白名单外的动作（`Output` / `SkillUsage`）同样不写。
+2. **日志侧**（`maalog.py`）：MAA 有些话只写 `debug/asst.log`
+   （`confirm stage name failed … stage name: MN-EX-6`、`unknown oper name`），
+   不走回调。`maalog.Tap` 用 `asstlog.Tail` 从**当前文件末尾**开始增量读
+   （`Tail.seek_end()`，不重放几十 MB 历史），只翻 `[ERR]/[WRN]` 里的有效行，
+   噪音（`roi is empty` / `Unknown task` / 缺 pipeline）一律丢，同一句 20 秒内
+   只说一次，输出成 `[MAA] …` 进同一条任务日志。
+3. **心跳**（`_wait_run`）：90 秒没有任何新日志就补一句「…还在跑：MN-EX-6
+   （已 3 分 20 秒）」。以前直接 `eng.wait(timeout=…)`，卡住和正常跑在面板上
+   长得一模一样。
+
 
 ## 依赖
 

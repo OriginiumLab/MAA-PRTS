@@ -378,6 +378,47 @@ TOOLS = [
     _tool('skill_signin',
           '森空岛签到（账号给了只签这个号，不给签全部）。返回 taskId。',
           {'account': _ACC}),
+    _tool('skill_train',
+          '培养干员（MAA 的「干员培养」）：升精英化 / 技能基础等级 / 专精，'
+          '可以一次排多个干员。operators 每项写 {name, elite, skillLevel, mastery}：'
+          'elite 填 1/2（升到精一 / 精二），skillLevel 填 2~7，mastery 是**绝对专精'
+          '等级**的 3 元数组（[0,3,0] = 技能2 专三；技能2 已经是专三就不用写）。'
+          '**动手前先跟用户确认名单和每个干员的练度目标**。默认先「开始唤醒」；'
+          'switchAccount=true 才切号（用户说不用切号就传 false）。'
+          '材料不足会暂停并报缺什么，之后用 resume=true 接着做。返回 taskId。',
+          {'operators': {
+              'type': 'array',
+              'description': '要培养的干员列表，按顺序做',
+              'items': {
+                  'type': 'object',
+                  'properties': {
+                      'name': {'type': 'string', 'description': '干员名（中文名）'},
+                      'elite': {'type': 'integer',
+                                'description': '目标精英化 1 或 2；不升就不写'},
+                      'skillLevel': {'type': 'integer',
+                                     'description': '目标技能基础等级 2~7；不升就不写'},
+                      'mastery': {'type': 'array', 'items': {'type': 'integer'},
+                                  'description': '[技能1,技能2,技能3] 的专精等级 0~3，'
+                                                 '如 [0,3,0] = 二技能专三'},
+                  },
+                  'required': ['name'],
+              }},
+           'operator': {'type': 'string', 'description': '只培养一个干员时的简写'},
+           'elite': {'type': 'integer', 'description': '简写模式的目标精英化（1/2）'},
+           'skillLevel': {'type': 'integer', 'description': '简写模式的目标技能等级（2~7）'},
+           'mastery': {'type': 'array', 'items': {'type': 'integer'},
+                       'description': '简写模式的专精目标，如 [0,3,0]'},
+           'account': _ACC,
+           'accountName': {'type': 'string',
+                           'description': '切号名（官服=手机号后 4 位）。'
+                                          '不给就不切号'},
+           'switchAccount': {'type': 'boolean',
+                             'description': 'false=只唤醒、不切号（用户说不用换号时传）'},
+           'wakeup': {'type': 'boolean',
+                      'description': 'false=不唤醒，直接从当前界面开始（游戏得开着）'},
+           'resume': {'type': 'boolean',
+                      'description': 'true=接着上次没做完的培养计划'}},
+          ['operators']),
 ]
 
 
@@ -1125,6 +1166,39 @@ def _precheck_fight(args):
             'blocked': rep['blocked'], 'rep': rep}
 
 
+def _train_what(args):
+    """培养干员的确认卡文案：谁、每个升到什么样
+
+    用户看到的必须是「泥岩（精二 / 技能7 / 技能2专3）」这种，而不是一串
+    JSON —— 确认卡点下去就开跑，看错一个数就是几百理智白花。
+    """
+    from . import skills as sk
+    try:
+        rows = sk._train_rows(args)
+    except Exception:
+        rows = []
+    if not rows:
+        return '上次没做完的培养计划（resume）' if args.get('resume') else ''
+    bits = []
+    for r in rows:
+        target = []
+        e = sk._to_int(r.get('elite'))
+        if e:
+            target.append('精%s' % ('二' if e == 2 else '一'))
+        sl = sk._to_int(r.get('skillLevel'))
+        if sl:
+            target.append('技能%d' % sl)
+        try:
+            arr = sk._norm_mastery(r.get('mastery')) or []
+        except Exception:
+            arr = []
+        for i, lv in enumerate(list(arr)[:3]):
+            if lv:
+                target.append('技能%d专%d' % (i + 1, lv))
+        bits.append('%s（%s）' % (r['name'], ' / '.join(target) or '目标没写'))
+    return '、'.join(bits)
+
+
 def _skill_via_guard(name, args, session):
     """fight / skip_story / weekly 共用：先摆确认卡，点了才跑后台任务
 
@@ -1145,9 +1219,12 @@ def _skill_via_guard(name, args, session):
         return out
     args = dict(args)
     desc = {'fight': '自动战斗', 'skip_story': '过剧情关',
-            'weekly': '周目编排'}.get(name, name)
-    raw = args.get('stages') or args.get('stage') or ''
-    what = '、'.join(raw) if isinstance(raw, (list, tuple)) else str(raw)
+            'weekly': '周目编排', 'train': '培养干员'}.get(name, name)
+    if name == 'train':
+        what = _train_what(args)
+    else:
+        raw = args.get('stages') or args.get('stage') or ''
+        what = '、'.join(raw) if isinstance(raw, (list, tuple)) else str(raw)
     note = ''
     if name == 'fight' and not args.get('_prechecked'):
         chk = _precheck_fight(args)
@@ -1186,6 +1263,10 @@ def _tool_skill_weekly(args, session=None):
     return _skill_via_guard('weekly', args, session)
 
 
+def _tool_skill_train(args, session=None):
+    return _skill_via_guard('train', args, session)
+
+
 _HANDLERS = {
     'list_accounts': _tool_list_accounts,
     'list_activities': _tool_list_activities,
@@ -1212,6 +1293,7 @@ _WRITE_HANDLERS = {
     'skill_fight': _tool_skill_fight,
     'skill_skip_story': _tool_skill_skip_story,
     'skill_weekly': _tool_skill_weekly,
+    'skill_train': _tool_skill_train,
 }
 
 
@@ -1351,7 +1433,7 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 
 ## 挂关 skill（2026-11-17 新增）：把流程拆开一步一步来
 
-六个 skill，各自独立跑后台、失败单独停：
+七个 skill，各自独立跑后台、失败单独停：
 - skill_wakeup：唤醒游戏到主界面（可按尾号切号）
 - skill_navigate：导航到活动（老活动 / 当期 / EX 都行）。stage 优先传**中文
   活动名**（「孤星」），代号/活动 id 也行——内部统一换，别自己换算
@@ -1360,6 +1442,7 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   界面在哪就从哪直接开打；要全套（唤醒+导航）得用户明说或传 wakeup=true
 - skill_signin：森空岛签到
 - skill_weekly：**周目编排**——ST 剧情自动过、主线按序批量打、EX 收尾
+- skill_train：**培养干员**——升精英化 / 技能等级 / 专精，可一次排多个。
 
 **什么时候用 skill 而不是 build_run**：
 - 用户要「从唤醒开始，剧情关也帮我过，一口气打完」→ skill_weekly。
@@ -1370,6 +1453,18 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 - **单独打一组关**（界面已在关卡列表 / 用户自己导航好了）→ skill_fight，
   不要再补导航；游戏没开或还在主界面才需要先 skill_wakeup / skill_navigate
 - 签到 → skill_signin
+- **培养干员**（升精二 / 技能 7 / 专精几技能）→ skill_train
+
+**「帮我把泥岩精二、二技能专三」**
+1. 先跟用户确认：哪个号、哪些干员、各自练度目标（别说「帮你练一下」就开跑）
+2. skill_train（operators=[{name:"泥岩", elite:2, skillLevel:7, mastery:[0,3,0]}]）
+3. 用户说「不用切号」就传 switchAccount=false；说「已经开着了」可传 wakeup=false
+4. 中途材料不足会**暂停**并写明缺什么：把缺的材料和「补齐后说继续培养」告诉用户
+5. 用户补完材料说「继续」→ skill_train（resume=true），不要让他重报练度
+
+**「现在打到哪了 / 在干什么」**
+任务日志里已经有 MAA 的实时进度（换作业 / 编队 / 部署 / 开技能 / 掉落 /
+理智 / 培养结果 / 卡在第几步），直接念最近几条给用户，别让他自己盯 MAA 窗口。
 
 skill 返回 taskId 后**不要傻等**：告诉用户已在后台跑，失败会停在哪一步
 并写进日志。任务失败时主动提醒用户卡在哪个 skill、哪一关、什么原因。
@@ -1407,7 +1502,8 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
 - 中文活动名 → 代号走 search_stages；连活动名都拿不准就先 list_activities
   （返回正式名 + 代号前缀）让用户挑
 - 写 MAA 之前必须让用户看到「给谁、跑哪些任务、挂哪几关」，等他确认
-- skill_fight / skill_skip_story / skill_weekly 同样要先确认再跑（工具会自动摆确认卡）
+- skill_fight / skill_skip_story / skill_weekly / skill_train 同样要先确认再跑
+  （工具会自动摆确认卡）
 - 多账号缺切号名时，明确说「这个信息森空岛拿不到，得你告诉我」；
   官服只要**手机号后 4 位**（如 5505），不要要求用户拼星号
 - 多账号是**串行**的（一个模拟器同时只能登一个号），一个跑完自动切下一个

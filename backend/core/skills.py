@@ -20,6 +20,7 @@
   skip_story  过剧情关（mn-st-1 这类 ST 关）               stagenav + 跳幕
   signin      森空岛签到（单号 / 全部）                    signin.run
   weekly      周目编排：把上面几个按关卡顺序串起来         本文件 _plan_cycle
+  train       培养干员：唤醒（可切号）→ MAA 干员培养        maaplan.run_core
 
 除 signin 外，每个 skill 起跑前都会先过一次环境闸（``envcheck.ensure``）：
 模拟器没开就替用户启动，起来才往下走；见 ``_NEEDS_GAME`` 和 envcheck 的
@@ -27,11 +28,14 @@
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
 import time
 
 from . import accounts
+from . import atomicio
 from . import envcheck
 from . import maaplan
 from . import resources
@@ -471,6 +475,336 @@ def skill_skip_story(params, log, tid=None):
     return {'ok': True, 'stage': stage, 'account': file}
 
 
+# ---------------------------------------------------------------- train
+
+# 账号快照里的职业（中文）→ MaaCore 的 battle::Role。
+# 带上职业能让 MAA 少翻一遍干员列表（它按职业 tab 过滤后再 OCR 找名字），
+# 同名不同职业的干员（无人机 / 召唤物）也不会认错。
+_TRAIN_ROLE = {
+    '先锋': 'Pioneer', '近卫': 'Warrior', '重装': 'Tank', '狙击': 'Sniper',
+    '术师': 'Caster', '医疗': 'Medic', '辅助': 'Support', '特种': 'Special',
+}
+
+_CN_NUM = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3,
+           '0': 0, '1': 1, '2': 2, '3': 3}
+
+
+def _to_int(v):
+    """'2' / 'Lv.7' / '精二' / 7 → int；认不出返回 None"""
+    if v is None or v == '' or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip()
+    m = re.search(r'\d+', s)
+    if m:
+        return int(m.group())
+    for k, n in _CN_NUM.items():
+        if k in s:
+            return n
+    return None
+
+
+def _norm_mastery(v):
+    """专精目标 → ``[技1, 技2, 技3]``（0~3，是**绝对等级**不是增量）
+
+    用户/模型给法五花八门，这里统一吃下：
+        [0, 3, 0]                        列表（最标准）
+        {"2": 3} / {"技能2": 3}           字典：技能号 → 专精等级
+        "2:3" / "技能2专精3" / "二技能专三"
+    """
+    if v is None or v == '' or v == [] or v == {}:
+        return None
+    arr = [0, 0, 0]
+    if isinstance(v, dict):
+        for k, lv in v.items():
+            i = _to_int(k)
+            n = _to_int(lv)
+            if not i or i < 1 or i > 3:
+                raise ValueError('专精技能号只能 1/2/3（收到 %s）' % k)
+            if n is None or n < 0 or n > 3:
+                raise ValueError('专精等级只能 0~3（收到 %s）' % lv)
+            arr[i - 1] = n
+        return arr if any(arr) else None
+    if isinstance(v, (list, tuple)):
+        for i, lv in enumerate(list(v)[:3]):
+            n = _to_int(lv) or 0
+            if n < 0 or n > 3:
+                raise ValueError('专精等级只能 0~3（收到 %s）' % lv)
+            arr[i] = n
+        return arr if any(arr) else None
+    s = str(v)
+    pairs = re.findall(r'([123一二三])\D{0,6}?([0-3零一二三])', s)
+    for a, b in pairs:
+        arr[_CN_NUM[a] - 1] = _CN_NUM[b]
+    if not any(arr):
+        raise ValueError('看不懂专精目标「%s」，写成 [0,3,0]（技能2 专三）这种' % v)
+    return arr
+
+
+def _train_rows(params):
+    """把入参摊平成 ``[{name, elite, skillLevel, mastery}]``
+
+    支持三种写法：
+      operators: [{name, elite, skillLevel, mastery}, …]   ← 标准
+      operators: ["泥岩", "银灰"]                          ← 只给名字
+      operator: "泥岩" + 顶层 elite/skillLevel/mastery     ← 单个干员简写
+    顶层字段会兜底给每个没写目标的干员（同名批量培养时省事）。
+    """
+    raw = params.get('operators')
+    if raw is None:
+        raw = params.get('opers')
+    if isinstance(raw, str):
+        raw = [x for x in re.split(r'[,，、;；\s]+', raw) if x]
+    rows = []
+    for it in (raw or []):
+        rows.append({'name': it} if isinstance(it, str) else dict(it or {}))
+
+    if not rows and params.get('operator'):
+        rows = [{'name': params.get('operator')}]
+
+    fallback = {k: params.get(k) for k in
+                ('elite', 'skillLevel', 'skill_level', 'mastery', 'skillMastery')
+                if params.get(k) not in (None, '')}
+    out = []
+    for row in rows:
+        for k, v in fallback.items():
+            if row.get(k) in (None, ''):
+                row[k] = v
+        name = str(row.get('name') or '').strip()
+        if not name:
+            continue
+        out.append({
+            'name': name,
+            'elite': row.get('elite'),
+            'skillLevel': row.get('skillLevel', row.get('skill_level')),
+            'mastery': row.get('mastery', row.get('skill_mastery')),
+        })
+    return out
+
+
+def _train_plans(rows, file, log):
+    """入参 + 账号练度 → MaaCore 的 plans（只留还没达标的项）
+
+    「导入用户需要培养的练度」实际做的是：拿账号快照对一遍，已经达标的项
+    直接从计划里删掉——MAA 会自己在档案页现场识别，但让它跑一遍「已精二
+    的干员升精二」纯属浪费时间，日志里还会多一条看不懂的「失败」。
+    """
+    snap = None
+    try:
+        snap = accounts.get_account(file)
+    except Exception:
+        pass
+    chars = (snap or {}).get('chars') or []
+    out = []
+    for row in rows:
+        raw_name = str(row.get('name') or '').strip()
+        if not raw_name:
+            continue
+        char = next((c for c in chars
+                     if str(c.get('name') or '') == raw_name), None)
+        if char is None:
+            char = next((c for c in chars
+                         if raw_name and raw_name in str(c.get('name') or '')), None)
+        if char is None and chars:
+            raise ValueError('账号快照里没有「%s」——名字写错了？还是这号没这个干员'
+                             '（先在设置里同步一次账号）' % raw_name)
+        name = str((char or {}).get('name') or raw_name)
+        plan = {'name': name}
+        role = _TRAIN_ROLE.get(str((char or {}).get('profession') or '').strip())
+        if role:
+            plan['role'] = role
+
+        cur_e = int((char or {}).get('elite') or 0)
+        cur_sl = int((char or {}).get('skillLevel') or 0)
+        cur_m = [int((s or {}).get('mastery') or 0)
+                 for s in ((char or {}).get('skills') or [])] + [0, 0, 0]
+
+        elite = _to_int(row.get('elite'))
+        if elite:
+            if elite not in (1, 2):
+                raise ValueError('%s 的精英化目标只能填 1 或 2（0 / 不填 = 不升精英化）'
+                                 % name)
+            if char and cur_e >= elite:
+                log('%s 已经是精%s，跳过精英化'
+                    % (name, '二' if elite == 2 else '一'))
+            else:
+                plan['elite'] = elite
+
+        sl = _to_int(row.get('skillLevel')
+                     if row.get('skillLevel') is not None else row.get('skill_level'))
+        if sl:
+            if sl < 2 or sl > 7:
+                raise ValueError('%s 的技能基础等级只能 2~7（MAA 的下限是 2，收到 %s）'
+                                 % (name, sl))
+            if char and cur_sl >= sl:
+                log('%s 技能已经是 %d 级，跳过' % (name, cur_sl))
+            else:
+                plan['skill_level'] = sl
+
+        arr = _norm_mastery(row.get('mastery')
+                            if row.get('mastery') is not None
+                            else row.get('skill_mastery'))
+        if arr:
+            for i in range(3):
+                if arr[i] and cur_m[i] >= arr[i]:
+                    log('%s 技能%d 已经专%s，跳过' % (name, i + 1, arr[i]))
+                    arr[i] = 0
+            if any(arr):
+                plan['skill_mastery'] = arr
+
+        if len(plan) <= (2 if role else 1):
+            log('%s 的目标都已达标，不用培养' % name)
+            continue
+        out.append(plan)
+    return out
+
+
+def _remain_plans(plans, done):
+    """计划 − 已完成 → 还没做完的部分（也用来续跑）"""
+    out = []
+    for p in plans:
+        rec = (done or {}).get(p['name']) or {}
+        left = {'name': p['name']}
+        if p.get('role'):
+            left['role'] = p['role']
+        if p.get('elite') and int(rec.get('elite') or 0) < int(p['elite']):
+            left['elite'] = int(p['elite'])
+        if p.get('skill_level') and int(rec.get('skill_level') or 0) < int(p['skill_level']):
+            left['skill_level'] = int(p['skill_level'])
+        arr = list(p.get('skill_mastery') or [0, 0, 0]) + [0, 0, 0]
+        got = list(rec.get('skill_mastery') or [0, 0, 0]) + [0, 0, 0]
+        rem = [0, 0, 0]
+        for i in range(3):
+            if arr[i] and int(got[i] or 0) < int(arr[i]):
+                rem[i] = int(arr[i])
+        if any(rem):
+            left['skill_mastery'] = rem
+        if len(left) > 1:
+            out.append(left)
+    return out
+
+
+def _train_plan_path():
+    return os.path.join(settings.CONFIG_DIR, 'train-plan.json')
+
+
+def _load_train_plan():
+    """上次没做完的培养计划；没有/坏了都返回 None"""
+    p = _train_plan_path()
+    try:
+        with open(p, encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not (data.get('plans') or []):
+        return None
+    return data
+
+
+def _save_train_plan(file, plans):
+    """没做完就落盘（材料不足暂停后「继续培养」要用）；做完了删掉"""
+    p = _train_plan_path()
+    if not plans:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        return
+    atomicio.dump_json(p, {
+        'account': file,
+        'savedAt': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'plans': plans,
+    })
+
+
+def skill_train(params, log, tid=None):
+    """skill 7：培养干员——升精英化 / 技能等级 / 专精（MAA 的 OperProgress）
+
+    流程：开始唤醒（可选，切号可选）→ MAA 干员培养 → 材料不足就暂停
+
+    - ``operators``：``[{name, elite, skillLevel, mastery}, …]``；``mastery``
+      是**绝对专精等级**（``[0,3,0]`` = 技能2 专三），也吃 ``"2:3"`` 这种写法
+    - 只给 ``name`` 也行（只补专精 / 只升精英化时另传 elite / skillLevel）
+    - ``wakeup`` 默认 true；``switchAccount`` 默认「给了切号名才切」，用户说
+      不用切号就传 false——StartUp 仍然跑，只是不开切号开关
+    - ``resume``：接着上次没做完的做（材料不足暂停后用它）
+    """
+    saved = None
+    if params.get('resume'):
+        saved = _load_train_plan()
+        if not saved:
+            raise ValueError('没有没做完的培养计划（上次的都已经做完了）')
+        if not params.get('account') and saved.get('account'):
+            params = dict(params, account=saved['account'])
+    file = _account_file(params.get('account') or '')
+    tail = (params.get('accountName') or params.get('tail')
+            or _account_name_tail(file) or '').strip()
+    switch = params.get('switchAccount')
+    if switch is None:
+        switch = bool(tail)          # 只有显式给了切号名才切号
+    switch = bool(switch) and bool(tail)
+    wakeup = params.get('wakeup', True)
+    if isinstance(wakeup, str):
+        wakeup = wakeup.strip().lower() not in ('0', 'false', 'no', 'off')
+
+    rows = saved['plans'] if saved else _train_rows(params)
+    if not rows:
+        raise ValueError('缺 operators（要培养谁、升到什么程度）')
+    plans = _train_plans(rows, file, log)
+    if not plans:
+        _save_train_plan(file, [])
+        log('没有需要培养的目标（都已经达标了）')
+        return {'ok': True, 'account': file, 'plans': [], 'skipped': True,
+                'remaining': []}
+
+    if saved:
+        log('续跑上次没做完的计划（%s 保存，%d 名）'
+            % (saved.get('savedAt') or '', len(plans)))
+    log('培养计划（%d 名）：' % len(plans))
+    for p in plans:
+        log('  · %s %s' % (p['name'], maaplan.plan_brief(p)))
+    if not wakeup:
+        log('不唤醒：直接从当前界面进干员列表（游戏得开着）')
+    elif switch:
+        log('先开始唤醒，切到 %s' % tail)
+    else:
+        log('先开始唤醒（不切号）')
+
+    spec = {
+        'tasks': (['startup', 'operprogress'] if wakeup else ['operprogress']),
+        'plans': plans,
+        'accountName': tail,
+        'switchAccount': switch,
+        'noStartUp': not wakeup,
+        'maaDir': _default_maa_dir(),
+    }
+    r = maaplan.run_core(spec, tid=tid,
+                         timeout=params.get('timeout') or 3 * 60 * 60)
+    done = r.get('trained') or {}
+    summary = r.get('trainSummary') or {}
+    remaining = _remain_plans(plans, done)
+    _save_train_plan(file, remaining)
+
+    if summary:
+        log('成绩：成功 %s，失败 %s，跳过 %s'
+            % (summary.get('success'), summary.get('failed'),
+               summary.get('skipped')))
+    if r.get('paused'):
+        log('暂停原因：%s%s' % (r['paused'], r.get('pauseDetail') or ''))
+    if remaining:
+        log('还没做完 %d 项：' % len(remaining))
+        for p in remaining:
+            log('  · %s %s' % (p['name'], maaplan.plan_brief(p)))
+        log('补齐材料后说一声「继续培养」，会接着做这些（不用重新报练度）')
+    else:
+        log('培养计划全部完成')
+    return {'ok': bool(r.get('ok')), 'account': file, 'plans': plans,
+            'paused': r.get('paused') or '', 'summary': summary,
+            'trained': done, 'remaining': remaining,
+            'wakeup': wakeup, 'switchAccount': switch}
+
+
 # ---------------------------------------------------------------- signin
 
 def skill_signin(params, log, tid=None):
@@ -614,13 +948,15 @@ SKILLS = {
     'skip_story': ('过剧情关卡（ST 关）',              skill_skip_story),
     'signin':    ('森空岛签到（单号/全部）',            skill_signin),
     'weekly':    ('周目编排：剧情+战斗按序全自动',      skill_weekly),
+    'train':     ('培养干员：精英化/技能/专精，材料不足暂停', skill_train),
 }
 
 # 哪些 skill 跑之前要先确认模拟器在。signin 走的是森空岛网页，跟游戏无关，
 # 不查——否则用户只想签个到，却被要求开模拟器。这张表另用一个常量而不是
 # 塞进 SKILLS 元组：/api/skill/list 和助手的工具列表都直接吃 SKILLS 的形状，
 # 加字段会把两处都牵连一遍。
-_NEEDS_GAME = frozenset(['wakeup', 'navigate', 'fight', 'skip_story', 'weekly'])
+_NEEDS_GAME = frozenset(['wakeup', 'navigate', 'fight', 'skip_story', 'weekly',
+                         'train'])
 
 
 def run_skill(name, params=None):

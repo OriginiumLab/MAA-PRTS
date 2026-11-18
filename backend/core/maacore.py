@@ -259,12 +259,28 @@ class Engine:
             return {'t': t, 'kind': 'chain_failed', 'chain': chain,
                     'text': '失败：%s' % _chain_cn(chain)}
         if msg == MSG_SUBTASK_START:
-            return {'t': t, 'kind': 'node', 'chain': chain, 'sub': sub}
+            # ``subtask`` 是插件类名（ProcessTask / BattleProcessTask），不是
+            # 用户看得懂的阶段；真正的 pipeline 名在 ``first[0]``，形如
+            # ``Copilot@WaitUntilEndOfAction`` / ``OperProgress@EliteUp``
+            first = data.get('first') or []
+            node = ''
+            if isinstance(first, list) and first:
+                node = str(first[0] or '')
+            if not node:
+                node = str((data.get('details') or {}).get('task') or sub or '')
+            if node and '@' not in node and chain:
+                node = '%s@%s' % (chain, node)
+            return {'t': t, 'kind': 'node', 'chain': chain, 'sub': node}
         if msg == MSG_SUBTASK_EXTRA:
-            # 掉落 / 关卡识别 / 抄作业换关 / 理智，这几类对用户有意义
+            # 掉落 / 关卡识别 / 抄作业换关 / 理智 / 战斗动作 / 培养结果，
+            # 这几类对「现在在干什么」有意义。2026-11-18 补 CopilotAction 与
+            # 培养两条：以前只有换作业和掉落，一场战斗 3 分钟日志里一个字
+            # 都没有，用户报「自动战斗没有日志」。
             if what in ('StageDrops', 'CopilotListLoadTaskFileSuccess',
                         'BattleFormation', 'StageInfo',
-                        'SanityBeforeStage', 'FightTimes'):
+                        'SanityBeforeStage', 'FightTimes', 'CopilotAction',
+                        'ExceededLimit', 'OperProgressDetail',
+                        'OperProgressSummary'):
                 return {'t': t, 'kind': 'extra', 'what': what,
                         'data': data.get('details') or {}}
             return None
@@ -432,6 +448,7 @@ _CHAIN_CN = {
     'Custom': '小工具',
     'Depot': '仓库识别',
     'OperBox': '干员识别',
+    'OperProgress': '干员培养',
     'CloseDown': '关闭游戏',
 }
 
