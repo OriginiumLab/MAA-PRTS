@@ -533,6 +533,46 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
 - **磨难 / 险地不是突袭**（用户明确）：主线 10-14 章磨难（`tough_`）和 15+
   章险地（`#s`）是独立关卡 id、各自一条，不展开、不套突袭规则。
 
+## 逐关战报 + 失败换作业重挂 + 分段扫图（2026-11-19）
+
+用户提了四条，一次做完：
+
+1. 作业翻车要能看见**是哪一关**翻的
+2. 挂完一关就显示「一关战斗成功」
+3. 某关失败就换作业集里**别的作业**重挂这一关，已成功的关不重排
+4. skill 联动：挂完普通 → 导航到突袭 → 挂突袭 → 导航到 S → 挂 S
+
+**① 逐关结果（`run_core` 的 `state['results']`）**
+
+- `StageDrops` 到达 = 这关打完了 → `_mark_clear()` 记成功并打
+  `✔ SV-EX-1 战斗成功（掉落…）`。刷材料（Fight）同一关反复结算只喊一次。
+- `chain_failed` 且链是 Copilot → `_mark_fail()` 打
+  `✘ SV-EX-1 翻车：原因`。`maacore._translate` 的 chain_failed 事件为此补了
+  `why` 字段（以前只有一句「失败：自动战斗」）。
+- `_tally()` 按关卡聚合：同一关先失败后成功算成功。
+
+**② 换作业重挂（`_retry_failed`）**
+
+- `skills._select_ops` 每关挑 `depth=3` 份候选（按「可直接抄 → 借一人 →
+  练度不足」排），`_prepare_ops` 返回 `(copilotList, retry)`，
+  `retry = {'pool': {'SV-EX-1@raid': [41623, 41624, 46114]}, 'maxRounds': 3}`，
+  由 `spec['retry']` 交给 `run_core`。
+- 一轮跑完只挑**没成功**的关；每关换候选池里**还没试过**的下一份，同一个
+  Engine 直接 `append` 新的 Copilot 任务再 `start`——不重新 open / connect /
+  导航，省掉每轮十几秒。`attempted` 记着试过哪些，#102→#202→#102 这种
+  来回打转不会发生。
+- 收尾判失败只从 `eng.chains[mark:]` 看，否则第一轮的失败会把重试成功盖掉。
+  `mark is None` 表示压根没重试（**0 是合法分界**，别拿它当「没重试」）。
+
+**③ 分段扫图（`skill_sweep`）**
+
+- `_sweep_segments` 把活动拆成「普通关 / EX 普通 / EX 突袭 / S 关」。老活动
+  没有 S 关就只有三段；`tiers` 可以只挑一段，`raid` 控制 EX（both/raid/normal）。
+- 每段开始前用 `skill_navigate` **重新导航**：EX 和 S 是活动地图里不同的
+  分区，MAA 的 Copilot 只认当前分区上的关卡名（见 `_run_fight_batch` 的注释）。
+- 段内 `_select_ops(strict=True)`：普通段不拿突袭作业顶，反之亦然。
+- 每段一次 `run_core`（带 retry 池），段与段之间靠导航衔接。
+
 ## 培养干员 skill（`train`，2026-11-18）
 
 MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），能力是

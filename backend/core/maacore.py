@@ -260,8 +260,10 @@ class Engine:
                                 'why': why})
             self.errors.append('%s%s' % (_chain_cn(chain),
                                          '：%s' % why if why else ''))
+            # why 要带上：run_core 靠它说出「哪一关翻车、为什么」
+            # （2026-11-19 用户要求：作业翻车时日志要看得出是哪关）
             return {'t': t, 'kind': 'chain_failed', 'chain': chain,
-                    'text': '失败：%s' % _chain_cn(chain)}
+                    'why': why, 'text': '失败：%s' % _chain_cn(chain)}
         if msg == MSG_SUBTASK_START:
             # ``subtask`` 是插件类名（ProcessTask / BattleProcessTask），不是
             # 用户看得懂的阶段；真正的 pipeline 名在 ``first[0]``，形如

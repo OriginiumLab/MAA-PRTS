@@ -136,6 +136,23 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
 - B9 的 `entry_variants` 断言改成「选哪一行写哪一行」：`(2,'normal')=[False]`、
   `(1,'raid')=[True]`，防止再拿作业位标志改主意
 
+### B43 逐关战报 + 失败换作业重挂 + 分段扫图（2026-11-19）
+
+用户四条需求（翻车看得见哪关 / 挂完一关报成功 / 失败换作业重挂且不重打已成功
+的关 / 普通→突袭→S 分段联动）。
+
+- `_mark_clear`：`StageDrops` → `results` 记成功 + 日志「✔ X 战斗成功（掉落…）」；
+  同一关再结算一次**不重复喊**
+- `_mark_fail`：Copilot 链失败 → 「✘ X 翻车：原因」；非 Copilot 链（如 StartUp）
+  不记到关卡上（没有「哪一关」）
+- `_tally`：同一关先失败后成功算成功
+- `_retry_failed`：已成功的关不进重挂队列；只 append **一次** Copilot 任务，
+  且作业换成了候选里的下一份（`_202.json`）；日志有「换作业重挂：SV-EX-2」、
+  绝不出现已成功的 `SV-EX-1`；返回值 `mark` 非 None
+- `_sweep_segments`：`['SV-1','SV-2','SV-EX-1','SV-S-1']` → 段名
+  `普通关 / EX 关·普通 / EX 关·突袭 / S 关`，variant `normal/normal/raid/normal`；
+  `raid='normal'` 塌成三段；`tiers=['ex']` 只出 EX 两段；剧情关（ST）不进计划
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

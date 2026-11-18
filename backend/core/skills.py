@@ -291,8 +291,20 @@ def _parse_stages(raw):
     return codes, wants
 
 
-def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
-    """mode=copy：把关卡代号列表变成 MaaCore 的 copilotList
+def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
+                depth=3, strict=False):
+    """挑选每关要用的作业 → ``(picks, pool)``
+
+    ``picks`` 是首轮要排的 ``[{'copilotId','stageCode','variant'}]``；
+    ``pool`` 是同一关同一档的**备选作业** ``{'SV-EX-1@raid': [41623, 41624]}``，
+    给 ``maaplan.run_core`` 在翻车后换一份重挂用（2026-11-19 用户需求 3：
+    「某关战斗失败了，换其他作业自动挂这关」）。
+
+    ``depth`` 是每关备选几份（默认 3：首轮 + 两轮重挂）；
+    ``strict=True`` 时只排指定档位（``wants`` 里写 normal 就不拿突袭作业顶），
+    扫图 skill 用它保证「普通段只打普通、突袭段只打突袭」。
+
+    mode=copy：把关卡代号列表变成 MaaCore 的 copilotList
 
     每个 stage 按代号搜作业站，挑**这号能抄的**那份下载落盘（prepare_copilot）。
     以前直接拿 ``ops[0]``——那是按评分排的，不管练度，于是经常挑到「缺三个
@@ -332,13 +344,32 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
               'no': 'normal'}.get(str(raid).strip().lower(), 'raid')
     wants = {str(k).upper(): v for k, v in (wants or {}).items()}
     fixed = {str(k).upper(): int(v) for k, v in (fixed or {}).items() if v}
-    ops = []
+    picks, pool = [], {}
 
-    def _best(row):
+    def _ranked(row):
+        """这一行里能抄的作业，按「可直接抄 → 借一人 → 练度不足」排好"""
+        if not row:
+            return []
         cands = sorted(list(row.get('ops') or []),
                        key=lambda o: (band.get(o.get('mode'), 9),
                                       -(o.get('rating') or 0)))
-        return cands[0] if cands else None
+        usable = [o for o in cands if (o.get('mode') or '') != 'blocked']
+        return usable or cands
+
+    def _add(st, variant, cands):
+        """首轮用 cands[0]，其余存进 pool 当重挂的备选"""
+        if not cands:
+            return
+        key = '%s@%s' % (st.upper(), variant)
+        ids = []
+        for o in cands[:max(1, depth)]:
+            cid = o.get('copilotId')
+            if cid and int(cid) not in ids:
+                ids.append(int(cid))
+        if ids:
+            pool[key] = ids
+        picks.append({'copilotId': cands[0]['copilotId'], 'stageCode': st,
+                      'variant': variant})
 
     def _note(st, op):
         mode = op.get('mode')
@@ -355,13 +386,12 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
         if cid:
             w = wants.get(st.upper()) or gw
             if w == 'both':
-                ops.append({'copilotId': cid, 'stageCode': st,
-                            'variant': 'normal'})
-                ops.append({'copilotId': cid, 'stageCode': st, 'variant': 'raid'})
+                _add(st, 'normal', [{'copilotId': cid, 'mode': 'ready'}])
+                _add(st, 'raid', [{'copilotId': cid, 'mode': 'ready'}])
                 log('%s：按指定作业 #%s 打普通 + 突袭' % (st, cid))
             else:
-                ops.append({'copilotId': cid, 'stageCode': st,
-                            'variant': 'raid' if w == 'raid' else 'normal'})
+                _add(st, 'raid' if w == 'raid' else 'normal',
+                     [{'copilotId': cid, 'mode': 'ready'}])
                 log('%s：按指定作业 #%s 打%s'
                     % (st, cid, '突袭' if w == 'raid' else '普通'))
             continue
@@ -379,8 +409,10 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
                            if (p.get('stage') or {}).get('variant') != 'raid'), None)
         raid_row = next((p for p in packeds
                          if (p.get('stage') or {}).get('variant') == 'raid'), None)
-        n_op = _best(normal_row) if normal_row else None
-        r_op = _best(raid_row) if raid_row else None
+        n_cands = _ranked(normal_row)
+        r_cands = _ranked(raid_row)
+        n_op = n_cands[0] if n_cands else None
+        r_op = r_cands[0] if r_cands else None
         if not (n_op or r_op):
             # 作业站没有这关的作业（或被黑名单滤空）：跳过它比整批报错好，
             # 别的关照打；最后一份都没有才报错
@@ -396,16 +428,23 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
         raid_ok = (r_op is not None
                    and (r_op.get('mode') or 'blocked') in ('ready', 'borrow',
                                                            'unknown'))
+
+        def _alt(n):
+            return '（另有 %d 份备选，翻车会自动换）' % (n - 1) if n > 1 else ''
+
         if want == 'raid':
             if raid_ok:
                 _note(st, r_op)
-                log('%s：只打突袭（作业 #%s《%s》）'
-                    % (st, r_op.get('copilotId'), (r_op.get('title') or '')[:30]))
-                ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
-                            'variant': 'raid'})
+                log('%s：只打突袭（作业 #%s《%s》）%s'
+                    % (st, r_op.get('copilotId'),
+                       (r_op.get('title') or '')[:30], _alt(min(len(r_cands), depth))))
+                _add(st, 'raid', r_cands)
                 continue
             if n_op is None:
                 log('跳过 %s：突袭作业不可抄，也没有普通版' % st)
+                continue
+            if strict:
+                log('跳过 %s：没有能抄的突袭作业（这一轮只要突袭）' % st)
                 continue
             log('%s：突袭作业打不了（%s），这关只打普通'
                 % (st, {'train': '练度不足', 'blocked': '缺干员'}.get(
@@ -415,28 +454,58 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None):
                 log('%s：普通 + 突袭（作业 #%s → #%s）'
                     % (st, n_op.get('copilotId'), r_op.get('copilotId')))
                 _note(st, n_op)
-                ops.append({'copilotId': n_op['copilotId'], 'stageCode': st,
-                            'variant': 'normal'})
+                _add(st, 'normal', n_cands)
                 _note(st, r_op)
-                ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
-                            'variant': 'raid'})
+                _add(st, 'raid', r_cands)
                 continue
             if raid_ok and n_op is None:
                 _note(st, r_op)
-                ops.append({'copilotId': r_op['copilotId'], 'stageCode': st,
-                            'variant': 'raid'})
+                log('%s：只打突袭（没有普通版作业）%s'
+                    % (st, _alt(min(len(r_cands), depth))))
+                _add(st, 'raid', r_cands)
+                continue
+            if n_op is None:
+                log('跳过 %s：这轮要普通+突袭，但两份都没有' % st)
+                continue
+            if strict:
+                log('跳过 %s：突袭这档没作业/打不了，这一轮只要突袭' % st)
                 continue
             log('%s：突袭这档没作业/打不了，只排普通' % st)
-        op, row = (n_op, normal_row) if n_op else (r_op, raid_row)
-        _note(st, op)
-        log('%s：用作业 #%s《%s》' % (st, op.get('copilotId'),
-                                     (op.get('title') or '')[:36]))
-        ops.append({'copilotId': op['copilotId'], 'stageCode': st,
-                    'variant': (row.get('stage') or {}).get('variant')})
-    if not ops:
+        # 走到这里就是「打普通」
+        if n_op is None:
+            if strict:
+                log('跳过 %s：没有能抄的普通作业（这一轮只要普通）' % st)
+                continue
+            _note(st, r_op)
+            log('%s：没有普通版作业，改用突袭作业 #%s《%s》'
+                % (st, r_op.get('copilotId'), (r_op.get('title') or '')[:30]))
+            _add(st, 'raid', r_cands)
+            continue
+        _note(st, n_op)
+        log('%s：用作业 #%s《%s》%s'
+            % (st, n_op.get('copilotId'), (n_op.get('title') or '')[:36],
+               _alt(min(len(n_cands), depth))))
+        _add(st, 'normal', n_cands)
+    if not picks:
         raise ValueError('这几关一份能用的作业都没搜到（换 mode=fight 纯刷关，'
                          '或自己去作业站挑一份）')
-    return maaplan.prepare_copilot(ops, _default_maa_dir(), log=log)
+    return picks, pool
+
+
+def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
+                 depth=3, strict=False):
+    """``_select_ops`` + 落盘 → ``(copilotList, retry)``
+
+    ``retry`` 直接塞进 ``spec['retry']``，run_core 据此在翻车后换作业重挂。
+    每关只有一份候选时不给 retry（没得换，省一轮空转）。
+    """
+    picks, pool = _select_ops(stages, file, log, raid=raid, wants=wants,
+                              fixed=fixed, depth=depth, strict=strict)
+    rows = maaplan.prepare_copilot(picks, _default_maa_dir(), log=log)
+    retry = {}
+    if any(len(v) > 1 for v in pool.values()):
+        retry = {'pool': pool, 'maxRounds': max(2, min(4, depth))}
+    return rows, retry
 
 
 def skill_fight(params, log, tid=None):
@@ -545,9 +614,14 @@ def skill_fight(params, log, tid=None):
         if params.get('copilotList'):
             spec['copilotList'] = params['copilotList']
         else:
-            spec['copilotList'] = _prepare_ops(stages, file, log,
-                                               raid=params.get('raid', 'auto'),
-                                               wants=wants, fixed=fixed)
+            # 每关多挑几份备选：翻车时 run_core 会自动换下一份重挂
+            # （2026-11-19 需求 3），不用整轮重来、也不重打已成功的关
+            spec['copilotList'], retry = _prepare_ops(
+                stages, file, log, raid=params.get('raid', 'auto'),
+                wants=wants, fixed=fixed,
+                depth=int(params.get('swapDepth') or 3))
+            if retry:
+                spec['retry'] = retry
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
     if with_nav:
         log('带唤醒+导航的全套流程')
@@ -564,31 +638,47 @@ def skill_fight(params, log, tid=None):
     r = maaplan.run_core(spec, tid=tid,
                          timeout=params.get('timeout') or 2 * 60 * 60)
 
-    # ---- 收尾结算：实际打到第几关、卡在哪 ----
+    # ---- 收尾结算：逐关算账（哪几关过了、哪几关翻车、换过几次作业）----
+    got_ok = [str(x) for x in ((r or {}).get('stages_ok') or [])]
+    got_bad = (r or {}).get('stages_failed') or []
+    swaps = (r or {}).get('swaps') or []
     failed = (r or {}).get('failed_stage') or ''
     trail = (r or {}).get('stage_trail') or []
-    trail_u = [str(x).upper() for x in trail]
-    rest = [s for s in stages if str(s).upper() not in trail_u]
-    if failed:
-        raw_why = (r or {}).get('failed_why') or ''
-        why = stageplan.explain_failure(raw_why)
+    bad_u = {str(x.get('stage') or '').upper() for x in got_bad}
+    ok_u = {x.upper() for x in got_ok}
+    trail_u = {str(x).upper() for x in trail}
+    rest = [s for s in stages
+            if str(s).upper() not in ok_u | bad_u | trail_u]
+    if got_ok:
+        log('结算：成功 %d 关 —— %s' % (len(got_ok), '、'.join(got_ok)))
+    if got_bad:
+        for x in got_bad:
+            log('结算：%s 翻车 —— %s'
+                % (x.get('stage'), (x.get('why') or 'MAA 没给原因')[:60]))
+    if swaps:
+        log('这次自动换过 %d 次作业（换哪份都记在上面）' % len(swaps))
+    if failed and not got_bad:
+        why = stageplan.explain_failure((r or {}).get('failed_why') or '')
         log('卡在 %s：%s' % (failed, why or 'MAA 没给原因，看上面的报错'))
-        if rest:
-            log('后面 %s 没打（前一关没过，这些关在游戏里还没解锁）'
-                % '、'.join(rest))
-    elif trail:
-        log('打完了：%s' % '、'.join(trail))
+    if rest and (got_bad or failed):
+        log('没打的关：%s（前面卡住了，这些关排不进去）' % '、'.join(rest))
+    elif rest and not (r or {}).get('timed_out') and (r or {}).get('ok'):
+        log('这些关没有任何战斗记录，可能被跳过了：%s' % '、'.join(rest))
     elif (r or {}).get('timed_out'):
         log('跑满 %d 分钟还没结束，已停下%s'
             % (int((params.get('timeout') or 2 * 60 * 60) // 60),
                ('；最后一关是 %s' % trail[-1]) if trail else ''))
-    elif not (r or {}).get('ok', True):
+    elif not (r or {}).get('ok', True) and not got_ok:
         log('一关都没打到就失败了：%s'
             % ((r or {}).get('error') or '看上面的报错')[:120])
     return {'ok': bool((r or {}).get('ok', True)), 'mode': mode, 'stages': stages,
             'account': file, 'noNav': not with_nav,
-            'played': trail, 'failed': failed,
+            'played': got_ok or trail, 'failed': failed,
             'failedReason': stageplan.explain_failure((r or {}).get('failed_why') or ''),
+            'stagesOk': got_ok,
+            'stagesFailed': [{'stage': x.get('stage'), 'why': x.get('why')}
+                             for x in got_bad],
+            'swaps': swaps,
             'notPlayed': rest,
             'blocked': (plan or {}).get('blocked') or [],
             'precheck': plan,
@@ -1128,16 +1218,169 @@ def _run_fight_batch(batch, params, file, log, done):
                            % (r['failed'], '、'.join(r.get('notPlayed') or []) or '无'))
 
 
+# ---------------------------------------------------------------- sweep
+
+_SWEEP_TIER_CN = {'base': '普通关', 'ex': 'EX 关', 's': 'S 关',
+                  'mo': 'MO 关', 'f': 'F 关'}
+
+
+def _sweep_segments(keyword, log, tiers=None, raid='both'):
+    """活动 → 分段计划：普通关 / EX 普通 / EX 突袭 / S 关 …
+
+    为什么要分段（用户 2026-11-19 需求 4：「挂完普通导航到突袭，再挂突袭的
+    作业集合，再导航到 S，再挂 S 关卡」）：EX 和 S 是活动地图里不同的分区，
+    MAA 的 Copilot 只认**当前分区**上的关卡名，中间不重新导航就会「找不到
+    关卡」（见 ``_run_fight_batch`` 的注释）。同一段内换难度（普通 ↔ 突袭）
+    不用重导航——MaaCore 拿到 ``is_raid=true`` 自己点「切换突袭难度」。
+    """
+    from . import resources
+    res = resources.resolve(keyword)
+    stages = [s for s in (res.get('stages') or []) if not s.get('story')]
+    if not stages:
+        raise ValueError('认不出「%s」有哪些关（说活动名或代号前缀，如 覆潮之下 / SV）'
+                         % keyword)
+    groups = {}
+    for s in stages:
+        groups.setdefault(stageplan.kind_of(s.get('code')), []).append(s)
+    out = []
+    for k in (tiers or ['base', 'ex', 's']):
+        rows = groups.get(k) or []
+        if not rows:
+            continue
+        codes = [s['code'] for s in rows]
+        label = _SWEEP_TIER_CN.get(k, k.upper())
+        if k == 'ex' and raid != 'normal':
+            if raid in ('both', 'auto'):
+                out.append({'name': label + '·普通', 'codes': codes,
+                            'nav': codes[0], 'variant': 'normal'})
+            out.append({'name': label + '·突袭', 'codes': codes,
+                        'nav': codes[0], 'variant': 'raid'})
+        else:
+            # 险地（15+ 章 #s）在 MaaCore 里就是 is_raid=true
+            variant = 'raid' if (k == 's' and raid == 'raid') else 'normal'
+            out.append({'name': label, 'codes': codes, 'nav': codes[0],
+                        'variant': variant})
+    return out, (res.get('title') or keyword)
+
+
+def skill_sweep(params, log, tid=None):
+    """一键扫图：普通关 → EX 普通 → EX 突袭 → S 关，逐段导航 + 挂机
+
+    用户 2026-11-19 的期望 4：「skill 联动可以做到挂完普通导航到突袭，再挂
+    突袭的作业集合，再导航到 S，再挂 S 关卡」。三件事这里一起做掉：
+
+    1. **分段**：每段开始前重新导航（EX / S 是不同分区，不导航 MAA 认不出关卡）
+    2. **逐段作业池**：每关多挑几份，翻车自动换一份重挂该关，已成功的关不重打
+    3. **逐关播报**：``✔ X 战斗成功`` / ``✘ X 翻车：原因``，最后一段结算
+
+    段落可以用 ``tiers`` 挑（base / ex / s / mo / f），``raid`` 控制 EX 段：
+    ``both``（默认，普通 + 突袭）/ ``raid``（只突袭）/ ``normal``（只普通）。
+    """
+    raw = (params.get('stage') or params.get('keyword') or '').strip()
+    if not raw:
+        raise ValueError('缺 stage（活动名或代号前缀，如 覆潮之下 / SV）')
+    file = _account_file(params.get('account') or '')
+    d = _default_maa_dir()
+    tiers = params.get('tiers')
+    if isinstance(tiers, str):
+        tiers = [x.strip() for x in tiers.replace('，', ',').split(',')
+                 if x.strip()]
+    segs, title = _sweep_segments(raw, log, tiers=tiers,
+                                  raid=str(params.get('raid') or 'both'))
+    if not segs:
+        raise ValueError('「%s」里没有可挂的关卡' % title)
+    log('扫图计划（%s）：%d 段' % (title, len(segs)))
+    for i, seg in enumerate(segs, 1):
+        more = (' 等 %d 关' % len(seg['codes']) if len(seg['codes']) > 8 else '')
+        log('  %d) %s：%s%s' % (i, seg['name'],
+                               '、'.join(seg['codes'][:8]), more))
+
+    tail = (params.get('accountName') or params.get('tail')
+            or _account_name_tail(file) or '').strip()
+    if params.get('wakeup', True):
+        skill_wakeup({'account': file, 'accountName': tail}, log, tid=tid)
+
+    done, bad, all_swaps = [], [], []
+    total = params.get('timeout') or 3 * 60 * 60
+    for i, seg in enumerate(segs, 1):
+        log('=' * 32)
+        log('第 %d/%d 段：%s（%d 关）'
+            % (i, len(segs), seg['name'], len(seg['codes'])))
+        want = {c.upper(): seg['variant'] for c in seg['codes']}
+        try:
+            # 这一段只要这一档：普通段不会拿突袭作业顶，反之亦然
+            picks, pool = _select_ops(seg['codes'], file, log, wants=want,
+                                      strict=True, depth=3)
+        except ValueError as e:
+            log('这一段跳过：%s' % e)
+            continue
+        rows = maaplan.prepare_copilot(picks, d, log=log)
+        if params.get('nav', True):
+            # 段与段之间必须重新导航：EX / S 在活动地图里是不同分区
+            try:
+                skill_navigate({'stage': seg['nav'], 'account': file,
+                                'accountName': tail}, log)
+            except Exception as e:
+                log('导航没成功（%s），这一段先跳过' % e)
+                continue
+        spec = {'tasks': ['copilot'],
+                'copilotList': rows,
+                'noNav': True,          # 导航已经由上面做过
+                'maaDir': d,
+                'accountName': tail,
+                'clientType': _client_of(file),
+                'copilot': {'formation': params.get('formation', True),
+                            'support': True, 'sanityPotion': True},
+                'retry': {'pool': pool, 'maxRounds': 3}}
+        # 每段分一份时间预算（段数不定，均分最稳；单段至少 10 分钟）
+        share = max(600, int(total / max(1, len(segs))))
+        try:
+            r = maaplan.run_core(spec, tid=tid, timeout=share)
+        except Exception as e:
+            log('第 %d 段失败：%s: %s' % (i, type(e).__name__, e))
+            bad.append({'stage': '、'.join(seg['codes'][:3]) + '…',
+                        'why': '%s: %s' % (type(e).__name__, e),
+                        'segment': seg['name']})
+            continue
+        ok = [str(x) for x in (r.get('stages_ok') or [])]
+        fail = r.get('stages_failed') or []
+        done.extend(ok)
+        bad.extend([{'stage': x.get('stage'), 'why': x.get('why'),
+                     'segment': seg['name']} for x in fail])
+        all_swaps.extend(r.get('swaps') or [])
+        log('第 %d 段结束：成功 %d 关%s'
+            % (i, len(ok), ('，翻车 %d 关' % len(fail)) if fail else ''))
+
+    log('=' * 32)
+    log('扫图结束：成功 %d 关%s'
+        % (len(done), ('，翻车 %d 关' % len(bad)) if bad else ''))
+    if done:
+        log('成功：%s' % '、'.join(done))
+    for x in bad:
+        log('翻车：%s（%s）—— %s'
+            % (x.get('stage'), x.get('segment'),
+               (x.get('why') or 'MAA 没给原因')[:50]))
+    if all_swaps:
+        log('全程自动换过 %d 次作业' % len(all_swaps))
+    return {'ok': bool(done) and not bad, 'title': title,
+            'segments': len(segs),
+            'stagesOk': done, 'stagesFailed': bad, 'swaps': all_swaps,
+            'account': file}
+
+
 # ---------------------------------------------------------------- 调度
 
 SKILLS = {
     'wakeup':    ('唤醒游戏到主界面（可选按尾号切号）', skill_wakeup),
     'navigate':  ('从主界面导航到指定活动',            skill_navigate),
-    'fight':     ('自动战斗：预检练度/前置 → 编队/借人/开打', skill_fight),
+    'fight':     ('自动战斗：预检练度/前置 → 编队/借人/开打（失败自动换作业）',
+                  skill_fight),
     'skip_story': ('过剧情关卡（ST 关）',              skill_skip_story),
     'signin':    ('森空岛签到（单号/全部）',            skill_signin),
     'weekly':    ('周目编排：剧情+战斗按序全自动',      skill_weekly),
     'train':     ('培养干员：精英化/技能/专精，材料不足暂停', skill_train),
+    'sweep':     ('一键扫图：普通→突袭→S 逐段导航挂机（失败自动换作业）',
+                  skill_sweep),
 }
 
 # 哪些 skill 跑之前要先确认模拟器在。signin 走的是森空岛网页，跟游戏无关，
@@ -1145,7 +1388,7 @@ SKILLS = {
 # 塞进 SKILLS 元组：/api/skill/list 和助手的工具列表都直接吃 SKILLS 的形状，
 # 加字段会把两处都牵连一遍。
 _NEEDS_GAME = frozenset(['wakeup', 'navigate', 'fight', 'skip_story', 'weekly',
-                         'train'])
+                         'train', 'sweep'])
 
 
 def run_skill(name, params=None):

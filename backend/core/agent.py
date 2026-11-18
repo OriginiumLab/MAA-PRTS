@@ -408,6 +408,8 @@ TOOLS = [
           '打通就写 stages=["SV-EX-1@both"]；只刷材料写 @normal 或 raid="normal"。'
           '**用户点名某份作业（「用 41624」「换成令的单核」）时必须用 ops 传 '
           'copilotId**，光说"已经换了"没用——不传 ops 就会重新搜索挑回同一份。'
+          '每关会自动准备 2~3 份备选作业：某一关打不过就换下一份重挂这一关，'
+          '已经成功的关不会重打，日志逐关写「✔ 成功 / ✘ 翻车」。'
           '返回 taskId。',
           {'stages': {'type': 'array', 'items': {'type': 'string'},
                       'description': '关卡代号，可加 @ 后缀逐关指定难度：'
@@ -495,6 +497,27 @@ TOOLS = [
            'resume': {'type': 'boolean',
                       'description': 'true=接着上次没做完的培养计划'}},
           ['operators']),
+    _tool('skill_sweep',
+          '**一键扫图**：把一个活动按「普通关 → EX 普通 → EX 突袭 → S 关」'
+          '逐段挂完。段与段之间会自己重新导航（EX / S 是活动地图里不同的分区，'
+          '不导航 MAA 认不出关卡名）。每关打不过会自动换一份作业重挂这一关，'
+          '已经成功的关不会重打，日志里逐关播报「✔ 战斗成功 / ✘ 翻车」。'
+          '用户说「把这个活动从头打到尾」「EX 和 S 都帮我清了」时用它。'
+          '**调用前先跟用户确认：哪个活动、哪个号、要不要打突袭**。返回 taskId。',
+          {'stage': _STAGE,
+           'account': _ACC,
+           'tiers': {'type': 'array', 'items': {'type': 'string'},
+                     'description': '要扫哪几段，默认 base/ex/s；只想清 EX 和 S '
+                                    '就传 ["ex","s"]'},
+           'raid': {'type': 'string', 'enum': ['both', 'raid', 'normal'],
+                    'description': 'EX 段怎么打：both（默认）=先普通、再导航过去'
+                                   '打突袭；raid=只打突袭；normal=只打普通'},
+           'wakeup': {'type': 'boolean',
+                      'description': '默认 true（先唤醒到主界面）；游戏已经开着'
+                                     '并停在关卡列表时传 false'},
+           'accountName': {'type': 'string',
+                           'description': '切号名（官服=手机号后 4 位）'}},
+          ['stage']),
 ]
 
 
@@ -1268,7 +1291,8 @@ def _skill_via_guard(name, args, session):
         return out
     args = dict(args)
     desc = {'fight': '自动战斗', 'skip_story': '过剧情关',
-            'weekly': '周目编排', 'train': '培养干员'}.get(name, name)
+            'weekly': '周目编排', 'train': '培养干员',
+            'sweep': '一键扫图'}.get(name, name)
     if name == 'train':
         what = _train_what(args)
     else:
@@ -1316,6 +1340,10 @@ def _tool_skill_train(args, session=None):
     return _skill_via_guard('train', args, session)
 
 
+def _tool_skill_sweep(args, session=None):
+    return _skill_via_guard('sweep', args, session)
+
+
 _HANDLERS = {
     'list_accounts': _tool_list_accounts,
     'list_activities': _tool_list_activities,
@@ -1343,6 +1371,7 @@ _WRITE_HANDLERS = {
     'skill_skip_story': _tool_skill_skip_story,
     'skill_weekly': _tool_skill_weekly,
     'skill_train': _tool_skill_train,
+    'skill_sweep': _tool_skill_sweep,
 }
 
 
@@ -1483,17 +1512,20 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 **「停下来」** → stop_run
 
 ## 挂关 skill（2026-11-17 新增）：把流程拆开一步一步来
-
-七个 skill，各自独立跑后台、失败单独停：
+八个 skill，各自独立跑后台、失败单独停：
 - skill_wakeup：唤醒游戏到主界面（可按尾号切号）
 - skill_navigate：导航到活动（老活动 / 当期 / EX 都行）。stage 优先传**中文
   活动名**（「孤星」），代号/活动 id 也行——内部统一换，别自己换算
 - skill_skip_story：过剧情关（ST 关自动点开 + 跳剧情）
 - skill_fight：自动战斗（编队 / 借助战 / 吃理智药）。**默认不唤醒不导航**，
-  界面在哪就从哪直接开打；要全套（唤醒+导航）得用户明说或传 wakeup=true
+  界面在哪就从哪直接开打；要全套（唤醒+导航）得用户明说或传 wakeup=true。
+  **打不过会自动换一份作业重挂这一关**（已成功的关不重打），日志逐关播报
 - skill_signin：森空岛签到
 - skill_weekly：**周目编排**——ST 剧情自动过、主线按序批量打、EX 收尾
-- skill_train：**培养干员**——升精英化 / 技能等级 / 专精，可一次排多个。
+- skill_train：**培养干员**——升精英化 / 技能等级 / 专精，可一次排多个
+- skill_sweep：**一键扫图**——普通关 → EX 普通 → EX 突袭 → S 关，逐段重新
+  导航 + 挂机。用户说「这个活动从头打到尾」「EX 和 S 都清了」就用它，
+  比 skill_weekly 更适合「只要战斗、不要剧情编排」的场景
 
 **什么时候用 skill 而不是 build_run**：
 - 用户要「从唤醒开始，剧情关也帮我过，一口气打完」→ skill_weekly。
@@ -1503,6 +1535,8 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 - 游戏没开、卡登录页 → skill_wakeup
 - **单独打一组关**（界面已在关卡列表 / 用户自己导航好了）→ skill_fight，
   不要再补导航；游戏没开或还在主界面才需要先 skill_wakeup / skill_navigate
+- **把一个活动的普通关、EX（含突袭）、S 全清一遍** → skill_sweep。它自己
+  分段导航、每关失败换作业重挂，不用一段段手动调 skill_navigate + skill_fight
 - 签到 → skill_signin
 - **培养干员**（升精二 / 技能 7 / 专精几技能）→ skill_train
 
@@ -1573,6 +1607,10 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
 - **换作业要真的换**：用户说「用 41624 那份」「换成令的单核」时，先 find_ops
   拿到 copilotId，再调 skill_fight 时用 ops=[{stage, copilotId}] 钉住。只把
   文案改成"已换"是没用的——不传 ops 就会重新搜索，排序又挑回原来那份。
+- **翻车会自动重挂，不用你重排**：skill_fight / skill_sweep 每关都备了
+  2~3 份作业，某关打不过会换下一份自动重挂这一关，**已经成功的关不会重打**。
+  日志里会出现「✘ X 翻车：原因」「换作业重挂：X #a → #b」「✔ X 战斗成功」，
+  照实转述换了哪几关、最后成没成；不要自己说"我再重跑一遍"。
 - 不确定能配什么就先调 maa_capabilities，别猜
 - 回答用中文，简洁，别写长篇。不要输出 JSON 给用户看。
 - 涉及具体操作时，最后告诉用户去界面上哪看结果（跑机面板 / 左侧账号栏）

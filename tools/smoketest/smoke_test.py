@@ -3815,26 +3815,27 @@ def check_raid_order(tmp):
     skills._default_maa_dir = lambda: tmp
     try:
         logs = []
-        rows = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '', logs.append)
+        rows, _retry = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '',
+                                          logs.append)
         seq = [(r['stage_name'], r['is_raid']) for r in rows]
         # ① 默认只打突袭——不再先刷一遍普通
         assert seq == [('SV-EX-1', True), ('SV-EX-2', True)], seq
 
         # ② both：普通 → 突袭两条，顺序不能反
-        rows_b = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='both')
+        rows_b, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='both')
         seq_b = [(r['stage_name'], r['is_raid']) for r in rows_b]
         assert seq_b == [('SV-EX-1', False), ('SV-EX-1', True)], seq_b
 
         # ③ raid=False / 'normal'：只排普通
-        rows2 = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid=False)
+        rows2, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid=False)
         assert [(r['stage_name'], r['is_raid']) for r in rows2] == [('SV-EX-1', False)]
-        rows2b = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='normal')
+        rows2b, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='normal')
         assert [(r['stage_name'], r['is_raid']) for r in rows2b] == [('SV-EX-1', False)]
 
         # ④ 逐关覆盖：EX-1 只突袭、EX-2 普通+突袭（agent 承诺的混合计划）
         want = {'SV-EX-1': 'raid', 'SV-EX-2': 'both'}
-        rows_w = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '', logs.append,
-                                     raid='auto', wants=want)
+        rows_w, _ = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '', logs.append,
+                                       raid='auto', wants=want)
         seq_w = [(r['stage_name'], r['is_raid']) for r in rows_w]
         assert seq_w == [('SV-EX-1', True), ('SV-EX-2', False),
                          ('SV-EX-2', True)], seq_w
@@ -3857,7 +3858,8 @@ def check_raid_order(tmp):
             return fake_search(st, snap, pages=pages, limit=limit)
 
         copilot.search = fake_search_mixed
-        rows_skip = skills._prepare_ops(['SV-EX-1', 'XX-1'], '', logs_skip.append)
+        rows_skip, _ = skills._prepare_ops(['SV-EX-1', 'XX-1'], '',
+                                           logs_skip.append)
         assert [r['stage_name'] for r in rows_skip] == ['SV-EX-1'], rows_skip
         assert any('跳过 XX-1' in x for x in logs_skip), logs_skip
         copilot.search = fake_search
@@ -3962,14 +3964,138 @@ def check_agent_tool_chain(tmp):
     skills._default_maa_dir = lambda: tmp
     try:
         logs = []
-        rows = skills._prepare_ops(['SV-EX-1'], '', logs.append,
-                                   fixed={'SV-EX-1': 98765})
+        rows, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                      fixed={'SV-EX-1': 98765})
         assert hits['search'] == 0, '指名作业后不许再搜作业站'
         assert rows[0]['filename'].endswith('98765.json'), rows
         assert rows[0]['is_raid'] is True, rows
         assert any('按指定作业 #98765' in x for x in logs), logs
     finally:
         copilot.search, copilot.fetch_prepared, skills._default_maa_dir = old
+
+
+def check_battle_retry(tmp):
+    """B43：逐关战报 + 换作业重挂 + 分段扫图（用户 2026-11-19 的四条需求）
+
+    ① 一关打完日志有「✔ X 战斗成功」，刷材料重复结算不刷屏
+    ② 作业翻车时日志明确「✘ X 翻车：原因」，能看出是哪一关
+    ③ 失败后换下一份作业重挂这一关，**已成功的关不重排**
+    ④ skill_sweep 的分段顺序：普通关 → EX 普通 → EX 突袭 → S 关
+    """
+    _reset_config(tmp)
+    from core import copilot, maaplan, resources, skills
+
+    # ① 逐关成功
+    st = {'stage': 'SV-EX-1', 'cleared': {}, 'results': [], 'cur_cid': 41623}
+    logs = []
+    maaplan._mark_clear({'stats': [{'itemName': '固源岩', 'addQuantity': 2}]},
+                        logs.append, st)
+    assert len(st['results']) == 1, st
+    r0 = st['results'][0]
+    assert r0['stage'] == 'SV-EX-1' and r0['ok'] is True and r0['cid'] == 41623, r0
+    assert any('✔ SV-EX-1 战斗成功' in x and '固源岩' in x for x in logs), logs
+    # 同一关再结算一次（刷材料）：只喊一次「战斗成功」
+    maaplan._mark_clear({'stats': []}, logs.append, st)
+    assert sum(1 for x in logs if '战斗成功' in x) == 1, logs
+
+    # ② 翻车要说清是哪一关
+    st2 = {'stage': 'SV-EX-2', 'cleared': {}, 'results': []}
+    logs2 = []
+    maaplan._mark_fail({'chain': 'Copilot', 'why': 'not enough operators'},
+                       logs2.append, st2)
+    assert st2['results'] and st2['results'][0]['ok'] is False, st2
+    assert any('✘ SV-EX-2 翻车' in x for x in logs2), logs2
+    # 不是 Copilot 链挂了（例如 StartUp）：没有「哪一关」，不记到关卡上
+    st2b = {'stage': 'SV-EX-2', 'cleared': {}, 'results': []}
+    maaplan._mark_fail({'chain': 'StartUp', 'why': 'x'}, logs2.append, st2b)
+    assert st2b['results'] == [], st2b
+    # 同一关先失败后成功：算成功
+    ok, bad = maaplan._tally([{'stage': 'A', 'ok': False, 'why': 'x'},
+                              {'stage': 'A', 'ok': True, 'why': ''}])
+    assert ok == ['A'] and bad == [], (ok, bad)
+
+    # ③ 换作业重挂：只挂没成功的那关，并且换成候选里的下一份
+    def fake_fetch(cid):
+        cid = int(cid)
+        code = 'SV-EX-%d' % (2 if cid in (102, 202) else 1)
+        return ({'stage_name': code}, copilot.DIFF_RAID, code, [], True)
+
+    class Eng:
+        def __init__(self):
+            self.appended, self.chains = [], []
+
+        def append(self, typ, params):
+            self.appended.append((typ, params))
+            self.chains.append({'chain': typ, 'ok': True, 'stopped': False})
+
+        def start(self):
+            return True
+
+        def running(self):
+            return False
+
+        def wait(self, timeout=0, poll=0.5):
+            return True
+
+        def stop(self):
+            pass
+
+    old = (copilot.fetch_prepared, skills._default_maa_dir)
+    copilot.fetch_prepared = fake_fetch
+    skills._default_maa_dir = lambda: tmp
+    try:
+        eng = Eng()
+        state = {'stage': 'SV-EX-2', 'cleared': {'SV-EX-1': True},
+                 'results': [{'stage': 'SV-EX-1', 'ok': True, 'why': '',
+                              'at': 0, 'cid': 101},
+                             {'stage': 'SV-EX-2', 'ok': False, 'why': 'x',
+                              'at': 0, 'cid': 102}],
+                 'tried': {'SV-EX-1@raid': 101, 'SV-EX-2@raid': 102},
+                 'by_file': {}, 'cid_of': {}, 'last_log': 0}
+        spec = {'copilotList': [
+                    {'filename': 'SV-EX-1_101.json', 'stage_name': 'SV-EX-1',
+                     'is_raid': True},
+                    {'filename': 'SV-EX-2_102.json', 'stage_name': 'SV-EX-2',
+                     'is_raid': True}],
+                'retry': {'maxRounds': 3,
+                          'pool': {'SV-EX-1@raid': [101, 201],
+                                   'SV-EX-2@raid': [102, 202]}}}
+        logs3 = []
+        swapped, mark = maaplan._retry_failed(eng, spec, state, logs3.append,
+                                              tmp, time.time() + 600)
+        assert len(eng.appended) == 1, eng.appended
+        rows = eng.appended[0][1]['copilot_list']
+        assert [r['stage_name'] for r in rows] == ['SV-EX-2'], rows
+        assert rows[0]['filename'].endswith('_202.json'), rows
+        assert swapped and swapped[0]['to'] == 202, swapped
+        assert mark is not None, '重试过就要给收尾一个 chains 分界'
+        assert any('换作业重挂：SV-EX-2' in x for x in logs3), logs3
+        assert not any('SV-EX-1' in x for x in logs3), '已成功的关不该重挂'
+    finally:
+        copilot.fetch_prepared, skills._default_maa_dir = old
+
+    # ④ 分段扫图：普通 → EX 普通 → EX 突袭 → S
+    old_res = resources.resolve
+    resources.resolve = lambda kw: {
+        'mode': 'activity', 'title': '测试活动', 'stages': [
+            {'code': 'SV-1', 'story': False, 'stageId': 'act55side_01'},
+            {'code': 'SV-2', 'story': False, 'stageId': 'act55side_02'},
+            {'code': 'SV-EX-1', 'story': False, 'stageId': 'act55side_ex01'},
+            {'code': 'SV-S-1', 'story': False, 'stageId': 'act55side_s01'},
+            {'code': 'SV-ST-1', 'story': True, 'stageId': 'act55side_st01'}]}
+    try:
+        segs, title = skills._sweep_segments('SV', lambda *_: None)
+        assert [s['name'] for s in segs] == ['普通关', 'EX 关·普通',
+                                            'EX 关·突袭', 'S 关'], segs
+        assert [s['variant'] for s in segs] == ['normal', 'normal', 'raid',
+                                                'normal'], segs
+        assert all('ST-' not in c for s in segs for c in s['codes']), segs
+        segs2, _ = skills._sweep_segments('SV', lambda *_: None, raid='normal')
+        assert [s['name'] for s in segs2] == ['普通关', 'EX 关', 'S 关'], segs2
+        segs3, _ = skills._sweep_segments('SV', lambda *_: None, tiers=['ex'])
+        assert [s['name'] for s in segs3] == ['EX 关·普通', 'EX 关·突袭'], segs3
+    finally:
+        resources.resolve = old_res
 
 
 # ---------------------------------------------------------------- 入口
@@ -4033,6 +4159,7 @@ def main():
         r.check('B40 全局 json 不炸账号列表（train-plan/畸形 account 段）', lambda: check_config_globals(tmp))
         r.check('B41 每关只打要打的档（默认突袭/@后缀逐关/不再垫普通）', lambda: check_raid_order(tmp))
         r.check('B42 工具调用断链自愈 + 点名作业真的生效', lambda: check_agent_tool_chain(tmp))
+        r.check('B43 逐关战报 + 失败换作业重挂 + 分段扫图', lambda: check_battle_retry(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

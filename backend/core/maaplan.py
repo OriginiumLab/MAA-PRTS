@@ -561,6 +561,27 @@ def prepare_copilot(ops, maa_dir, log=None):
     return rows
 
 
+def _copilot_params(rows, spec):
+    """Copilot 任务的参数（首轮和「换作业重挂」共用一份，别两处各写一遍）
+
+    用户在 MAA「自动战斗」页常勾的三项默认都开：
+    formation 自动编队 / support_unit_usage 借干员（1=仅缺人时）/
+    use_sanity_potion 理智不够时吃药。
+    """
+    form = spec.get('copilot') or {}
+    try:
+        support = int(form.get('support', 1))
+    except (TypeError, ValueError):
+        support = 1
+    return {'copilot_list': rows,
+            'formation': bool(form.get('formation', True)),
+            'add_trust': False,
+            'ignore_requirements': False,
+            'support_unit_usage': support if support in (0, 1, 2) else 1,
+            'use_sanity_potion': bool(form.get('sanityPotion', True)),
+            'formation_index': 1}
+
+
 def core_tasks(spec, maa_dir=None):
     """spec → MaaCore 的 ``[(任务类型, 参数), …]``
 
@@ -623,22 +644,7 @@ def core_tasks(spec, maa_dir=None):
             rows = spec.get('copilotList') or []
             if not rows:
                 continue
-            # 用户在 MAA「自动战斗」页常勾的这三项，默认都开：
-            # formation          自动编队
-            # support_unit_usage 借干员：0 不借 / 1 仅缺人时 / 2 始终
-            # use_sanity_potion  理智不够时吃理智药
-            try:
-                support = int(form.get('support', 1))
-            except (TypeError, ValueError):
-                support = 1
-            p = {'copilot_list': rows,
-                 'formation': bool(form.get('formation', True)),
-                 'add_trust': False,
-                 'ignore_requirements': False,
-                 'support_unit_usage': support if support in (0, 1, 2) else 1,
-                 'use_sanity_potion': bool(form.get('sanityPotion', True)),
-                 'formation_index': 1}
-            out.append(('Copilot', p))
+            out.append(('Copilot', _copilot_params(rows, spec)))
         elif ttype == 'Recruit':
             out.append(('Recruit', {'max_times': 4, 'refresh': True,
                                     'select': [3, 4], 'confirm': [3, 4],
@@ -751,12 +757,25 @@ def run_core(spec, tid=None, timeout=None):
     cp_rows = spec.get('copilotList') or []
     by_file = {os.path.basename(r.get('filename') or ''): r.get('stage_name')
                for r in cp_rows if r.get('filename')}
+    cid_of = {os.path.basename(r.get('filename') or ''): _cid_of(r.get('filename'))
+              for r in cp_rows if r.get('filename')}
+    # 首轮已经在用哪份作业：重试时靠它挑「下一份」，否则会挑回同一份
+    tried = {}
+    for r in cp_rows:
+        key = '%s@%s' % (str(r.get('stage_name') or '').upper(),
+                         'raid' if r.get('is_raid') else 'normal')
+        cid = cid_of.get(os.path.basename(r.get('filename') or ''))
+        if cid:
+            tried[key] = cid
     # state 是回调线程和跑机线程共用的「进度便签」：
     #   stage/trail  跑到第几关（收尾结算用）
+    #   results      逐关战斗结果 [{'stage','ok','why','cid','at'}]，重试和结算都看它
+    #   cleared      已打过的关（同一关刷多次只喊一次「战斗成功」）
     #   last_log     最后一次往任务日志写字的时间（心跳线程用它算「多久没动静」）
     #   pause        材料不足之类的暂停原因（回调里置位，run_core 收尾时上报）
     #   done/summary 干员培养的成果（skill_train 用来算还剩哪些没做）
-    state = {'stage': '', 'trail': [], 'by_file': by_file,
+    state = {'stage': '', 'trail': [], 'by_file': by_file, 'cid_of': cid_of,
+             'tried': tried, 'results': [], 'cleared': {}, 'cur_cid': 0,
              'actions': {}, 'deployed': [], 'nodes': {},
              'last_log': time.time(), 'pause': '', 'pause_detail': '',
              'done': {}, 'summary': {}, 'stop': None,
@@ -908,7 +927,14 @@ def run_core(spec, tid=None, timeout=None):
                                        % nav_why)
 
         total = timeout or (60 * 60 * 8)
+        budget = time.time() + total
         finished = _wait_run(eng, total, log, state)
+        # ---- 换作业重挂：翻车的那几关再试一次（已成功的关不重打）----------
+        # 用户 2026-11-19 需求 3：作业集里这一关的作业不行就换一份别的，
+        # 自动接着挂，并且日志里说清楚换了哪份。
+        swapped, chains_mark = [], None
+        if state.get('results') and spec.get('retry'):
+            swapped, chains_mark = _retry_failed(eng, spec, state, log, d, budget)
         if not finished and not state.get('pause'):
             log('等了 %d 分钟还没跑完，先停下' % (total // 60))
             eng.stop()
@@ -928,7 +954,10 @@ def run_core(spec, tid=None, timeout=None):
                 log('界面已退回主界面')
         # 成功与否只看有没有任务链报错：AllTasksCompleted 在链报错后照样会来，
         # 单纯等它等于「永远成功」。次数打满被 Stop 的那次是正常结束。
-        bad = [c for c in eng.chains if not c.get('ok')]
+        # 重试过的话只看重试那一轮的链，否则第一轮的失败会把结果盖掉。
+        tail_chains = (eng.chains[chains_mark:] if chains_mark is not None
+                       else eng.chains)
+        bad = [c for c in tail_chains if not c.get('ok')]
         stopped = [c for c in eng.chains if c.get('stopped')]
         if stopped and not state.get('pause'):
             log('正常收尾：%s（次数打满 / 理智不足 / 手动停）'
@@ -938,6 +967,7 @@ def run_core(spec, tid=None, timeout=None):
         for c in bad:
             if not state.get('pause'):
                 log('[失败] %s %s' % (c['chain'], c.get('why') or ''))
+        ok_list, still = _tally(state.get('results') or [])
         failed_stage = state['stage'] if bad else ''
         failed_why = next((c.get('why') for c in bad if c.get('why')), '') if bad else ''
         return {'ok': (finished and not bad) or bool(state.get('pause')),
@@ -947,6 +977,9 @@ def run_core(spec, tid=None, timeout=None):
                 'failed_stage': failed_stage,
                 'failed_why': failed_why,
                 'stage_trail': state['trail'],
+                'stages_ok': ok_list,
+                'stages_failed': still,
+                'swaps': swapped,
                 'paused': state.get('pause') or '',
                 'pauseDetail': state.get('pause_detail') or '',
                 'trained': state.get('done') or {},
@@ -1201,6 +1234,10 @@ def _on_core_event(ev, log, tid, state=None):
         log('[错误] %s' % (ev.get('text') or ''))
     elif kind in ('chain_start', 'chain_done', 'chain_failed', 'chain_stop'):
         log(ev.get('text') or '')
+        # 失败要落到「哪一关」上：Copilot 链一挂，后面的关就不会再打了，
+        # 用户需要立刻知道是这关的锅（2026-11-19 需求 1）
+        if kind == 'chain_failed':
+            _mark_fail(ev, log, state)
     elif kind == 'connected':
         log('模拟器已连接')
     elif kind == 'done':
@@ -1226,6 +1263,8 @@ def _on_core_event(ev, log, tid, state=None):
                 log('换作业：%s' % code)
                 if state is not None:
                     state['stage'] = code
+                    fn = os.path.basename(str(data.get('file_name') or ''))
+                    state['cur_cid'] = (state.get('cid_of') or {}).get(fn) or 0
                     if code not in state['trail']:
                         state['trail'].append(code)
         elif what == 'CopilotAction':
@@ -1266,6 +1305,9 @@ def _on_core_event(ev, log, tid, state=None):
                 log('关卡：%s' % name)
         elif what == 'StageDrops':
             items = data.get('stats') or []
+            # 「这一关过了」的唯一硬信号：结算掉落。先记结果再写掉落明细，
+            # 这样日志顺序是「✔ X 战斗成功（掉落…）」
+            _mark_clear(data, log, state)
             if items:
                 log('掉落：' + '、'.join(
                     '%s×%s' % (i.get('itemName'), i.get('addQuantity'))
@@ -1347,6 +1389,22 @@ def _nav_of(data):
     return data.get('nav_name') or data.get('stage_name') or ''
 
 
+def _cid_of(filename):
+    """作业文件名 → copilotId（``SV-EX-1_41623.json`` → 41623）
+
+    prepare_copilot 按「代号_id.json」落盘，所以这里能反查。重试要「换一份」
+    就得知道当前用的是哪一份。
+    """
+    base = os.path.basename(str(filename or ''))
+    if '_' not in base:
+        return 0
+    tail = base.rsplit('_', 1)[-1].rsplit('.', 1)[0]
+    try:
+        return int(tail)
+    except ValueError:
+        return 0
+
+
 def _stage_of_file(data, state=None):
     """作业文件名 → 关卡代号（预检说打不了的和实际卡住的要能对上）
 
@@ -1358,6 +1416,174 @@ def _stage_of_file(data, state=None):
     if fn and fn in table:
         return table[fn]
     return (_nav_of(data) or '').strip()
+
+
+def _mark_clear(data, log, state):
+    """一关打完了（MaaCore 发 StageDrops）→ 记成功 + 日志「✔ X 战斗成功」
+
+    用户 2026-11-19 的要求：「挂完一关就显示一关战斗成功」。以前一场仗
+    3 分钟只有「换作业」「掉落」两行，看不出这关到底过没过。
+    刷材料（Fight）时同一关会反复结算，只在该关第一次成功时喊一声。
+    """
+    if state is None:
+        return
+    cur = (state.get('stage') or '').strip()
+    code = str(((data.get('stage') or {}).get('stage_code')) or '').strip()
+    name = cur or code
+    if not name:
+        return
+    key = name.upper()
+    first = key not in (state.get('cleared') or {})
+    state.setdefault('cleared', {})[key] = True
+    state.setdefault('results', []).append(
+        {'stage': name, 'ok': True, 'why': '', 'at': time.time(),
+         'cid': state.get('cur_cid') or 0})
+    if not first:
+        return
+    drops = []
+    for it in (data.get('stats') or [])[:3]:
+        nm = it.get('itemName') or ''
+        n = it.get('addQuantity')
+        if nm:
+            drops.append('%s×%s' % (nm, n) if n is not None else nm)
+    log('✔ %s 战斗成功%s'
+        % (name, ('（' + '、'.join(drops) + '）') if drops else ''))
+
+
+def _mark_fail(ev, log, state):
+    """任务链失败 → 明确指出「哪一关翻车、为什么」
+
+    用户 2026-11-19 的要求：作业翻车时日志要看得见是哪关。以前收尾只有
+    一句「[失败] Copilot」，得自己翻 asst.log 才知道卡在哪。
+    """
+    if state is None:
+        return
+    chain = str(ev.get('chain') or '')
+    if 'Copilot' not in chain:
+        return
+    cur = (state.get('stage') or '').strip()
+    if not cur:
+        return
+    if state.get('fail_stage') == cur and time.time() - state.get('fail_at', 0) < 10:
+        return
+    state['fail_stage'] = cur
+    state['fail_at'] = time.time()
+    why = str(ev.get('why') or '').strip()
+    try:
+        from . import stageplan
+        why = stageplan.explain_failure(why) or why
+    except Exception:
+        pass
+    state.setdefault('results', []).append(
+        {'stage': cur, 'ok': False, 'why': why, 'at': time.time(),
+         'cid': state.get('cur_cid') or 0})
+    log('✘ %s 翻车：%s' % (cur, why or 'MAA 没给原因（看上面的 [MAA] 报错）'))
+
+
+def _tally(results):
+    """逐关结果 → (成功的关, 仍然失败的关)；同一关以最后一次为准"""
+    ok, bad = [], {}
+    for r in results or []:
+        name = str(r.get('stage') or '').strip()
+        if not name:
+            continue
+        k = name.upper()
+        if r.get('ok'):
+            if k not in {x.upper() for x in ok}:
+                ok.append(name)
+            bad.pop(k, None)
+        else:
+            bad[k] = r
+    return ok, list(bad.values())
+
+
+def _retry_failed(eng, spec, state, log, d, deadline):
+    """一轮打完，把翻车的关**换一份作业**重挂（同段内，不重新导航）
+
+    用户 2026-11-19 的需求 3：「某关战斗失败了，修改作业集中该关卡的作业，
+    换其他作业自动挂这关（重新搞作业集应该排查已经成功的关卡，不用重复挂到
+    之前打完的关卡了）」。
+
+    所以每轮只重排「没成功」的关，每关取候选池里**下一份没试过**的作业；
+    某关的候选都试过了就跳过它（再用同一份只会同样翻车）。
+
+    同一个 Engine 内直接 append 新的 Copilot 任务：MaaCore 的队列支持追加，
+    不必重新 open/connect/导航——省掉每轮十几秒，界面也留在原地。
+
+    返回 ``(swapped, mark)``；``mark`` 是重试前 ``eng.chains`` 的长度（可能是 0），
+    收尾判失败要从它往后看，否则第一轮的失败会把重试成功的结果盖掉。真的没
+    进入重试时返回 ``([], None)``——0 是合法的分界，不能拿它当「没重试」。
+    """
+    retry = spec.get('retry') or {}
+    pool = retry.get('pool') or {}
+    rounds = int(retry.get('maxRounds') or 1)
+    order = []
+    for r in (spec.get('copilotList') or []):
+        code = str(r.get('stage_name') or '').strip()
+        if code:
+            order.append({'stage': code,
+                          'variant': 'raid' if r.get('is_raid') else 'normal'})
+    if rounds <= 1 or not order or not pool:
+        return [], None
+
+    mark = len(eng.chains)
+    # 已经试过的作业（首轮那份算一份）：换过的不再换回来，否则两轮就在
+    # #102 → #202 → #102 之间打转，白烧理智
+    attempted = {}
+    for k, v in (state.get('tried') or {}).items():
+        attempted[k] = {v}
+    swapped = []
+    for rnd in range(2, rounds + 1):
+        left = deadline - time.time()
+        if left <= 30:
+            log('没时间再重挂了（总时长到上限），停下')
+            break
+        ok_now = {str(k).upper() for k in (state.get('cleared') or {})}
+        pend = [o for o in order if o['stage'].upper() not in ok_now]
+        if not pend:
+            break
+        new_ops, picked = [], []
+        for o in pend:
+            key = '%s@%s' % (o['stage'].upper(), o['variant'])
+            cids = [x for x in (pool.get(key) or []) if x]
+            used = attempted.setdefault(key, set())
+            nxt = next((c for c in cids if c not in used), None)
+            if nxt is None:
+                continue
+            new_ops.append({'copilotId': nxt, 'stageCode': o['stage'],
+                            'variant': o['variant']})
+            picked.append((key, o['stage'], o['variant'],
+                           (state.get('tried') or {}).get(key) or 0, nxt))
+        if not new_ops:
+            log('没有更多能换的作业了（每关的候选都试过）')
+            break
+        rows = prepare_copilot(new_ops, d, log=lambda m: log('  ' + m))
+        for key, code, var, prev, nxt in picked:
+            used = attempted.setdefault(key, set())
+            used.add(nxt)
+            state.setdefault('tried', {})[key] = nxt
+            swapped.append({'stage': code, 'variant': var,
+                            'from': prev, 'to': nxt})
+            log('换作业重挂：%s %s #%s → #%s'
+                % (code, '突袭' if var == 'raid' else '普通', prev or '?', nxt))
+        state['stage'] = ''
+        state['cur_cid'] = 0
+        state['by_file'] = {os.path.basename(r.get('filename') or ''):
+                            r.get('stage_name') for r in rows if r.get('filename')}
+        state['cid_of'] = {os.path.basename(r.get('filename') or ''):
+                           _cid_of(r.get('filename')) for r in rows if r.get('filename')}
+        eng.append('Copilot', _copilot_params(rows, spec))
+        done_n = len(order) - len(pend)
+        log('第 %d 轮：重挂 %d 关%s'
+            % (rnd, len(new_ops),
+               '（已成功的 %d 关不重打）' % done_n if done_n else ''))
+        if not eng.start():
+            raise RuntimeError('重挂时 AsstStart 返回失败')
+        if not _wait_run(eng, max(60.0, left), log, state):
+            log('第 %d 轮超时，先停下' % rnd)
+            eng.stop()
+            break
+    return swapped, mark
 
 
 def _wait_chain(eng, chain, log, timeout=300):
