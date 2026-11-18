@@ -104,7 +104,8 @@ def difficulty_text(flags: int) -> str:
 def entry_variants(flags: int, variant=None, stage_name=None) -> list:
     """作业集条目在 MAA 里要写成哪几条（返回 IsRaid 列表）
 
-    variant='normal'/'raid' 是从「普通 / 突袭」那一行加的，只写对应那一条；
+    variant='normal'/'raid' 是从「普通 / 突袭」那一行加的，只写对应那一条
+    （选了突袭就一定是 IsRaid=true，不再看作业自己的位标志）；
     不带 variant（卡片、详情弹窗）沿用 MAA 的做法，按作业自身的难度标志展开。
 
     stage_name（作业自己的关卡 id）是最终裁判，覆盖上面的位标志：
@@ -119,10 +120,14 @@ def entry_variants(flags: int, variant=None, stage_name=None) -> list:
             return [True]
         if str(stage_name).startswith(('easy_', 'tough_')):
             return [False]
-    if variant == 'normal' and flags & DIFF_NORMAL:
-        return [False]
-    if variant == 'raid' and flags & DIFF_RAID:
+    if variant == 'raid':
+        # 用户 / 前端明确选了突袭这一行：就写突袭。以前这里还要看作业自身的
+        # 难度位标志（`flags & DIFF_RAID`），通用位或标漏的作业会被**静默写成
+        # 普通**——用户 2026-11-19 报「选了突袭还是只打普通」就是这条。
+        # 能不能真进去由 maaplan.prepare_copilot 保证：同一关前面垫一条普通。
         return [True]
+    if variant == 'normal':
+        return [False]
     out = [False] if flags & DIFF_NORMAL else []
     if flags & DIFF_RAID:
         out.append(True)
