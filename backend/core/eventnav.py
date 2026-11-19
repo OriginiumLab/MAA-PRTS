@@ -69,6 +69,18 @@ ENTRIES = {
             's': {'tpl': 'TL_z3.png', 'label': '世纪之春',
                   'roi': [960, 630, 320, 90], 'tap': [1141, 662]},
         },
+        # 活动地图上除了关卡分区，还有两个「入口节点」，和分区在同一屏，
+        # 但点进去不是关卡列表：小游戏（战时新闻委员会）和活动商店。
+        # 这两项由 MAA 的 Custom 任务接手，所以导航只负责把界面点到门口
+        # （见 maatools.py 顶部注释）。
+        'tools': {
+            'minigame': {'tpl': 'TL_mini.png', 'label': '战时新闻委员会',
+                         'roi': [40, 165, 200, 130], 'tap': [127, 227],
+                         'wait': 3.0},
+            'shop': {'tpl': 'TL_shop.png', 'label': '炮火所掩埋的',
+                     'roi': [880, 120, 200, 130], 'tap': [975, 185],
+                     'wait': 3.0},
+        },
     },
 }
 
@@ -264,24 +276,12 @@ def _fail_shot(touch, name, log):
         pass
 
 
-def run(touch, stage_code, log=None):
-    """把界面带到某关所在的分区关卡列表 → ``(ok, 说明)``"""
-    log = log or (lambda *_: None)
-    pre = prefix_of(stage_code)
-    ent = ENTRIES.get(pre)
-    if not ent:
-        return False, '「%s」没有当期活动导航' % (pre or stage_code)
-    kind = stagenav.zone_kind(stage_code)
-    if kind not in ('base', 'ex', 's', 'mo'):
-        kind = 'base'
-    if is_expired(pre):
-        log('注意：「%s」的导航标定于 %s（有效期到 %s），活动改过版的话'
-            '可能点不到，需要重新标定'
-            % (ent.get('name') or pre, ent.get('wrote') or '?',
-               ent.get('until') or '?'))
-    log('走当期活动导航：%s（%s）→ %s 分区'
-        % (ent.get('name') or pre, pre, kind.upper()))
+def _to_map(touch, pre, ent, log):
+    """「终端页 → 点活动提示条 → 活动地图」→ ``(ok, 截图, 说明)``
 
+    关卡导航和小游戏/商店入口都要先走这一段，所以单独拎出来：两处如果各写
+    一遍，改一处忘另一处就会出现「关卡能进、商店进不去」。
+    """
     p = stagenav.points()
     entry = ent.get('entry') or {}
     data = touch.shot()
@@ -307,14 +307,14 @@ def run(touch, stage_code, log=None):
         else:
             # 可能根本不在主界面（在活动地图 / 商店里点大卡没用）
             if not _to_home(touch, log):
-                return False, '回不到主界面（可能卡在某个弹窗里）'
+                return False, b'', '回不到主界面（可能卡在某个弹窗里）'
             touch.tap(*p['terminalCard'])
             time.sleep(2.0)
             data = touch.shot()
             if not _find(data, entry)[0]:
                 _fail_shot(touch, pre, log)
-                return False, ('终端页上没找到活动提示条（活动可能已结束，'
-                               '或这版 UI 改了，要重新标定导航）')
+                return False, b'', ('终端页上没找到活动提示条（活动可能已结束，'
+                                    '或这版 UI 改了，要重新标定导航）')
 
     # ---- 2) 点活动提示条 → 活动地图（约 5 秒过场动画）----
     before = data
@@ -326,8 +326,32 @@ def run(touch, stage_code, log=None):
         after = touch.shot()
     if before and after and not stagenav._moved(before, after):
         _fail_shot(touch, pre, log)
-        return False, '点了活动提示条画面没变（活动可能已结束了）'
+        return False, b'', '点了活动提示条画面没变（活动可能已结束了）'
     log('进活动地图了')
+    return True, after, '活动地图'
+
+
+def run(touch, stage_code, log=None):
+    """把界面带到某关所在的分区关卡列表 → ``(ok, 说明)``"""
+    log = log or (lambda *_: None)
+    pre = prefix_of(stage_code)
+    ent = ENTRIES.get(pre)
+    if not ent:
+        return False, '「%s」没有当期活动导航' % (pre or stage_code)
+    kind = stagenav.zone_kind(stage_code)
+    if kind not in ('base', 'ex', 's', 'mo'):
+        kind = 'base'
+    if is_expired(pre):
+        log('注意：「%s」的导航标定于 %s（有效期到 %s），活动改过版的话'
+            '可能点不到，需要重新标定'
+            % (ent.get('name') or pre, ent.get('wrote') or '?',
+               ent.get('until') or '?'))
+    log('走当期活动导航：%s（%s）→ %s 分区'
+        % (ent.get('name') or pre, pre, kind.upper()))
+
+    ok, after, why = _to_map(touch, pre, ent, log)
+    if not ok:
+        return False, why
 
     # ---- 3) 活动地图 → 基础区（普通关卡界面）----
     base = (ent.get('zones') or {}).get('base')
@@ -354,6 +378,49 @@ def run(touch, stage_code, log=None):
     return True, '已切到 %s 分区（%s）' % (kind.upper(), tgt.get('label') or '')
 
 
+def run_tool(touch, tool, prefix=None, log=None):
+    """把界面带到活动地图上的某个入口节点 → ``(ok, 说明)``
+
+    ``tool`` 就是 ``ENTRIES[...]['tools']`` 的键（``minigame`` / ``shop``），
+    :mod:`maatools` 按功能名映射过来。点完只做「画面有没有变」的软校验：
+    小游戏和商店页面偏静态，用 ``_moved`` 硬判会误报，真正认页面的是后面的
+    MaaCore 任务（它认不到就停在那儿，日志里看得出来）。
+    """
+    log = log or (lambda *_: None)
+    pre = str(prefix or '').strip().upper()
+    if not pre:
+        rows = active()
+        if not rows:
+            return False, '现在没有有效期内的当期活动（导航表里都是过期的）'
+        pre = rows[0]['prefix']
+    ent = ENTRIES.get(pre)
+    if not ent:
+        return False, '「%s」没有当期活动导航' % pre
+    spec = (ent.get('tools') or {}).get(str(tool or '').strip().lower())
+    if not spec:
+        return False, '「%s」这条导航没写 %s 入口（只有 %s）' % (
+            ent.get('name') or pre, tool,
+            '、'.join((ent.get('tools') or {}).keys()) or '无')
+    if is_expired(pre):
+        log('注意：「%s」的导航标定于 %s（有效期到 %s），活动改过版的话'
+            '可能点不到，需要重新标定'
+            % (ent.get('name') or pre, ent.get('wrote') or '?',
+               ent.get('until') or '?'))
+
+    ok, data, why = _to_map(touch, pre, ent, log)
+    if not ok:
+        return False, why
+    label = spec.get('label') or tool
+    _tap(touch, data, spec, log, '「%s」' % label)
+    time.sleep(float(spec.get('wait') or 3.0))
+    after = touch.shot()
+    if data and after and not stagenav._moved(data, after):
+        log('点了「%s」画面几乎没变，可能还停在活动地图上' % label)
+        return True, '点了「%s」，但画面没变化，MAA 可能认不出页面' % label
+    log('进「%s」了' % label)
+    return True, '已进入「%s」' % label
+
+
 def describe():
     """给助手看的当期活动清单（有效期内的在前）"""
     today = datetime.date.today()
@@ -366,6 +433,7 @@ def describe():
             'until': ent.get('until') or '',
             'expired': bool(d and d < today),
             'zones': sorted((ent.get('zones') or {}).keys()),
+            'tools': sorted((ent.get('tools') or {}).keys()),
             'stage': '%s-1' % pre,
         })
     rows.sort(key=lambda r: (r['expired'], r['until']))

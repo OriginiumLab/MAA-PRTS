@@ -1001,6 +1001,171 @@ def run_core(spec, tid=None, timeout=None):
         eng.close()
 
 
+def run_custom(spec, tid=None, timeout=None):
+    """直连跑一条 ``Custom`` 任务（小工具 / 牛杂里的那几项）
+
+    ``spec`` 字段：
+        ``maaDir`` / ``profile`` —— 和 :func:`run_core` 一样从 MAA 配置里抄；
+        ``task`` —— ``{'task_names': [...], 'params': {...}}``，见 :mod:`maatools`；
+        ``title`` —— 日志里怎么称呼它（「战时新闻委员会」）；
+        ``tutorial`` —— 卡住时给用户的操作建议（小游戏第一次要过教程）。
+
+    为什么不复用 ``run_core``：那条链是给「抄作业」写的，会强制补 StartUp、
+    会做关卡导航、会排队 Copilot、还要重挂——牛杂这两项一个都不需要，走一遍
+    只会多花十几秒，还会在日志里灌一堆「排队：开始唤醒」。
+
+    卡住检测：小游戏首次进入会停在教程页，MAA 的 pipeline 认不出教程对话，
+    会安静地重试同一个节点。这里每轮看一眼「多久没新事件」，超过 120 秒就
+    把 ``spec['tutorial']`` 那句话打出来——用户才知道该手动过一下教程。
+    """
+    from . import maacore
+
+    log = tasks.log_factory(tid) if tid else (lambda *_: None)
+    d = spec.get('maaDir') or settings.load().get('maaDir') or ''
+    if not d:
+        raise ValueError('还没设置 MAA 目录')
+    task = spec.get('task') or {}
+    if not task.get('task_names'):
+        raise ValueError('没有要跑的任务（task_names 是空的）')
+    title = spec.get('title') or '小工具'
+
+    # 同一台模拟器只能有一个 MAA 在操作，先把自己（GUI）关掉
+    if maa.running_in(d):
+        log('先关掉正在运行的 MAA 窗口（避免和直连抢模拟器）…')
+        if not maa.close(d):
+            raise RuntimeError('MAA 关不掉，请手动退出后重试')
+
+    conn = _connection(d, spec.get('profile'))
+    log('连接 %s（%s）…' % (conn['address'], conn['config']))
+
+    state = {'last': time.time(), 'node': '', 'node_log': 0.0, 'warned': 0,
+             'stuck': ''}
+
+    def evlog(msg):
+        state['last'] = time.time()
+        log(msg)
+
+    eng = maacore.Engine(d, on_event=lambda ev: _on_custom_event(ev, evlog, state))
+    try:
+        tap = maalog.Tap(d)
+    except Exception:
+        tap = None
+    tap_stop = threading.Event()
+
+    def pump():
+        if tap is None:
+            return
+        while not tap_stop.wait(1.0):
+            try:
+                for _lvl, text in tap.poll():
+                    line = _custom_tap_line(text)
+                    if line:
+                        evlog('[MAA] %s' % line)
+            except Exception:
+                pass
+
+    th = threading.Thread(target=pump, daemon=True, name='maa-tool-tap')
+    total = timeout or 1800
+    try:
+        eng.open()
+        log('MaaCore %s 已加载' % eng.version())
+        if not eng.connect(adb_path=conn['adb_path'], address=conn['address'],
+                           config=conn['config'], touch=conn['touch']):
+            raise RuntimeError('连不上模拟器：%s（检查 MAA 设置里的 ADB 路径和地址）'
+                               % conn['address'])
+        log('模拟器已连接')
+        th.start()
+        eng.append('Custom', task)
+        log('交给 MAA：%s' % title)
+        if not eng.start():
+            raise RuntimeError('AsstStart 返回失败')
+
+        deadline = time.time() + total
+        finished = False
+        while time.time() < deadline:
+            if eng.wait(timeout=min(10.0, max(1.0, deadline - time.time()))):
+                finished = True
+                break
+            idle = time.time() - state['last']
+            if idle > 120 and state['warned'] < 2:
+                state['warned'] += 1
+                log('已经 %d 秒没有新动静了' % int(idle))
+                if spec.get('tutorial'):
+                    log(spec['tutorial'])
+                    state['stuck'] = 'idle'
+        if not finished:
+            log('等了 %d 分钟还没跑完，先停下' % (total // 60))
+            eng.stop()
+
+        bad = [c for c in eng.chains if not c.get('ok')]
+        for c in bad:
+            log('[失败] %s %s' % (c['chain'], c.get('why') or ''))
+        if finished and not bad:
+            log('「%s」跑完了' % title)
+        return {'ok': bool(finished and not bad),
+                'title': title,
+                'chains': eng.chains,
+                'timed_out': not finished,
+                'stuck': state.get('stuck') or '',
+                'tutorial': spec.get('tutorial') or '',
+                'error': '; '.join(eng.errors) or eng.error or ''}
+    finally:
+        tap_stop.set()
+        if th.is_alive():
+            th.join(timeout=2)
+        eng.close()
+
+
+def _on_custom_event(ev, log, state):
+    """Custom 任务的回调 → 人话
+
+    节点名（``MiniGame@WartimePressCommittee@Day1-Article2``）对用户没意义，
+    但它是「有没有在动」的唯一信号：卡教程时节点会一直不变。所以每 60 秒
+    最多报一次当前节点。
+    """
+    k = ev.get('kind') or ''
+    if k == 'chain_start':
+        log('MaaCore 开始跑这条任务')
+    elif k == 'chain_done':
+        log('MaaCore 报完成')
+    elif k == 'chain_failed':
+        log('[失败] %s' % (ev.get('why') or ''))
+    elif k == 'node':
+        node = str(ev.get('sub') or '')
+        if not node:
+            return
+        state['node'] = node.rsplit('@', 1)[-1] or node
+        now = time.time()
+        if now - float(state.get('node_log') or 0) > 60:
+            state['node_log'] = now
+            log('进行中：%s' % state['node'])
+
+
+#: MaaCore 活动商店插件说的话 → 用户看得懂的
+_CUSTOM_TAP = (
+    ('event shop skipping blacklisted product', '跳过黑名单商品：%s'),
+    ('event shop selected product', '选中商品：%s'),
+    ('event shop reached an unlimited commodity', '到无限池了，不买（停手）'),
+    ('event shop currency is insufficient', '代币不够了，收工'),
+    ('event shop reached the end after skipping blacklisted', '商店到底了（黑名单以外都买完）'),
+    ('event shop purchase count exceeded', '买的数量到上限，停手'),
+    ('event shop failed to swipe', '商店滑不动了'),
+)
+
+
+def _custom_tap_line(text):
+    """一行 asst.log → 一条中文说明；不关心的返回空串"""
+    t = str(text or '')
+    low = t.lower()
+    for key, tpl in _CUSTOM_TAP:
+        if key in low:
+            if '%s' in tpl:
+                tail = t.split(':', 1)[-1].strip() if ':' in t else ''
+                return tpl % tail if tail else tpl.replace('：%s', '')
+            return tpl
+    return ''
+
+
 # MaaCore 的 CopilotAction：抄作业时每做一个动作就报一次
 _ACTION_CN = {
     'Deploy': '部署', 'Retreat': '撤退', 'UseSkill': '开技能',

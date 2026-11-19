@@ -521,6 +521,25 @@ TOOLS = [
            'accountName': {'type': 'string',
                            'description': '切号名（官服=手机号后 4 位）'}},
           ['stage']),
+    _tool('skill_tool',
+          '**MAA 小工具（牛杂）**：跑 MAA「小工具 → 牛杂」里的功能。会自动导航到'
+          '当期活动地图 → 点对应入口 → 交给 MAA 跑。现在接了两项：\n'
+          '- `name="wartime_press"` 战时新闻委员会（活动小游戏，第一次要手动过教程）\n'
+          '- `name="event_shop"` 活动商店（按黑名单买，不碰无限池）\n'
+          '用户说「挂一下牛杂里的战时新闻委员会」「把活动商店买掉」时用它。'
+          '**活动商店要给黑名单**（不给就用默认四个：数据增补条 / 数据增补 / '
+          '龙门币 / 家具零件）。返回 taskId。',
+          {'name': {'type': 'string', 'enum': ['wartime_press', 'event_shop'],
+                    'description': 'wartime_press=战时新闻委员会小游戏；'
+                                   'event_shop=活动商店'},
+           'account': _ACC,
+           'blacklist': {'type': 'array', 'items': {'type': 'string'},
+                         'description': '活动商店黑名单（商品名，子串匹配）。'
+                                        '不传就用默认四个；**别传空数组**，'
+                                        '空着 MAA 会把无限池也买掉'},
+           'prefix': {'type': 'string',
+                      'description': '活动代号（TL / SV…），默认当期活动'}},
+          ['name']),
 ]
 
 
@@ -1361,6 +1380,10 @@ def _tool_skill_sweep(args, session=None):
     return _skill_via_guard('sweep', args, session)
 
 
+def _tool_skill_tool(args, session=None):
+    return _skill_via_guard('tool', args, session)
+
+
 _HANDLERS = {
     'list_accounts': _tool_list_accounts,
     'list_activities': _tool_list_activities,
@@ -1389,6 +1412,7 @@ _WRITE_HANDLERS = {
     'skill_weekly': _tool_skill_weekly,
     'skill_train': _tool_skill_train,
     'skill_sweep': _tool_skill_sweep,
+    'skill_tool': _tool_skill_tool,
 }
 
 
@@ -1543,6 +1567,13 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 - skill_sweep：**一键扫图**——普通关 → EX 普通 → EX 突袭 → S 关，逐段重新
   导航 + 挂机。用户说「这个活动从头打到尾」「EX 和 S 都清了」就用它，
   比 skill_weekly 更适合「只要战斗、不要剧情编排」的场景
+- skill_tool：**MAA 小工具（牛杂）**——`name="wartime_press"` 战时新闻委员会
+  小游戏、`name="event_shop"` 活动商店。两项都自己导航到当期活动地图再点入口。
+  活动商店必须给黑名单（默认四个：数据增补条 / 数据增补 / 龙门币 / 家具零件），
+  **空黑名单会把无限池也买掉**，别传空数组。
+  小游戏第一次进要过教程，MAA 不会点教程对话：任务里 `stuck` / 超时的时候，
+  明确告诉用户「先在模拟器里手动把教程过一遍，过完再让我挂一次」，不要说
+  「任务失败请重试」这种空话
 
 **什么时候用 skill 而不是 build_run**：
 - 用户要「从唤醒开始，剧情关也帮我过，一口气打完」→ skill_weekly。
@@ -1556,6 +1587,7 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   分段导航、每关失败换作业重挂，不用一段段手动调 skill_navigate + skill_fight
 - 签到 → skill_signin
 - **培养干员**（升精二 / 技能 7 / 专精几技能）→ skill_train
+- **小游戏 / 活动商店**（MAA 牛杂里那两项）→ skill_tool，别自己写 Custom 任务
 
 **「帮我把泥岩精二、二技能专三」**
 1. 先跟用户确认：哪个号、哪些干员、各自练度目标（别说「帮你练一下」就开跑）

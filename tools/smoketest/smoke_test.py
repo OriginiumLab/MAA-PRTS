@@ -4355,6 +4355,163 @@ def check_stage_infer(tmp):
         skills._default_maa_dir = orig_dir
 
 
+def check_maa_tool(tmp):
+    """B46：MAA 小工具（牛杂）—— 战时新闻委员会 / 活动商店
+
+    ① 两个入口模板都在包里，`tools` 结构合法（roi/tap/wait）
+    ② `run_tool` 先到活动地图、再点入口节点，点位用的是 tools 里的配置
+    ③ `maatools.resolve` 认中文名 / 别名 / 键
+    ④ 活动商店黑名单**只能**挂在 `params.event_shop.blacklist`，且非空全字符串
+       （挂错地方 / 空数组 = 静默买光无限池，这条是实测踩出来的）
+    ⑤ 空黑名单直接报错，不给「悄悄买无限池」的机会
+    ⑥ `skill_tool` 串起来：导航 → run_custom，卡住时把教程那句话带给用户
+    """
+    _reset_config(tmp)
+
+    from core import eventnav, maaplan, maatools, skills
+
+    # ① 模板 + 结构
+    ent = eventnav.ENTRIES['TL']
+    assert set(ent['tools']) == {'minigame', 'shop'}, ent['tools']
+    for k, v in ent['tools'].items():
+        p = eventnav._tpl_path(v['tpl'])
+        assert p and os.path.isfile(p), (k, v['tpl'])
+        assert len(v['tap']) == 2 and len(v['roi']) == 4, (k, v)
+    # 小游戏在左上、商店在右上，识别区域不能互相盖住
+    a, b = ent['tools']['minigame']['roi'], ent['tools']['shop']['roi']
+    assert a[0] + a[2] <= b[0], (a, b)
+
+    # ② run_tool：先到活动地图，再点入口
+    calls = []
+
+    class Shot:
+        def __init__(self):
+            self.n = 0
+
+        def shot(self):
+            self.n += 1
+            return b'\x89PNG' + bytes([self.n]) * 8
+
+    orig_map, orig_tap, orig_sleep = (eventnav._to_map, eventnav._tap,
+                                      eventnav.time.sleep)
+    eventnav._to_map = lambda touch, pre, e, log: (
+        calls.append(('map', pre)) or (True, b'\x89PNG-0', '活动地图'))
+    eventnav._tap = lambda touch, data, spec, log, what: (
+        calls.append(('tap', what)) or True)
+    eventnav.time.sleep = lambda *_: None
+    try:
+        ok, why = eventnav.run_tool(Shot(), 'minigame', log=lambda *_: None)
+        assert ok and why, (ok, why)
+        assert calls[0] == ('map', 'TL'), calls
+        assert calls[1][0] == 'tap' and '战时新闻委员会' in calls[1][1], calls
+        ok2, _ = eventnav.run_tool(Shot(), 'shop', log=lambda *_: None)
+        assert ok2
+        # 没配入口要说清楚，而不是默默点到别的地方
+        ok3, why3 = eventnav.run_tool(Shot(), 'nope', log=lambda *_: None)
+        assert not ok3 and 'nope' in why3, why3
+    finally:
+        eventnav._to_map, eventnav._tap = orig_map, orig_tap
+        eventnav.time.sleep = orig_sleep
+
+    # ③ 名字 → 键
+    assert maatools.resolve('战时新闻委员会')[0] == 'wartime_press'
+    assert maatools.resolve('小游戏')[0] == 'wartime_press'
+    assert maatools.resolve('活动商店')[0] == 'event_shop'
+    assert maatools.resolve('shop')[0] == 'event_shop'
+    try:
+        maatools.resolve('抽卡')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('不认识的名字该报错')
+
+    # ④ Custom 参数：黑名单的位置和类型
+    p = maatools.build_params('wartime_press')
+    assert p == {'task_names': ['MiniGame@WartimePressCommittee@Begin']}, p
+    p = maatools.build_params('event_shop')
+    assert p['task_names'] == ['SS@Store@Begin'], p
+    bl = p['params']['event_shop']['blacklist']
+    assert bl and all(isinstance(x, str) for x in bl), bl
+    assert '龙门币' in bl and '数据增补条' in bl, bl
+    # 顶层不许出现 blacklist（挂错位置会被 MaaCore 静默忽略）
+    assert 'blacklist' not in p and 'params' in p, p
+    # 自定义名单
+    p2 = maatools.build_params('event_shop', ['固源岩'])
+    assert p2['params']['event_shop']['blacklist'] == ['固源岩'], p2
+
+    # ⑤ 空黑名单必须炸
+    try:
+        maatools.build_params('event_shop', [])
+    except ValueError as e:
+        assert '无限池' in str(e), e
+    else:
+        raise AssertionError('空黑名单会把无限池买掉，必须报错')
+
+    # ⑥ skill_tool：导航 → run_custom（打桩，不连模拟器）
+    seen = {}
+
+    class Touch:
+        def ready(self):
+            return True, 'ok'
+
+        def game_alive(self):
+            return True
+
+    orig_conn = maaplan._connection
+    orig_run_custom = maaplan.run_custom
+    orig_acc = skills._account_file
+    orig_dir = skills._default_maa_dir
+    orig_touch = skills.stagenav.Touch
+    orig_run_tool = eventnav.run_tool
+    try:
+        skills._account_file = lambda n: 'x.json'
+        skills._default_maa_dir = lambda: 'D:/fake-maa'
+        skills.stagenav.Touch = lambda *a, **k: Touch()
+
+        def fake_run_tool(t, tool, prefix=None, log=None):
+            seen['nav'] = tool
+            return True, '已进入'
+
+        eventnav.run_tool = fake_run_tool
+        maaplan._connection = lambda d, profile=None: {
+            'adb_path': 'adb', 'address': '127.0.0.1:5555',
+            'config': 'General', 'touch': 'MiniTouch', 'maa_dir': d}
+
+        def fake_run_custom(spec, tid=None, timeout=None):
+            seen['spec'] = spec
+            seen['timeout'] = timeout
+            return {'ok': False, 'stuck': 'idle', 'timed_out': False,
+                    'tutorial': spec.get('tutorial') or '',
+                    'error': ''}
+
+        maaplan.run_custom = fake_run_custom
+        logs = []
+        r = skills.skill_tool({'name': 'wartime_press', 'account': 'x'},
+                              logs.append)
+        assert seen['nav'] == 'minigame', seen
+        assert seen['spec']['task'] == {
+            'task_names': ['MiniGame@WartimePressCommittee@Begin']}, seen['spec']
+        assert seen['spec']['tutorial'], seen['spec']
+        assert seen['timeout'] >= 600, seen['timeout']
+        # 卡住时必须把「手动过教程」这句话带给用户
+        assert not r['ok'] and r['stuck'] == 'idle', r
+        assert '教程' in (r.get('hint') or ''), r
+        assert any('教程' in m for m in logs), logs
+
+        r2 = skills.skill_tool({'name': 'shop', 'account': 'x',
+                                'blacklist': '龙门币,固源岩'}, logs.append)
+        bl2 = seen['spec']['task']['params']['event_shop']['blacklist']
+        assert bl2 == ['龙门币', '固源岩'], bl2
+        assert r2['tool'] == 'event_shop', r2
+    finally:
+        maaplan._connection = orig_conn
+        maaplan.run_custom = orig_run_custom
+        skills._account_file = orig_acc
+        skills._default_maa_dir = orig_dir
+        skills.stagenav.Touch = orig_touch
+        eventnav.run_tool = orig_run_tool
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -4419,6 +4576,7 @@ def main():
         r.check('B43 逐关战报 + 失败换作业重挂 + 分段扫图', lambda: check_battle_retry(tmp))
         r.check('B44 当期活动导航（有效期/指代/模板/点结算页/名单核对）', lambda: check_event_nav(tmp))
         r.check('B45 资源包缺分区（EX/S 推断/默认不补前置/突袭不降级）', lambda: check_stage_infer(tmp))
+        r.check('B46 牛杂小工具（小游戏/活动商店/黑名单位置/卡教程提示）', lambda: check_maa_tool(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

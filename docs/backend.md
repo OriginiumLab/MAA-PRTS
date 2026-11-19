@@ -629,6 +629,13 @@ EX-1 之后又往后补了一关凑数，白烧一整轮理智。预检会把前
         'ex':   {'tpl': 'TL_z2.png', 'label': '长冬初青', ...},
         's':    {'tpl': 'TL_z3.png', 'label': '世纪之春', ...},
     },
+    # 同一屏上的两个「入口节点」：小游戏和活动商店（点进去不是关卡列表）
+    'tools': {
+        'minigame': {'tpl': 'TL_mini.png', 'label': '战时新闻委员会',
+                     'roi': [40, 165, 200, 130], 'tap': [127, 227], 'wait': 3.0},
+        'shop':     {'tpl': 'TL_shop.png', 'label': '炮火所掩埋的',
+                     'roi': [880, 120, 200, 130], 'tap': [975, 185], 'wait': 3.0},
+    },
 }
 ```
 
@@ -648,6 +655,52 @@ EX-1 之后又往后补了一关凑数，白烧一整轮理智。预检会把前
 **「最新活动」怎么落到代号**：`eventnav.match_name` 认活动名 / 代号 /
 「最新活动、当期活动、新活动…」，`skills.norm_stage` 和助手工具
 `list_activities`（返回里的 `current`）都走它，所以助手不用猜 TL 是哪个活动。
+
+**`tools` 是同一屏上的另外两个入口**：小游戏（战时新闻委员会）和活动商店
+（炮火所掩埋的）。它们和分区节点长在同一张活动地图上，但点进去不是关卡列表，
+所以单独列一格。`eventnav.run_tool(touch, 'minigame'|'shop')` 只负责把界面点
+到门口（`_to_map` 到活动地图 → 点节点），点完的画面校验是软的：商店/小游戏
+页面偏静态，`_moved` 硬判会误报，真正认页面的是后面的 MaaCore 任务。
+
+## MAA 小工具（牛杂，`maatools.py`，2026-11-19）
+
+MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列里**，但 MaaCore
+认：它们都是 `Custom` 任务。对着 asst.log 试出来的两种参数：
+
+```python
+# 战时新闻委员会（活动小游戏）
+{"task_names": ["MiniGame@WartimePressCommittee@Begin"]}
+
+# 活动商店
+{"task_names": ["SS@Store@Begin"],
+ "params": {"event_shop": {"blacklist": ["数据增补条", "数据增补", "龙门币", "家具零件"]}}}
+```
+
+黑名单的三个坑（都实测过，别改）：
+
+| 写法 | 结果 |
+|------|------|
+| 挂在 `params.event_shop.blacklist`，非空字符串数组 | ✅ `Parsed and registered EventShop task: SS@Store@Begin` |
+| 挂到顶层 / 塞进 params 字符串 | ❌ 静默忽略，**把无限池一起买光** |
+| 空数组 `[]` | ❌ 不注册插件，同样买无限池 |
+| 元素是数字 | ❌ `set_params failed, event shop blacklist item is not string` |
+
+所以 `maatools.build_params('event_shop', [])` 直接抛错，宁可失败也不买无限池。
+
+**执行**：`maaplan.run_custom(spec)` —— 不复用 `run_core`。那条链是给抄作业
+写的（强制补 StartUp、关卡导航、排 Copilot、失败重挂），牛杂一项都用不上。
+`run_custom` 只做「关 GUI → 连接 → append Custom → start → 等 → 收尾」，顺带
+把 asst.log 里活动商店那几句话翻成人话（跳过黑名单商品 / 选中商品 / 到无限池
+收工 / 代币不够）。
+
+**卡教程**：小游戏第一次进要过一段教程，MAA 认不出教程对话，会安静地重试同一
+个节点。`run_custom` 每 10 秒看一次「多久没新事件」，超过 120 秒就把
+`spec['tutorial']` 那句话打进日志 —— 用户才知道要手动过一遍教程再挂。
+
+**入口**：`skill_tool({'name': 'wartime_press'|'event_shop', 'account': ...,
+'blacklist': [...]})`，助手工具同名。导航和 MAA 都跑在同一个后台任务里，
+`tid` 透传给 `run_custom`，日志落在同一条任务上。
+
 
 ## 培养干员 skill（`train`，2026-11-18）
 

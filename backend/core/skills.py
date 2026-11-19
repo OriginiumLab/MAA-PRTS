@@ -1485,6 +1485,81 @@ def skill_sweep(params, log, tid=None):
             'account': file}
 
 
+# ---------------------------------------------------------------- 小工具（牛杂）
+
+def skill_tool(params, log, tid=None):
+    """跑 MAA「小工具 → 牛杂」里的功能：战时新闻委员会 / 活动商店
+
+    两项的共同点：入口都在**当期活动地图**上，点进去之后由 MAA 的 ``Custom``
+    任务接手（怎么调见 :mod:`maatools` 顶部注释）。所以这里只有三步：
+
+        1. adb 导航：终端 → 活动地图 → 点入口节点
+        2. 交给 MaaCore 跑 Custom 任务
+        3. 把「成功没有 / 卡在哪 / 要不要手动过教程」讲清楚
+
+    用户 2026-11-19 的原话：「然后运行 MAA 中小工具牛杂中的这个，并告诉用户
+    如果被教程卡住，手动过一下教程再挂一遍」。所以卡住时不能只报失败。
+    """
+    from . import eventnav, maatools
+
+    key, ent = maatools.resolve(params.get('name') or params.get('tool') or '')
+    file = _account_file(params.get('account') or '')
+    d = _default_maa_dir()
+    log('小工具：%s（MAA 牛杂里的同名项）' % ent.get('name'))
+
+    # ---- 1) 导航到活动地图上的入口 ----
+    conn = maaplan._connection(d, None)
+    client = _client_of(file)
+    t = stagenav.Touch(conn['adb_path'], conn['address'], log,
+                       package=stagenav.game_package(client))
+    alive, detail = t.ready()
+    log('adb：%s' % detail)
+    if not alive:
+        raise RuntimeError(detail)
+    if not t.game_alive():
+        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——先调 skill_wakeup '
+                           '唤醒，再挂')
+
+    prefix = (params.get('prefix') or params.get('activity') or '').strip().upper()
+    ok, why = eventnav.run_tool(t, ent.get('nav'), prefix=prefix or None, log=log)
+    if not ok:
+        raise RuntimeError('导航没到位：%s' % why)
+    log(why)
+
+    # ---- 2) 交给 MAA ----
+    bl = params.get('blacklist')
+    if isinstance(bl, str):
+        bl = [x for x in re.split(r'[,，;；、\s]+', bl) if x]
+    task = maatools.build_params(key, blacklist=bl if bl else None)
+    if key == 'event_shop':
+        log('黑名单：%s（这些不买，无限池也不碰）'
+            % '、'.join(task['params']['event_shop']['blacklist']))
+    if ent.get('tutorial'):
+        log('提醒：%s' % ent['tutorial'])
+
+    spec = {'maaDir': d, 'title': ent.get('name'),
+            'task': task, 'tutorial': ent.get('tutorial') or '',
+            'profile': params.get('profile')}
+    r = maaplan.run_custom(spec, tid=tid, timeout=int(ent.get('timeout') or 1800))
+
+    out = {'ok': bool(r.get('ok')),
+           'tool': key, 'name': ent.get('name'),
+           'account': file,
+           'stuck': r.get('stuck') or '',
+           'timed_out': bool(r.get('timed_out')),
+           'tutorial': r.get('tutorial') or '',
+           'why': r.get('error') or ''}
+    if not out['ok']:
+        if r.get('stuck') or r.get('timed_out'):
+            out['hint'] = ('看起来卡住了：%s'
+                           % (r.get('tutorial') or '手动看一眼模拟器现在停在哪一页'))
+            log('没跑完。%s' % out['hint'])
+        else:
+            out['hint'] = 'MAA 报错了，看上面几行日志'
+            log('没跑完：%s' % (out['why'] or 'MAA 报错'))
+    return out
+
+
 # ---------------------------------------------------------------- 调度
 
 SKILLS = {
@@ -1498,6 +1573,7 @@ SKILLS = {
     'train':     ('培养干员：精英化/技能/专精，材料不足暂停', skill_train),
     'sweep':     ('一键扫图：普通→突袭→S 逐段导航挂机（失败自动换作业）',
                   skill_sweep),
+    'tool':      ('MAA 牛杂小工具：战时新闻委员会 / 活动商店', skill_tool),
 }
 
 # 哪些 skill 跑之前要先确认模拟器在。signin 走的是森空岛网页，跟游戏无关，
@@ -1505,7 +1581,7 @@ SKILLS = {
 # 塞进 SKILLS 元组：/api/skill/list 和助手的工具列表都直接吃 SKILLS 的形状，
 # 加字段会把两处都牵连一遍。
 _NEEDS_GAME = frozenset(['wakeup', 'navigate', 'fight', 'skip_story', 'weekly',
-                         'train', 'sweep'])
+                         'train', 'sweep', 'tool'])
 
 
 def run_skill(name, params=None):
