@@ -454,6 +454,22 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   background: rgba(255, 255, 255, 0.06);
 }
 
+/* 助手还是 Beta：tab 和面板标题上都挂一枚，别让人以为它已经稳了 */
+.beta-tag {
+  font-style: normal; font-weight: 700;
+  font-size: 8.5px; letter-spacing: .06em;
+  padding: 1px 4px; border-radius: 4px;
+  color: var(--amber);
+  background: rgba(245, 185, 85, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(245, 185, 85, 0.28);
+}
+/* 选中的 tab 是浅色薄荷底，琥珀字看不清，换成同色系的深字 */
+.modtab.active .beta-tag {
+  color: #241a00;
+  background: rgba(36, 26, 0, 0.16);
+  box-shadow: none;
+}
+
 /* 模块容器：.main 是 flex 列，切模块只显隐，不重建 DOM（搜索状态与结果都还在） */
 .module {
   display: flex;
@@ -2043,6 +2059,21 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .chat-empty { display: flex; flex-direction: column; gap: 7px; padding: 6px 2px 10px; max-width: 880px; }
 .chat-empty[hidden] { display: none; }
 .chat-empty p { font-size: 11.5px; color: var(--text-3); margin-bottom: 2px; }
+/* 空态最上面那条「这是测试版」：虚线琥珀框，读起来像提示而不是报错 */
+.chat-beta {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px 12px; margin-bottom: 3px;
+  border: 1px dashed rgba(245, 185, 85, 0.34);
+  border-radius: 11px;
+  background: rgba(245, 185, 85, 0.055);
+  font-size: 11.5px; line-height: 1.68; color: var(--text-2);
+}
+.chat-beta > b {
+  flex: 0 0 auto; height: 17px; line-height: 17px; padding: 0 6px;
+  border-radius: 5px; font-size: 10px; letter-spacing: .05em;
+  color: #241a00; background: var(--amber);
+}
+.chat-beta span b { color: var(--amber); font-weight: 700; }
 .chat-chip {
   text-align: left; padding: 9px 12px;
   font-size: 12.5px; color: var(--text-2);
@@ -2269,8 +2300,17 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   box-shadow: inset 0 0 0 1px rgba(94, 234, 212, 0.18);
 }
 .set-tab.active .si { opacity: 1; color: var(--mint); }
-.set-tab-n { margin-left: auto; font-style: normal; font-size: 10px; color: var(--text-3); }
+/* 页签右端：小数字（账号数 / 黑名单条数）和新版本红点共用一块，
+   靠 margin-left:auto 顶到最右边，没数字时红点也不会掉到文字后面 */
+.set-tab-tail { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.set-tab-n { font-style: normal; font-size: 10px; color: var(--text-3); }
 .set-tab-n:empty { display: none; }
+.set-tab-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--rose);
+  box-shadow: 0 0 0 2px rgba(255, 122, 138, 0.18);
+}
+.set-tab-dot[hidden] { display: none; }
 .set-side-foot {
   margin-top: auto; padding: 10px;
   font-size: 10.5px; line-height: 1.6; color: var(--text-3);

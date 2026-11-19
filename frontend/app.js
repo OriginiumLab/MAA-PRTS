@@ -783,6 +783,9 @@ function renderAppDot() {
   const u = S.appUpdate || {};
   const has = !!(u.ok && u.hasUpdate);
   if (dot) dot.hidden = !has;
+  // 设置里「版本更新」那一页也要点一个：只有外面齿轮上的红点时，用户点进来
+  // 面对六页签根本不知道该看哪一页。设置没开时这行什么也选不到，无害。
+  $$('[data-tab-dot="update"]').forEach(d => { d.hidden = !has; });
   if (btn) btn.title = has ? `设置（新版本 ${u.tag || u.latest} 可用）` : '设置';
 }
 
@@ -2714,7 +2717,10 @@ function openSettings() {
         <div class="set-side-title">设置</div>
         ${SET_TABS.map(([id, name], i) => `
           <button class="set-tab${i === 0 ? ' active' : ''}" data-tab="${id}">
-            ${setIcon(id)}<span>${name}</span><em class="set-tab-n" data-tab-n="${id}"></em>
+            ${setIcon(id)}<span>${name}</span><span class="set-tab-tail">${
+              id === 'update'
+                ? '<i class="set-tab-dot" data-tab-dot="update" hidden></i>' : ''
+            }<em class="set-tab-n" data-tab-n="${id}"></em></span>
           </button>`).join('')}
         <div class="set-side-foot">改动即时生效<br>数据都留在本机</div>
       </aside>
@@ -2916,6 +2922,9 @@ function openSettings() {
         if (bn) bn.textContent = (c.char + c.author + c.op) || '';
       };
       paintTabN();
+      // 打开设置的那一刻可能已经查到新版本了（启动 4 秒后查一次），
+      // 红点要立刻亮，不能等下一次轮询
+      renderAppDot();
 
       /* ---------------- 通用：打开目录 / 选目录 ---------------- */
       el.addEventListener('click', async e => {
@@ -4425,6 +4434,46 @@ const CHAT = {
   cfg: null,
 };
 
+/* 助手引导卡片：示例问句必须和「现在真能做的事」对得上——早先那几条
+   （「我还差哪些关没打」「推荐养哪些干员」）助手根本没有对应数据源，点了
+   只会兜圈子。下面每一条都对着一个已实现的 skill，点下去就能真跑。 */
+const CHAT_STARTERS = [
+  ['帮我把最新活动 S 关卡挂完',
+   '帮我把最新活动的 S 关卡挂完'],
+  ['帮我把将进酒活动普通关卡挂完',
+   '帮我把将进酒活动的普通关卡挂完'],
+  ['所有账号森空岛签到',
+   '帮我把所有账号的森空岛签到都签了'],
+  ['活动商店清一遍（别买龙门币、固源岩）',
+   '清一下最新活动的商店，黑名单里加龙门币、固源岩、技巧概要、赤金'],
+  ['把泥岩精二，三技能专三',
+   '把泥岩精二，三技能专三，材料不够就停下来告诉我'],
+  ['现在跑到哪了？卡住了吗？',
+   '现在跑到哪了？卡住了吗？'],
+];
+
+function chatEmptyHtml() {
+  return `<div class="chat-beta">
+      <b>测试版</b>
+      <span>助手还在 Beta，功能会变，<b>也真的可能出错</b>。
+        自动战斗、切号这类操作跑起来时，请瞄一眼右边的「任务进度」；
+        跑歪了把日志发出来，我们照着改。</span>
+    </div>
+    <p>现在能做的事（点一条试试）：</p>`
+    + CHAT_STARTERS.map(([label, ask]) =>
+      `<button class="chat-chip" data-ask="${esc(ask)}">${esc(label)}</button>`).join('');
+}
+
+/* 只在空态里补内容：一旦有对话记录，chatRender 会把整块删掉 */
+function paintChatEmpty() {
+  const el = $('#chat-empty');
+  if (el && !el.dataset.painted) {
+    el.dataset.painted = '1';
+    el.innerHTML = chatEmptyHtml();
+    bindChatChips(el);
+  }
+}
+
 function chatScroll(force) {
   const box = $('#chat-body');
   if (!box) return;
@@ -4746,7 +4795,7 @@ async function chatInit() {
   if (input) {
     input.disabled = !ok;
     input.placeholder = ok
-      ? '说人话就行，例如：帮我把 15 章打完'
+      ? '说人话就行，例如：帮我把最新活动 S 关卡挂完'
       : '先配置模型才能用';
   }
   if (send) send.disabled = !ok;
@@ -4825,14 +4874,8 @@ async function resetChat() {
   CHAT.since = 0;
   const body = $('#chat-body');
   if (body) {
-    body.innerHTML = '<div class="chat-empty" id="chat-empty">'
-      + '<p>可以这么问：</p>'
-      + '<button class="chat-chip" data-ask="我还差哪些关没打？">我还差哪些关没打？</button>'
-      + '<button class="chat-chip" data-ask="帮我挂左侧所有账号这周的活动关">帮我挂左侧所有账号这周的活动关</button>'
-      + '<button class="chat-chip" data-ask="现在跑到哪了？卡住了吗？">现在跑到哪了？卡住了吗？</button>'
-      + '<button class="chat-chip" data-ask="推荐一下我该养哪些干员">推荐一下我该养哪些干员</button>'
-      + '</div>';
-    bindChatChips(body);
+    body.innerHTML = '<div class="chat-empty" id="chat-empty"></div>';
+    paintChatEmpty();
   }
   // 右栏执行日志一起清掉
   const side = $('#chat-side-log');
@@ -4872,6 +4915,7 @@ function bindChat() {
     }
   });
   bindChatChips(document);
+  paintChatEmpty();     // 引导卡片是 JS 生成的，index.html 里只留一个空壳
 }
 
 /* 侧栏：MAA 现在跑到哪（读 /api/watch/status，只读，不碰 MAA） */
