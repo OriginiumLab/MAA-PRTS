@@ -39,6 +39,7 @@ from . import applog, garrisondl, maa, settings
 CREATE_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
 HOST_JS = os.path.join(settings.RES, 'resources', 'garrison', 'host.mjs')
+PATCH_FILE = os.path.join(settings.RES, 'resources', 'garrison', 'patches.json')
 
 DEVICES = ('mumu', 'ldplayer', 'pc')
 SHOT_METHODS = ('auto', 'fast', 'adb')
@@ -81,6 +82,72 @@ def core_dir() -> str:
         if d and os.path.isfile(os.path.join(d, 'service.mjs')):
             return d
     return ''
+
+
+def _patch_rules():
+    try:
+        with io.open(PATCH_FILE, encoding='utf-8') as f:
+            return (json.load(f) or {}).get('patches') or []
+    except (OSError, ValueError):
+        return []
+
+
+def apply_core_patches(core: str) -> dict:
+    """给核心 service.mjs 打最小文本补丁（幂等，失败不影响启动）
+
+    核心是第三方 GPL 混淆包，不进仓库、由 garrisondl.py 下载；它偶尔认不出
+    游戏新弹窗（如「确认准备就绪吗？当前仍处于临时整备区…」），落进 unknown
+    空转 90 秒后报错。补这种缺口走规则文件里的纯文本替换，比在 MAA-PRTS 侧
+    再挂一个 adb 看门狗去跟核心抢截图/输入安全得多：点哪儿仍由核心自己按
+    OCR 文本算，分辨率与缩放天然自适应。
+
+    首次改动前留 ``service.mjs.orig`` 备份；核心升级后规则脱靶（find 找不到）
+    只记日志跳过，绝不动文件。返回 ``{applied, skipped, miss, error}``。
+    """
+    rules = _patch_rules()
+    out = {'applied': 0, 'skipped': 0, 'miss': 0, 'error': ''}
+    if not rules:
+        return out
+    path = os.path.join(core, 'service.mjs')
+    try:
+        with io.open(path, encoding='utf-8') as f:
+            src = f.read()
+    except OSError as e:
+        out['error'] = str(e)
+        return out
+    text = src
+    for r in rules:
+        find = r.get('find') or ''
+        repl = r.get('replace') or ''
+        if not find or not repl:
+            continue
+        if repl in text:                     # 已经打过了
+            out['skipped'] += 1
+            continue
+        if find not in text:                 # 核心换了写法：不硬来
+            out['miss'] += 1
+            applog.log('[卫戍协议] 核心补丁「%s」未命中，跳过（核心版本可能变了）'
+                       % (r.get('id') or '?'))
+            continue
+        text = text.replace(find, repl, 1)
+        out['applied'] += 1
+    if text == src:
+        return out
+    try:
+        bak = path + '.orig'
+        if not os.path.isfile(bak):
+            shutil.copy2(path, bak)
+        tmp = path + '.tmp'
+        with io.open(tmp, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except OSError as e:
+        out['error'] = str(e)
+        applog.log('[卫戍协议] 核心补丁写入失败：%s' % e)
+        return out
+    applog.log('[卫戍协议] 核心补丁已应用 %d 条（已在位 %d，未命中 %d）'
+               % (out['applied'], out['skipped'], out['miss']))
+    return out
 
 
 def _maa_dir_for(file: str) -> str:
@@ -219,6 +286,7 @@ def _spawn(file: str) -> dict:
     core = core_dir()
     if not core:
         raise RuntimeError('核心包还没下载好：打开卫戍协议页会自动下载安装')
+    apply_core_patches(core)
     if not os.path.isfile(HOST_JS):
         raise RuntimeError('缺少宿主脚本：%s' % HOST_JS)
 

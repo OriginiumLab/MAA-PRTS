@@ -4664,6 +4664,32 @@ def check_garrison(tmp):
     assert garrison.core_dir().endswith('medal-farm-v1.1.4' + os.sep + 'core'), garrison.core_dir()
     shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
 
+    # 8) 核心文本补丁：规则随包分发、能打上、幂等、脱靶不动文件
+    #    （核心 service.mjs 是第三方混淆包，认不出「确认准备就绪吗」弹窗，
+    #     落 unknown 空转 90 秒；补丁只做纯文本替换，不改核心其它逻辑）
+    assert os.path.isfile(garrison.PATCH_FILE), garrison.PATCH_FILE
+    rules = garrison._patch_rules()
+    assert rules and all(r.get('find') and r.get('replace') for r in rules), rules
+    fake_core = os.path.join(tmp, 'patch-core')
+    os.makedirs(fake_core, exist_ok=True)
+    svc = os.path.join(fake_core, 'service.mjs')
+    with open(svc, 'w', encoding='utf-8') as f:
+        f.write('x=1;' + rules[0]['find'] + ';y=2;')
+    got = garrison.apply_core_patches(fake_core)
+    assert got['applied'] == len(rules) and not got['miss'], got
+    with open(svc, encoding='utf-8') as f:
+        body = f.read()
+    assert rules[0]['replace'] in body and rules[0]['find'] not in body, body
+    assert os.path.isfile(svc + '.orig'), '打补丁前必须先留 .orig 备份'
+    again = garrison.apply_core_patches(fake_core)   # 幂等：第二次不重复替换
+    assert again['applied'] == 0 and again['skipped'] == len(rules), again
+    with open(svc, 'w', encoding='utf-8') as f:
+        f.write('untouched core')                    # 核心换写法：find 找不到
+    miss = garrison.apply_core_patches(fake_core)
+    assert miss['applied'] == 0 and miss['miss'] == len(rules), miss
+    with open(svc, encoding='utf-8') as f:
+        assert f.read() == 'untouched core', '脱靶时一个字节都不能动'
+
 
 # ---------------------------------------------------------------- 入口
 
@@ -4730,7 +4756,7 @@ def main():
         r.check('B44 当期活动导航（有效期/指代/模板/点结算页/名单核对）', lambda: check_event_nav(tmp))
         r.check('B45 资源包缺分区（EX/S 推断/默认不补前置/突袭不降级）', lambda: check_stage_infer(tmp))
         r.check('B46 牛杂小工具（小游戏/活动商店/黑名单位置/卡教程提示）', lambda: check_maa_tool(tmp))
-        r.check('B47 卫戍协议（核心检测/MAA 连接默认值/选项清洗/空环境口径）', lambda: check_garrison(tmp))
+        r.check('B47 卫戍协议（核心检测/MAA 连接默认值/选项清洗/空环境口径/核心补丁）', lambda: check_garrison(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

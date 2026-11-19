@@ -1216,3 +1216,45 @@ MaaCore 只会报 `adb 连不上`，用户第一反应是程序坏了。放一�
 `181****5505` / 全角与带横线的写法；官服只拦「填了昵称」（MAA 拿昵称去
 账号列表里子串匹配，死找几十次后超时，整轮挂机废掉）。**空串放行**——
 「还没填」和「填错了」是两件事，用 `check()` 原文会把清空输入框也拦下。
+
+## 卫戍协议速刷（`garrison.py` / `garrisondl.py` / `resources/garrison/`，2026-11-20）
+
+**核心不在仓库里**。真正干活的 `service.mjs` 是第三方插件
+（`ai-desktop.arknights-medal-farm`，GPL-3.0-or-later，约 114MB，带 MaaFramework
+原生模块），不进 git、不进安装包。首次打开卫戍协议页时 `garrisondl.py` 从小黑盒
+扩展记录（`%APPDATA%\HeyboxDesktop\...\records\*.catalog.json`）拿 CDN 直链，
+拿不到就用锚定过 sha256 的 v1.1.4 回退直链，逐文件校验后落到
+`<运行根>/garrison/medal-farm-v<版本>/`。
+
+**一个账号一个宿主进程**：`host.mjs` 用 Node 把核心包成 HTTP 服务（随机端口 +
+`x-garrison-token` 握手），Python 只做进程编排和转发。`--parent-pid` 看门狗保证
+MAA-PRTS 崩了宿主自己退出，不会变成孤儿继续点游戏。设备与截图方式从账号绑定
+MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速截图、
+雷电→`ldplayer`、PC 客户端→`pc`）。
+
+### 核心文本补丁（`resources/garrison/patches.json`）
+
+核心是混淆过的单文件，页面识别遇到游戏新弹窗就会卡住。改它（而不是在 MAA-PRTS
+侧另挂一个 adb 看门狗去抢截图和点击）是因为**点哪儿仍由核心自己按 OCR 文本算**，
+分辨率、UI 缩放、主题全都天然自适应；看门狗得把坐标写死，还会跟核心抢输入。
+
+`apply_core_patches(core)` 在每次 spawn 宿主前跑一遍：
+
+| 情形 | 行为 |
+|------|------|
+| 规则里的 `replace` 已在文件里 | 记 `skipped`，不重复替换（幂等） |
+| `find` 能找到 | 替换一次，首次改动前把原文件备份成 `service.mjs.orig` |
+| `find` 找不到（核心升级换了写法） | 记 `miss` + 日志，**一个字节都不动** |
+
+**2026-11-20 实证**：点「准备就绪」后游戏弹出「确认准备就绪吗？当前仍处于临时
+整备区的干员和装备，将在进入战斗后自动销毁（召唤物仍会在下个休整期出现）」，
+`garrison-<账号>.log` 里是 `[t] r9 prep.ready 115998ms` 紧跟
+`[trace] prep -> unknown`，然后空转 90 秒报「画面持续无法识别」。原因是核心把
+`confirm-ready` 页判定成「`确认准备` **且** `剩余资金|未使用的|指令`」，这个弹窗
+没有后三个词，落到 `unknown`。补丁把条件放宽为再认 `临时整备区|召唤物|自动销毁`，
+就走进核心自带的 confirm 分支：`Ma()` 找不到「本局不再提示」返回 null（跳过勾选），
+`wt(state, /^确认$/)` 点 OCR 到的「确认」，然后 `Z(1200)` 继续战斗流程。
+
+核心升级（v1.1.5+）后若 `find` 脱靶，补丁只会在 app.log 里留一行 miss，核心照常
+跑、但这个弹窗问题会复发 —— 那时更新 `patches.json` 里的 `find` 就行，逻辑不用改。
+
