@@ -767,6 +767,117 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .log-box.sign-log { flex: 1 1 auto; margin-top: 12px; height: auto; min-height: 258px; max-height: none; }
 .sign-log .sign-idle { color: var(--text-3); }
 
+/* ============================================================ 卫戍协议 */
+/* 环境不齐（缺 Node / 缺核心）的指引空态 */
+.gar-empty {
+  padding: 46px 20px;
+  text-align: center;
+  color: var(--text-2);
+  border-radius: 16px;
+  border: 1px dashed var(--line-strong);
+  background: rgba(255, 255, 255, 0.015);
+}
+.gar-empty h3 { font-size: 15px; color: var(--text); margin-bottom: 8px; }
+/* 显式盖掉 grid/flex 布局：UA 的 [hidden] 挡不住设了 display 的类 */
+.gar-empty[hidden], .sign-grid[hidden], .gar-log-card[hidden] { display: none; }
+/* 核心包下载视图（缺核心时自动开始，进度随轮询刷新） */
+.gar-empty .gar-dl-bar {
+  margin: 18px auto 0; max-width: 460px; height: 8px;
+  border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--line);
+  background: #070a0f;
+}
+.gar-empty .gar-dl-bar i {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--mint), var(--indigo));
+  transition: width .4s ease;
+}
+.gar-empty .gar-dl-text { margin-top: 9px; font-size: 12px; color: var(--text-2); min-height: 18px; }
+.gar-empty .gar-dl-err {
+  margin: 12px auto 0; max-width: 560px;
+  font-size: 11.5px; line-height: 1.7; color: var(--rose);
+  white-space: pre-wrap; word-break: break-all;
+}
+.gar-empty .gar-dl-err + .ghost-btn { margin-top: 12px; }
+.gar-empty p { font-size: 12.5px; color: var(--text-3); line-height: 1.85; max-width: 520px; margin: 0 auto; }
+.gar-empty p b { color: var(--text-2); font-weight: 600; }
+.gar-empty code { font-family: var(--mono); font-size: 11px; color: var(--mint); word-break: break-all; }
+.gar-empty .ghost-btn { margin-top: 16px; }
+
+.gar-badge-row { margin-top: 12px; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gar-badge {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  border-radius: 20px;
+  font-size: 11.5px; font-weight: 650; letter-spacing: .3px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.045);
+}
+.gar-badge.running, .gar-badge.starting { color: #7fd6ff; border-color: rgba(127, 214, 255, 0.4); background: rgba(127, 214, 255, 0.08); }
+.gar-badge.stopping { color: var(--amber); border-color: rgba(245, 185, 85, 0.4); background: rgba(245, 185, 85, 0.08); }
+.gar-badge.failed { color: var(--rose); border-color: rgba(255, 122, 138, 0.4); background: rgba(255, 122, 138, 0.08); }
+.gar-badge.completed, .gar-badge.done { color: var(--mint); border-color: rgba(94, 234, 212, 0.4); background: rgba(94, 234, 212, 0.08); }
+.gar-msg {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 12px; color: var(--text-2); line-height: 1.6;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.gar-stats {
+  margin-top: 14px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.gar-stat {
+  padding: 9px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  text-align: center;
+  min-width: 0;
+}
+.gar-stat .v {
+  font-size: 17px; font-weight: 700; color: var(--mint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gar-stat .k { margin-top: 2px; font-size: 10.5px; color: var(--text-3); letter-spacing: .5px; }
+
+.gar-bar {
+  margin-top: 14px; height: 8px;
+  border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--line);
+  background: #070a0f;
+}
+.gar-bar i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--mint), var(--indigo));
+  transition: width .5s ease;
+}
+.gar-prog-text { margin-top: 7px; font-size: 11px; color: var(--text-3); }
+
+.gar-form { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.gar-form .field-row { flex: 0 0 auto; }
+.gar-form input[type=text] {
+  flex: 1; max-width: 190px;
+  height: 30px; padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: rgba(10, 13, 20, 0.9);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.gar-form input:disabled, .gar-form select:disabled { opacity: .45; cursor: not-allowed; }
+.gar-actions { flex-wrap: wrap; }
+.gar-actions .ghost-btn, .gar-actions .primary-btn.sm { flex: 1 1 auto; min-width: 96px; }
+.ghost-btn.stop { border-color: rgba(255, 122, 138, 0.4); color: var(--rose); }
+.ghost-btn.stop:hover { border-color: rgba(255, 122, 138, 0.55); color: var(--rose); background: rgba(255, 122, 138, 0.06); }
+.gar-hint { margin: 12px 0 0; font-size: 11px; line-height: 1.8; color: var(--text-3); }
+.gar-hint b { color: var(--text-2); font-weight: 600; }
+
+/* 日志卡：面板最下面一整行；日志框定长，新日志在框内滚动（.log-box 自带 overflow:auto） */
+.gar-log-card { margin-top: 14px; }
+.log-box.gar-log { margin-top: 12px; height: 260px; max-height: 260px; }
+
 @media (max-width: 1400px) {
   .app.no-basket { grid-template-columns: 252px minmax(0, 1fr); }
 }

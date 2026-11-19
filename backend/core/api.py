@@ -7,8 +7,8 @@ import os
 import traceback
 import urllib.parse
 
-from . import (accounts, agent, appupdate, asstlog, copilot, gacha, maa,
-               maaplan, multiacct, operbox, packsync, paradox, resources,
+from . import (accounts, agent, appupdate, asstlog, copilot, gacha, garrison,
+               maa, maaplan, multiacct, operbox, packsync, paradox, resources,
                settings, signin, skills, sklogin, tasks, updater, version, watch)
 
 WEB = settings.static_dir()
@@ -581,6 +581,51 @@ def api_paradox_mark(_q, body):
     return {'file': file, 'imported': len(imp)}
 
 
+# ---------------------------------------------------------------- 卫戍协议
+def api_garrison_status(q, _body):
+    """速刷面板状态：环境（Node/核心）+ 从 MAA 配置抄的默认值 + 运行态
+
+    会懒启动该账号的速刷后端（首次打开面板慢几秒是正常的）。
+    核心缺失时附带下载进度（needsDownload / download），前端自动开始下载。
+    """
+    return garrison.status(_account_for(q.get('file')))
+
+
+def api_garrison_download(_q, _body):
+    """开始/继续核心包下载（幂等），返回当前下载状态"""
+    return garrison.start_download()
+
+
+def _garrison_options(q, body):
+    """test/start/resume 共用：账号 + 前端提交的连接选项"""
+    body = body or {}
+    file = _account_for(q.get('file') or body.get('file'))
+    return file, body.get('options') or {}
+
+
+def api_garrison_test(q, body):
+    """测试连接（截图 + OCR + 活动页自检，只读不点击）"""
+    file, opts = _garrison_options(q, body)
+    return garrison.test(file, opts)
+
+
+def api_garrison_start(q, body):
+    """开始速刷（游戏先停在卫戍协议活动主界面）"""
+    file, opts = _garrison_options(q, body)
+    return garrison.start(file, opts)
+
+
+def api_garrison_resume(q, body):
+    """从该账号的上次检查点恢复"""
+    file, opts = _garrison_options(q, body)
+    return garrison.resume(file, opts)
+
+
+def api_garrison_stop(q, body):
+    body = body or {}
+    return garrison.stop(_account_for(q.get('file') or body.get('file')))
+
+
 def api_task(q, _body):
     tid = q.get('id')
     t = tasks.get(tid, int(q.get('since') or 0))
@@ -842,6 +887,13 @@ ROUTES = {
     '/api/gacha': api_gacha,
     '/api/gacha/sync': api_gacha_sync,
     '/api/signin/run': api_signin_run,
+    # 卫戍协议·策略刻章速刷
+    '/api/garrison/status': api_garrison_status,
+    '/api/garrison/download/start': api_garrison_download,
+    '/api/garrison/test': api_garrison_test,
+    '/api/garrison/start': api_garrison_start,
+    '/api/garrison/resume': api_garrison_resume,
+    '/api/garrison/stop': api_garrison_stop,
     # 观测层（M2/M3）
     '/api/watch/status': api_watch_status,
     '/api/watch/start': api_watch_start,

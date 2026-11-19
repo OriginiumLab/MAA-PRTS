@@ -4512,6 +4512,159 @@ def check_maa_tool(tmp):
         eventnav.run_tool = orig_run_tool
 
 
+# ---------------------------------------------------------------- B47 卫戍协议
+def check_garrison(tmp):
+    """B47：卫戍协议速刷（核心检测 / MAA 连接默认值 / 选项清洗 / 空环境口径）
+
+    不起 Node、不碰真核心：宿主懒启动只在 node+核心齐备时发生，隔离根里
+    没有核心，status() 必须优雅返回「缺核心」而不是 500。CI 里没有 Node
+    也一样过（nodeOk=False 直接短路）。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import api, garrison, settings
+
+    _reset_config(tmp)
+
+    # 1) 宿主脚本随包分发（resources/ 会被 build.py 择优打包）
+    assert os.path.isfile(garrison.HOST_JS), garrison.HOST_JS
+
+    # 2) 核心检测：settings 优先，其次 <运行根>/garrison 约定位置；都没有 = ''
+    assert garrison.core_dir() == ''
+    conv = os.path.join(settings.project_root(), 'garrison', 'core')
+    os.makedirs(conv, exist_ok=True)
+    open(os.path.join(conv, 'service.mjs'), 'w', encoding='utf-8').close()
+    assert os.path.normcase(garrison.core_dir()) == os.path.normcase(conv)
+    manual = os.path.join(tmp, 'my-core')
+    os.makedirs(manual, exist_ok=True)
+    open(os.path.join(manual, 'service.mjs'), 'w', encoding='utf-8').close()
+    settings.save({'garrisonCoreDir': manual})
+    assert os.path.normcase(garrison.core_dir()) == os.path.normcase(manual)
+    settings.save({'garrisonCoreDir': ''})
+    # 检测断言完就把假核心删掉：不然下面 status() 会拿假 service.mjs
+    # 真去拉一个宿主进程（有 Node 的机器上白等 45 秒握手超时）
+    shutil.rmtree(os.path.join(settings.project_root(), 'garrison'), ignore_errors=True)
+    shutil.rmtree(manual, ignore_errors=True)
+    assert garrison.core_dir() == ''
+
+    # 3) 默认值从账号绑定的 MAA 配置抄：MuMu → mumu+快速截图（Extras）
+    maa_dir = os.path.join(tmp, 'maa')
+    os.makedirs(os.path.join(maa_dir, 'config'), exist_ok=True)
+    def _write_maa(kind, addr, adb=''):
+        with open(os.path.join(maa_dir, 'config', 'gui.new.json'), 'w',
+                  encoding='utf-8') as f:
+            json.dump({'Current': 'P1', 'Configurations': {'P1': {'Gui': {
+                'ConnectSettings': {'Config': kind, 'Address': addr,
+                                    'AdbPath': adb}}}}}, f)
+    acc = os.path.join(tmp, 'config', 'g-acc.json')
+    with open(acc, 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '7', 'game': 'arknights'},
+                   'maa': {'dir': maa_dir}}, f, ensure_ascii=False)
+
+    _write_maa('MuMuEmulator12', '127.0.0.1:16416', r'C:\MuMu\adb.exe')
+    o, src = garrison.defaults('g-acc.json')
+    assert o == {'device': 'mumu', 'mode': 'quick', 'speed': 1.5, 'medalWins': 3,
+                 'adbAddress': '127.0.0.1:16416', 'adbPath': r'C:\MuMu\adb.exe',
+                 'screenshotMethod': 'fast', 'pcUiScale': 90}, o
+    assert src['kind'] == 'MuMuEmulator12' and src['profile'] == 'P1', src
+
+    _write_maa('LDPlayer', 'emulator-5554')
+    o, _src = garrison.defaults('g-acc.json')
+    assert o['device'] == 'ldplayer' and o['screenshotMethod'] == 'auto', o
+    _write_maa('PC', '')
+    o, _src = garrison.defaults('g-acc.json')
+    assert o['device'] == 'pc' and o['adbAddress'] == '127.0.0.1:16384', o
+    # 没绑 MAA / 配置读不到：兜底值不炸
+    o, src = garrison.defaults('ghost.json')
+    assert o['device'] == 'mumu' and o['mode'] == 'quick' and o['speed'] == 1.5, o
+    assert src['kind'] == '' and src['maaDir'] == '', src
+
+    # 4) sanitize：越界值全部收进合法枚举/范围
+    bad = garrison.sanitize({'device': 'hack', 'mode': 'zzz', 'medalWins': '6',
+                             'speed': '99', 'screenshotMethod': 'x',
+                             'adbAddress': '  ', 'pcUiScale': '120'})
+    assert bad == {'device': 'mumu', 'mode': 'quick', 'medalWins': 6,
+                   'speed': 5.0, 'adbAddress': '127.0.0.1:16384',
+                   'adbPath': '', 'screenshotMethod': 'auto',
+                   'pcUiScale': 90}, bad
+
+    # 5) 空环境 status：缺核心 → ready=False + needsDownload + 下载状态机初值；
+    #    路由也挂上了
+    st = api.api_garrison_status({'file': 'g-acc.json'}, {})
+    assert st['coreOk'] is False and st['ready'] is False and not st['running'], st
+    assert st['needsDownload'] is True, st
+    assert st['download']['stage'] == 'idle', st
+    assert st['defaults']['adbAddress'] == '127.0.0.1:16384', st   # core 被清掉不影响默认值
+    for path in ('/api/garrison/status', '/api/garrison/download/start',
+                 '/api/garrison/test', '/api/garrison/start',
+                 '/api/garrison/resume', '/api/garrison/stop'):
+        assert path in api.ROUTES, path
+
+    # 6) 没宿主时的 stop：人话报错；stop_all：空列表不炸
+    try:
+        garrison.stop('g-acc.json')
+        raise AssertionError('没任务却停成功了')
+    except (ValueError, RuntimeError) as e:
+        assert '没有' in str(e), e
+    assert garrison.stop_all() == []
+
+    # 7) 下载引擎（不起网络）：回退候选常在、坏 URL 报错、坏包拒收、
+    #    前置校验不过拒装（不伤旧版）、已装短路
+    import zipfile
+    from core import garrisondl
+    cands = garrisondl.candidates()
+    assert cands and cands[-1]['version'] == garrisondl.FALLBACK['version'], cands
+    assert garrisondl.FALLBACK['sha256'] and garrisondl.FALLBACK['bytes'] > 0
+    try:
+        garrisondl._download('https://static.max-c.com/heybox/desktop/nonexistent.hbext',
+                             os.path.join(tmp, 'x.hbext'), attempts=1, timeout=10)
+        raise AssertionError('坏 URL 居然下载成功了')
+    except RuntimeError as e:
+        assert '下载失败' in str(e), e
+
+    dl_tmp = os.path.join(tmp, 'dl-unit')
+    os.makedirs(dl_tmp, exist_ok=True)
+    bad_zip = os.path.join(dl_tmp, 'bad.hbext')
+    with zipfile.ZipFile(bad_zip, 'w') as z:
+        z.writestr('core/service.mjs', 'TINY')       # 无清单 → 体量下限拒收
+        z.writestr('README.md', 'x')
+    try:
+        garrisondl._install(bad_zip, '1.2.0')
+        raise AssertionError('坏包居然装上了')
+    except RuntimeError as e:
+        assert '体量异常' in str(e), e
+
+    import hashlib as _hl
+    gate_zip = os.path.join(dl_tmp, 'gate.hbext')
+    entries = {}
+    with zipfile.ZipFile(gate_zip, 'w') as z:
+        for i in range(120):
+            z.writestr('core/data/f%d.json' % i, 'x' * 100000)
+        z.writestr('core/service.mjs', 'S' * 100000)
+        z.writestr('README.md', 'no license statement here')
+    with zipfile.ZipFile(gate_zip) as z:
+        for n in z.namelist():
+            if not n.endswith('/'):
+                entries[n] = {'relativePath': n, 'bytes': z.getinfo(n).file_size,
+                              'sha256': _hl.sha256(z.read(n)).hexdigest()}
+    try:
+        garrisondl._install(gate_zip, '1.2.0', manifest=list(entries.values()))
+        raise AssertionError('前置校验没拦住')
+    except garrisondl.NeedConfirmError:
+        pass
+    assert not os.path.exists(os.path.join(garrisondl.garrison_dir(),
+                                           'medal-farm-v1.2.0')), '拒装后不能留目录'
+
+    # 已装短路：start() 直接 done，不起线程不下载（用 core_dir 断言即可，
+    # 别走 api_garrison_status——coreOk+nodeOk 会真去拉宿主进程）
+    os.makedirs(os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core'))
+    open(os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core',
+                      'service.mjs'), 'w').close()
+    snap = garrisondl.start()
+    assert snap['stage'] == 'done', snap
+    assert garrison.core_dir().endswith('medal-farm-v1.1.4' + os.sep + 'core'), garrison.core_dir()
+    shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -4577,6 +4730,7 @@ def main():
         r.check('B44 当期活动导航（有效期/指代/模板/点结算页/名单核对）', lambda: check_event_nav(tmp))
         r.check('B45 资源包缺分区（EX/S 推断/默认不补前置/突袭不降级）', lambda: check_stage_infer(tmp))
         r.check('B46 牛杂小工具（小游戏/活动商店/黑名单位置/卡教程提示）', lambda: check_maa_tool(tmp))
+        r.check('B47 卫戍协议（核心检测/MAA 连接默认值/选项清洗/空环境口径）', lambda: check_garrison(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

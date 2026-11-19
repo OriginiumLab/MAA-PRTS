@@ -80,7 +80,7 @@
       <div class="hero-stats" id="hero-stats"></div>
     </header>
 
-    <!-- 模块菜单：作业获取 / 助手 / 抽卡统计 / 森空岛签到（终末地账号只留助手与抽卡统计） -->
+    <!-- 模块菜单：作业获取 / 助手 / 抽卡统计 / 森空岛签到 / 卫戍协议（终末地账号只留助手与抽卡统计） -->
     <nav class="modtabs" id="modtabs" role="tablist">
       <button class="modtab active" data-mod="copilot" role="tab" title="按关卡搜作业站作业，比对练度写进 MAA">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -102,11 +102,17 @@
         抽卡统计
       </button>
       <button class="modtab" data-mod="signin" role="tab" title="森空岛每日签到：明日方舟 + 终末地">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
           <rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3.5v3M16 3.5v3M3.5 10h17"/>
           <path d="m9 14.5 2 2 4-4"/>
         </svg>
         森空岛签到
+      </button>
+      <button class="modtab" data-mod="garrison" role="tab" title="卫戍协议策略刻章速刷：极速模拟自动打满策略刻章（连接参数从该账号 MAA 配置里抄，需 Node.js 与速刷核心）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l7 2.4v5.2c0 4.4-2.9 8.4-7 10.4-4.1-2-7-6-7-10.4V5.4z"/><path d="m9 11.6 2 2 4-4.2"/>
+        </svg>
+        卫戍协议
       </button>
     </nav>
 
@@ -251,6 +257,101 @@
             <div class="log-box sign-log" id="sign-log-one"><span class="sign-idle">点上面的按钮开始签到。</span></div>
           </section>
         </div>
+      </div>
+    </section>
+
+    <!-- 卫戍协议·策略刻章速刷：左状态右连接，下面日志（明日方舟账号专属，
+         终末地不显示这枚 tab）。连接默认值从该账号绑定的 MAA 配置里抄 -->
+    <section class="module" id="mod-garrison" hidden>
+      <div class="sign-head">
+        <div class="sign-title">卫戍协议<span id="gar-sub">—</span></div>
+        <div class="sign-tools"><span class="sign-tip" id="gar-tip"></span></div>
+      </div>
+      <div class="sign-scroll">
+        <!-- 环境不齐（缺 Node / 缺核心）时的安装指引，替掉下面两块 -->
+        <div class="gar-empty" id="gar-empty" hidden></div>
+        <div class="sign-grid" id="gar-grid">
+          <section class="sign-card">
+            <div class="sign-card-head">
+              <b>运行状态</b>
+              <span id="gar-account">—</span>
+            </div>
+            <div class="gar-badge-row">
+              <span class="gar-badge idle" id="gar-badge">空闲</span>
+              <span class="gar-msg" id="gar-msg">等待开始…</span>
+            </div>
+            <div class="gar-stats">
+              <div class="gar-stat"><div class="v" id="gar-strategy">–</div><div class="k">当前策略</div></div>
+              <div class="gar-stat"><div class="v" id="gar-round">–</div><div class="k">回合</div></div>
+              <div class="gar-stat"><div class="v" id="gar-level">–</div><div class="k">商店等级</div></div>
+              <div class="gar-stat"><div class="v" id="gar-matches">0</div><div class="k">对局数</div></div>
+            </div>
+            <div class="gar-bar"><i id="gar-progress"></i></div>
+            <div class="gar-prog-text" id="gar-prog-text">进度 0 / 31</div>
+          </section>
+          <section class="sign-card">
+            <div class="sign-card-head">
+              <b>连接与策略</b>
+              <span id="gar-src" title="">默认值来自该账号绑定的 MAA</span>
+            </div>
+            <div class="gar-form">
+              <label class="field-row"><span>设备</span>
+                <select id="gar-device">
+                  <option value="mumu">MuMu 模拟器</option>
+                  <option value="ldplayer">雷电模拟器 9</option>
+                  <option value="pc">明日方舟 PC 版</option>
+                </select></label>
+              <label class="field-row"><span>模拟模式</span>
+                <select id="gar-mode">
+                  <option value="quick">极速模拟（推荐）</option>
+                  <option value="standard">标准模拟</option>
+                </select></label>
+              <label class="field-row"><span>ADB 地址</span>
+                <input type="text" id="gar-adb" placeholder="127.0.0.1:16384"></label>
+              <label class="field-row"><span>目标胜场</span>
+                <select id="gar-wins">
+                  <option value="3">3 胜</option>
+                  <option value="6">6 胜</option>
+                </select></label>
+              <label class="field-row"><span>操作速度</span>
+                <select id="gar-speed">
+                  <option value="1">1×</option>
+                  <option value="1.5" selected>1.5×</option>
+                  <option value="2">2×</option>
+                  <option value="2.5">2.5×</option>
+                  <option value="3">3×</option>
+                  <option value="4">4×</option>
+                  <option value="5">5×</option>
+                </select></label>
+              <label class="field-row"><span>PC UI 缩放</span>
+                <select id="gar-scale">
+                  <option value="90">90%</option>
+                  <option value="100">100%</option>
+                </select></label>
+              <label class="field-row"><span>截图方式</span>
+                <select id="gar-shot">
+                  <option value="auto">自动</option>
+                  <option value="fast">快速（模拟器 Extras）</option>
+                  <option value="adb">ADB 截图（兼容）</option>
+                </select></label>
+            </div>
+            <div class="sign-actions gar-actions">
+              <button class="ghost-btn" id="gar-test">测试连接</button>
+              <button class="primary-btn sm" id="gar-start">开始速刷</button>
+              <button class="ghost-btn mint" id="gar-resume" disabled>恢复</button>
+              <button class="ghost-btn stop" id="gar-stop" disabled>停止</button>
+            </div>
+            <p class="gar-hint">开始前让游戏停在<b>卫戍协议活动主界面</b>（个人 / 联合模拟标签均可）。
+              连接与截图默认值抄自该账号绑定的 MAA 配置。恢复 = 从这个账号上次中断的检查点续跑。</p>
+          </section>
+        </div>
+        <section class="sign-card gar-log-card" id="gar-log-card">
+          <div class="sign-card-head">
+            <b>日志</b>
+            <span id="gar-log-note">这个账号的速刷进度与识别问题都会记在这里</span>
+          </div>
+          <div class="log-box gar-log" id="gar-log"><span class="sign-idle">点「开始速刷」后这里显示进度日志。</span></div>
+        </section>
       </div>
     </section>
   </main>

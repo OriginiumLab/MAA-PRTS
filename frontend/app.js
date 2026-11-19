@@ -11,8 +11,10 @@ const S = {
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
-  module: 'copilot', // 当前模块：copilot / gacha / signin（配置修改按需求去掉了）
+  module: 'copilot', // 当前模块：copilot / gacha / signin / garrison（配置修改按需求去掉了）
   signBusy: '',      // 正在跑哪一块签到：''/all/one——同一 token 并发签到会被风控，只能一个一个来
+  gar: null,         // /api/garrison/status 的最近一次响应（当前账号那份）
+  garOpts: {},       // file → 用户改过的速刷连接选项（没改过的账号用后端从 MAA 抄的默认值）
   gacha: null,       // /api/gacha 的最近一次响应（当前账号那份）
   gachaOf: {},       // file → 已加载过的抽卡视图：切账号/切菜单回来直接复用，不再转圈
   lastOfGame: { arknights: '', endfield: '' },  // 每栏上次看的是哪个号（切回这一栏时还原）
@@ -3880,9 +3882,9 @@ function currentGame() {
 
 function applyModuleAvailability() {
   const ef = currentGame() === 'endfield';
-  // 终末地账号只留助手与抽卡统计：作业获取、森空岛签到两枚 tab 都不显示
+  // 终末地账号只留助手与抽卡统计：作业获取、森空岛签到、卫戍协议三枚 tab 都不显示
   // （签到本身支持终末地，全局签到照样会签，只是不给终末地账号开这块界面）
-  ['copilot', 'signin'].forEach(m => {
+  ['copilot', 'signin', 'garrison'].forEach(m => {
     const b = $('.modtab[data-mod="' + m + '"]');
     if (b) b.hidden = ef;
   });
@@ -3898,6 +3900,9 @@ function applyModuleAvailability() {
     renderGacha();
   } else if (S.module === 'signin') {
     renderSignin();                    // 签到面板上的「当前账号」跟着换
+  } else if (S.module === 'garrison') {
+    resetGarView();                    // 卫戍协议：换号重描面板（轮询不用重开）
+    renderGarrison();
   } else if (S.module === 'chat') {
     chatInit();                        // 换号后助手面板里的上下文提示要跟着变
   }
@@ -3915,15 +3920,19 @@ function setModule(mod, byGame) {
   });
   const cp = $('#mod-copilot'), gg = $('#mod-gacha'), sg = $('#mod-signin');
   const ct = $('#mod-chat');
+  const ga = $('#mod-garrison');
   if (cp) cp.hidden = mod !== 'copilot';
   if (gg) gg.hidden = mod !== 'gacha';
   if (sg) sg.hidden = mod !== 'signin';
   if (ct) ct.hidden = mod !== 'chat';
-  // 抽卡统计/签到/助手都用不到右栏作业集：收掉第三列，主区拿满宽度
+  if (ga) ga.hidden = mod !== 'garrison';
+  // 抽卡统计/签到/助手/卫戍协议都用不到右栏作业集：收掉第三列，主区拿满宽度
   $('#app').classList.toggle('no-basket', mod !== 'copilot');
   if (mod !== 'copilot') toggleBasket(false);
   if (mod === 'gacha') renderGacha();
   if (mod === 'signin') renderSignin();
+  if (mod === 'garrison') { resetGarView(); renderGarrison(); garStartPolling(); }
+  else garStopPolling();
   if (mod === 'chat') enterChat(); else leaveChat();
 }
 
@@ -3986,6 +3995,288 @@ async function signinRun(scope) {
   } finally {
     S.signBusy = '';
     renderSignin();
+  }
+}
+
+/* ------------------------------------------------------------ 卫戍协议
+   策略刻章速刷：每个账号一个速刷后端（Node 子进程，后端懒启动），面板轮询
+   /api/garrison/status 拿状态。连接默认值由后端从该账号绑定 MAA 的连接配置
+   里抄（MuMu → 快速截图，雷电 → ldplayer，PC → pc；极速 / 1.5× / 3 胜），
+   用户改过的选项按账号记在 S.garOpts 里，切回来还在。 */
+const GAR_STATUS_CN = {
+  idle: '空闲', starting: '启动中', running: '运行中', stopping: '停止中',
+  failed: '失败', completed: '已完成', done: '已完成',
+};
+const GAR_KIND_CN = {
+  MuMuEmulator12: 'MuMu 模拟器 12', MuMuArm: 'MuMu ARM 版', LDPlayer: '雷电模拟器',
+  PC: '明日方舟 PC 版', BlueStacks: '蓝叠', Nox: '夜神', XYAZ: '逍遥',
+};
+const GAR_BUSY = ['running', 'starting', 'stopping'];
+
+let _garTimer = null;    // 面板轮询句柄：只在卫戍协议 tab 激活时跑
+let _garSeq = 0;         // 请求代次：切账号/离开面板后丢弃旧响应
+let _garLogSeq = {};     // file → 核心日志已追加到哪条 seq（按 seq 去重）
+
+function resetGarView() {
+  const box = $('#gar-log');
+  if (box) box.innerHTML = '<span class="sign-idle">点「开始速刷」后这里显示进度日志。</span>';
+  _garLogSeq[S.current] = 0;
+}
+
+function garCurrentOpts() {
+  const d = (S.gar && S.gar.file === S.current) ? (S.gar.defaults || null) : null;
+  return S.garOpts[S.current] || (d ? { ...d } : null);
+}
+
+/* 把选项描进表单：用户改过用改过的，否则用后端从 MAA 抄的默认值 */
+function paintGarInputs() {
+  const o = garCurrentOpts();
+  if (!o) return;
+  const set = (id, v) => { const el = $(id); if (el && v !== undefined && v !== null) el.value = String(v); };
+  set('#gar-device', o.device);
+  set('#gar-mode', o.mode);
+  set('#gar-adb', o.adbAddress);
+  set('#gar-wins', o.medalWins);
+  set('#gar-speed', o.speed);
+  set('#gar-scale', o.pcUiScale);
+  set('#gar-shot', o.screenshotMethod);
+}
+
+function collectGarOpts() {
+  const v = id => $(id) ? $(id).value : '';
+  const o = {
+    device: v('#gar-device'), mode: v('#gar-mode'), adbAddress: v('#gar-adb').trim(),
+    medalWins: Number(v('#gar-wins')) || 3, speed: Number(v('#gar-speed')) || 1.5,
+    pcUiScale: Number(v('#gar-scale')) || 90, screenshotMethod: v('#gar-shot'),
+  };
+  S.garOpts[S.current] = o;   // 记住用户的改动，切号再回来还在
+  return o;
+}
+
+function garAppendLog(items) {
+  const box = $('#gar-log');
+  if (!box || !Array.isArray(items)) return;
+  const idle = box.querySelector('.sign-idle');
+  if (idle) idle.remove();
+  let max = _garLogSeq[S.current] || 0;
+  for (const it of items) {
+    const seq = (it && it.seq) || 0;
+    const text = (typeof it === 'string') ? it : (it.text ?? it.message ?? it.msg ?? JSON.stringify(it));
+    if (!text) continue;
+    if (seq && seq <= max) continue;
+    if (seq) max = seq;
+    const div = document.createElement('div');
+    if ((it && it.err) || /失败|错误|error|停止|超时/.test(text)) div.className = 'err';
+    div.textContent = seq ? `[${String(seq).padStart(4)}] ${text}` : text;
+    box.appendChild(div);
+  }
+  while (box.childNodes.length > 400) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+  _garLogSeq[S.current] = max;
+}
+
+function paintGarState(d) {
+  const st = d.state || {};
+  const busy = GAR_BUSY.includes(st.status);
+  S.garBusy = busy;
+  const badge = $('#gar-badge');
+  if (badge) {
+    badge.className = 'gar-badge ' + (st.status || 'idle');
+    badge.textContent = GAR_STATUS_CN[st.status] || st.status || '空闲';
+  }
+  const msg = $('#gar-msg');
+  if (msg) msg.textContent = st.message || '';
+  const set = (id, v, dash) => { const el = $(id); if (el) el.textContent = (v === undefined || v === null || v === '') ? (dash || '–') : v; };
+  set('#gar-strategy', st.strategy);
+  set('#gar-round', st.round);
+  set('#gar-level', st.level);
+  set('#gar-matches', st.matches, 0);
+  const total = st.total || 31, done = st.completed || 0;
+  const bar = $('#gar-progress');
+  if (bar) bar.style.width = (total ? (done / total) * 100 : 0) + '%';
+  const pt = $('#gar-prog-text');
+  if (pt) pt.textContent = `进度 ${done} / ${total}` + (st.lastMatch ? ` · 上局：${st.lastMatch}` : '');
+  garAppendLog(st.log);
+  const tip = $('#gar-tip');
+  if (tip) tip.textContent = busy ? '速刷运行中…' : '';
+  const bt = $('#gar-test'), bs = $('#gar-start'), br = $('#gar-resume'), bp = $('#gar-stop');
+  if (bt) bt.disabled = busy;
+  if (bs) bs.disabled = busy;
+  if (br) br.disabled = busy || !d.hasCheckpoint;
+  if (bp) bp.disabled = !busy;
+  ['#gar-device', '#gar-mode', '#gar-adb', '#gar-wins', '#gar-speed', '#gar-scale', '#gar-shot']
+    .forEach(id => { const el = $(id); if (el) el.disabled = busy; });
+  // 来源标注：让用户知道这份默认值是从哪个 MAA 配置抄的
+  const src = $('#gar-src');
+  if (src) {
+    const fm = d.fromMaa || {};
+    src.textContent = fm.kind
+      ? `默认值抄自 MAA${fm.profile ? `「${fm.profile}」` : ''} · ${GAR_KIND_CN[fm.kind] || fm.kind}`
+      : '默认值（没读到 MAA 连接配置）';
+    src.title = (fm.maaDir || '') + (d.defaults && d.defaults.adbPath ? '\nadb：' + d.defaults.adbPath : '');
+  }
+}
+
+/* 环境不齐（缺 Node / 后端起不来）时的指引空态（核心缺失走下载视图，不在这） */
+function showGarEmpty(d, title) {
+  const box = $('#gar-empty'), grid = $('#gar-grid'), logCard = $('#gar-log-card');
+  if (!box) return;
+  if (grid) grid.hidden = true;
+  if (logCard) logCard.hidden = true;
+  let html = '';
+  if (d && !d.nodeOk) {
+    html = `<h3>还缺 Node.js</h3><p>速刷核心是一个 Node 程序（需要 Node.js 20 以上）。
+      装好 Node 后回来点「重试」。<button class="link-btn" data-url="https://nodejs.org">打开 nodejs.org</button></p>`;
+  } else {
+    html = `<h3>${esc(title || '速刷后端起不来')}</h3><p>${esc((d && d.error) || '未知原因')}</p>`;
+  }
+  box.innerHTML = html + '<button class="ghost-btn mint" id="gar-retry">重试</button>';
+  box.hidden = false;
+  const r = $('#gar-retry');
+  if (r) r.addEventListener('click', () => renderGarrison(true));
+  const link = box.querySelector('.link-btn');
+  if (link) link.addEventListener('click', () => openUrl(link.dataset.url));
+}
+
+/* 核心包下载视图：自动开始（records → 官方直链），进度随面板轮询刷新 */
+async function garStartDownload() {
+  try { await api('/api/garrison/download/start', {}); }
+  catch (e) { /* 失败原因下一轮轮询会带出来 */ }
+}
+
+function showGarDownload(d) {
+  const box = $('#gar-empty'), grid = $('#gar-grid'), logCard = $('#gar-log-card');
+  if (!box) return;
+  if (grid) grid.hidden = true;
+  if (logCard) logCard.hidden = true;
+  const dl = d.download || {};
+  let pct = 0, text = '准备下载…';
+  if (dl.stage === 'connecting') {
+    text = `连接下载源（${dl.version ? 'v' + dl.version + ' · ' : ''}${dl.source || '官方源'}）…`;
+  } else if (dl.stage === 'downloading') {
+    pct = dl.total ? 100 * dl.done / dl.total : 0;
+    text = `下载中 ${pct.toFixed(1)}%（${dl.done >> 20} / ${(dl.total || dl.done) >> 20} MB）`;
+  } else if (dl.stage === 'verifying') {
+    pct = dl.filesTotal ? 100 * dl.files / dl.filesTotal : 0;
+    text = `校验解压中 ${dl.files} / ${dl.filesTotal || '…'} 个文件`;
+  } else if (dl.stage === 'done') {
+    pct = 100;
+    text = '核心就绪，正在启动…';
+  } else if (dl.stage === 'error') {
+    text = '';
+  }
+  const err = dl.stage === 'error'
+    ? `<p class="gar-dl-err">${esc(dl.error || '下载失败')}</p><button class="ghost-btn mint" id="gar-dl-retry">重试</button>`
+    : '';
+  box.innerHTML = `
+    <h3>首次使用：下载核心包</h3>
+    <p>约 61MB，来自小黑盒官方 CDN（装过小黑盒会自动用你本机的最新版记录）。
+      下载后逐文件校验再安装，中断了会断点续传，不用手动管。</p>
+    <div class="gar-dl-bar"><i style="width:${Math.min(100, pct).toFixed(1)}%"></i></div>
+    <div class="gar-dl-text">${esc(text)}</div>
+    ${err}`;
+  box.hidden = false;
+  const r = $('#gar-dl-retry');
+  if (r) r.addEventListener('click', garStartDownload);
+}
+
+function hideGarEmpty() {
+  const box = $('#gar-empty');
+  if (box) box.hidden = true;
+  const grid = $('#gar-grid'), logCard = $('#gar-log-card');
+  if (grid) grid.hidden = false;
+  if (logCard) logCard.hidden = false;
+}
+
+async function renderGarrison(force) {
+  const sub = $('#gar-sub');
+  const acc = currentAccount();
+  if (sub) sub.textContent = acc ? `${acc.nickName} · 明日方舟` : '未选择账号';
+  const an = $('#gar-account');
+  if (an) an.textContent = acc ? acc.nickName : '未选择账号';
+  if (!S.current) {
+    showGarEmpty({ error: '先在左侧选一个明日方舟账号，再回来开速刷。' }, '还没有账号');
+    return;
+  }
+  const seq = ++_garSeq;
+  if (force) hideGarEmpty();
+  paintGarInputs();   // 先用缓存/旧默认值描一遍，不闪空表单
+  try {
+    const d = await api('/api/garrison/status?file=' + encodeURIComponent(S.current));
+    if (seq !== _garSeq || S.module !== 'garrison') return;
+    d.file = S.current;
+    S.gar = d;
+    if (d.needsDownload) {
+      showGarDownload(d);
+      const st = (d.download || {}).stage;
+      if (st === 'idle' || st === 'done') garStartDownload();   // 全自动：打开即开始（done=装好的核心又没了，重下）
+      return;
+    }
+    if (!d.nodeOk || !d.ready) { showGarEmpty(d); return; }
+    hideGarEmpty();
+    paintGarInputs();
+    paintGarState(d);
+  } catch (e) {
+    if (seq !== _garSeq) return;
+    showGarEmpty({ error: e.message });
+  }
+}
+
+/* 面板激活期间的状态轮询（后端本身就是转发，本地往返很便宜） */
+function garStartPolling() {
+  garStopPolling();
+  _garTimer = setInterval(garTick, 1400);
+  garTick();
+}
+function garStopPolling() {
+  if (_garTimer) { clearInterval(_garTimer); _garTimer = null; }
+}
+async function garTick() {
+  if (S.module !== 'garrison' || !S.current) return;
+  if (!S.gar || S.gar.file !== S.current) return;   // 首份状态还没拿到，等 renderGarrison
+  const seq = _garSeq;
+  try {
+    const d = await api('/api/garrison/status?file=' + encodeURIComponent(S.current));
+    if (seq !== _garSeq || S.module !== 'garrison') return;
+    d.file = S.current;
+    const wasDownloading = !!S.gar.needsDownload;
+    S.gar = d;
+    if (d.needsDownload) {
+      showGarDownload(d);
+      const st = (d.download || {}).stage;
+      if (st === 'idle' || st === 'done') garStartDownload();
+      return;
+    }
+    if (wasDownloading) { renderGarrison(true); return; }   // 刚下载完：重建整面板
+    if (!d.ready) return;
+    paintGarState(d);
+  } catch (e) { /* 断线别刷屏：下一轮再试 */ }
+}
+
+async function garAction(kind) {
+  if (!S.current) { toast('先在左侧选一个账号', 'err'); return; }
+  const opts = collectGarOpts();
+  const body = { file: S.current, options: opts };
+  const tip = $('#gar-tip');
+  try {
+    if (kind === 'stop') {
+      await api('/api/garrison/stop', body);
+      toast('已发送停止指令');
+    } else if (kind === 'test') {
+      if (tip) tip.textContent = '正在测试连接…';
+      const r = await api('/api/garrison/test', body);
+      toast('✓ ' + (r.message || '连接成功'), 'ok', 4200);
+      garAppendLog([{ text: '[测试] ' + (r.message || '连接成功') }]);
+    } else {
+      const r = await api('/api/garrison/' + kind, body);
+      toast(kind === 'resume' ? '已从检查点恢复' : '已开始速刷');
+      garAppendLog([{ text: `=== ${kind === 'resume' ? '恢复' : '开始'}速刷 ${r.taskId || ''} ===` }]);
+    }
+    garTick();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err', 5000);
+    garAppendLog([{ text: '✗ ' + e.message, err: true }]);
+    if (tip) tip.textContent = '';
   }
 }
 
@@ -4262,6 +4553,14 @@ function bindGlobal() {
   $('#btn-sign-all').addEventListener('click', () => signinRun('all'));
 
   $('#btn-sign-one').addEventListener('click', () => signinRun('one'));
+
+  // 卫戍协议：四个动作 + 表单改动随手记（不提交就切号也不丢）
+  $('#gar-test').addEventListener('click', () => garAction('test'));
+  $('#gar-start').addEventListener('click', () => garAction('start'));
+  $('#gar-resume').addEventListener('click', () => garAction('resume'));
+  $('#gar-stop').addEventListener('click', () => garAction('stop'));
+  const garForm = $('.gar-form');
+  if (garForm) garForm.addEventListener('change', collectGarOpts);
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);
   $('#btn-settings').addEventListener('click', openSettings);

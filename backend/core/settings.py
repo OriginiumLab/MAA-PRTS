@@ -196,6 +196,9 @@ DEFAULTS = {
     # 这里只在用户手动指定时覆盖（比如 MAA 里没配、或者想指向另一个实例）
     'emulatorPath': '',
     'emulatorAutoStart': True,   # 任务开跑前发现模拟器没启动，替用户启动
+    # 卫戍协议速刷核心（service.mjs 所在目录，GPL，不随本程序分发）；
+    # 空时按约定位置找：<运行根>/garrison/core 等，见 garrison.core_dir
+    'garrisonCoreDir': '',
     # 内置助手：只存连接参数，apiKey 走 DPAPI 单独存 config/agent.key
     'agent': {
         'baseUrl': 'https://api.deepseek.com/v1',
@@ -409,6 +412,8 @@ def save(patch: dict) -> dict:
             elif k == 'accountOrder':
                 v = [str(x) for x in (v or []) if str(x).endswith('.json')][:200]
             elif k == 'emulatorPath':
+                v = _norm_dir(v) if v else ''
+            elif k == 'garrisonCoreDir':
                 v = _norm_dir(v) if v else ''
             elif k == 'emulatorAutoStart':
                 # 前端可能传 "false" / 0 / 空串，别让字符串 "false" 变成真

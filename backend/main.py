@@ -359,6 +359,11 @@ def _quit(code=0, reason='退出'):
     except Exception:
         pass
     try:
+        from core import garrison as _garrison
+        _garrison.stop_all()   # 卫戍协议的 Node 宿主：通知收尾，等不及硬杀
+    except Exception:
+        pass
+    try:
         left = tasks.wait_all(5)
         if left:
             log('仍有 %d 个任务未完成，不再等待：%s' % (len(left), '、'.join(left)))
