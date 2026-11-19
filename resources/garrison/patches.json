@@ -7,6 +7,18 @@
       "why": "点「准备就绪」后游戏弹出「确认准备就绪吗？当前仍处于临时整备区的干员和装备，将在进入战斗后自动销毁（召唤物仍会在下个休整期出现）」。核心原本把 confirm-ready 页判定为「确认准备」且同时出现「剩余资金/未使用的/指令」，这个弹窗没有那些词，于是落进 unknown 空转 90 秒后报「画面持续无法识别」。补上该弹窗的特征词后，走核心自带的 confirm-ready 分支：跳过不存在的「本局不再提示」复选框，点 OCR 到的「确认」。",
       "find": "c(/确认准备/)&&c(/剩余资金|未使用的|指令/)?f=\"confirm-ready\"",
       "replace": "c(/确认准备/)&&(c(/剩余资金|未使用的|指令/)||c(/临时整备区|召唤物|自动销毁/))?f=\"confirm-ready\""
+    },
+    {
+      "id": "name-match-short-latin-tolerance",
+      "why": "三合一（精锐免费选择）赠送高星干员时，核心点开候选卡后按详情标题 OCR 与卡片名互相核对（Zr）。原规则对期望名 <4 字零容错（必须原样包含）、拉丁名只容 1 个字符差：蕾缪安（3 字）OCR 错一个形近字、拉丁名（Miss.Christine，以及核心赛季数据里根本没有的新预备干员 Mist 系小字拉丁名）常错 2 字以上，即核对失败 → 点右上角关闭 → 抛「免费奖励领取未确认」→ 赠送干员没领到。放宽为：≥3 字享受与 ≥4 字相同的 1 字容差（2 字名保持原样零容错防误买），≥6 字的拉丁/数字名容 2 字差（核心数据里的拉丁名两两编辑距离远大于 2，无混淆风险）。",
+      "find": "if(A.includes(M))return!0;if(M.length<4)return!1;for(let q=0;q+M.length<=A.length;q++){let W=0;for(let L=0;L<M.length;L++)A[q+L]!==M[L]&&W++;if(W<=1)return!0}return!1",
+      "replace": "if(A.includes(M))return!0;if(M.length<3)return!1;const ya=/^[A-Za-z0-9]/.test(M)&&M.length>=6?2:1;for(let q=0;q+M.length<=A.length;q++){let W=0;for(let L=0;L<M.length;L++)A[q+L]!==M[L]&&W++;if(W<=ya)return!0}return!1"
+    },
+    {
+      "id": "free-claim-trust-detail-title",
+      "why": "免费领取（三合一赠送 / 召唤模块奖励，$e 第三参 b=true）的兜底：卡片名与详情标题两侧 OCR 对不上时（如单字名「夕」在小字号卡面上被读成形近字），核心原本直接判核对失败、关弹窗、弃领。改为免费场景下若大字号详情标题读出了非空文本，就信详情、按它的名字继续领——最坏结果是领了另一张免费卡，不会误花金币（购买/出售 b=false 不走此兜底，核对标准不变）。",
+      "find": "if(!Zr(K,k))return _(",
+      "replace": "if(!Zr(K,k)&&!(b&&K&&(k=K)))return _("
     }
   ]
 }

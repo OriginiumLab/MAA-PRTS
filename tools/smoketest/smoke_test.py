@@ -4665,8 +4665,8 @@ def check_garrison(tmp):
     shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
 
     # 8) 核心文本补丁：规则随包分发、能打上、幂等、脱靶不动文件
-    #    （核心 service.mjs 是第三方混淆包，认不出「确认准备就绪吗」弹窗，
-    #     落 unknown 空转 90 秒；补丁只做纯文本替换，不改核心其它逻辑）
+    #    （核心 service.mjs 是第三方混淆包：认不出「确认准备就绪吗」弹窗、
+    #     免费领取对短名/拉丁名的核对零容错——补丁只做纯文本替换，不改其它逻辑）
     assert os.path.isfile(garrison.PATCH_FILE), garrison.PATCH_FILE
     rules = garrison._patch_rules()
     assert rules and all(r.get('find') and r.get('replace') for r in rules), rules
@@ -4674,12 +4674,13 @@ def check_garrison(tmp):
     os.makedirs(fake_core, exist_ok=True)
     svc = os.path.join(fake_core, 'service.mjs')
     with open(svc, 'w', encoding='utf-8') as f:
-        f.write('x=1;' + rules[0]['find'] + ';y=2;')
+        f.write('x=1;' + ''.join(r['find'] for r in rules) + ';y=2;')
     got = garrison.apply_core_patches(fake_core)
     assert got['applied'] == len(rules) and not got['miss'], got
     with open(svc, encoding='utf-8') as f:
         body = f.read()
-    assert rules[0]['replace'] in body and rules[0]['find'] not in body, body
+    for r in rules:
+        assert r['replace'] in body and r['find'] not in body, r['id']
     assert os.path.isfile(svc + '.orig'), '打补丁前必须先留 .orig 备份'
     again = garrison.apply_core_patches(fake_core)   # 幂等：第二次不重复替换
     assert again['applied'] == 0 and again['skipped'] == len(rules), again
