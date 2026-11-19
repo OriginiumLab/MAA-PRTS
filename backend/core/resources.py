@@ -145,6 +145,70 @@ def story_of(stage_id) -> bool:
     return str(stage_id or '').split('#')[0] in _story_ids()
 
 
+# 活动分区代号 → stageId 的命名规则：TL-S-4 → act55side_s04、TL-EX-4 → act55side_ex04
+_INFER_RE = re.compile(r'^([A-Za-z][A-Za-z0-9]{0,11})-(EX|HX|MO|S|F)-?(\d{1,2})$')
+_infer_cache = {}
+
+
+def infer_stage(code):
+    """资源包里没有的关卡代号 → 按同活动前缀推断真实 stageId
+
+    当期活动新开的 EX / S 分区经常还没进上游资源包（2026-11-19 的
+    TL-S-1~S-4：包里只有 TL-1~TL-10）。缺这一行时 ``copilot.search`` 只能
+    走「全文搜第一条的 stage_name」兜底，把 TL-S-4 认成 act55side_s02——
+    挂 S-4 却抄 S-2 的作业、突袭行也拿不到（用户实测口径：「说的和实际给我
+    选择的关不一样」「不会选突袭」）。
+
+    推断靠同活动基础关：TL-1 的 stageId 是 act55side_01 → 前缀 act55side，
+    S-4 就是 act55side_s04。作业站对 ``levelKeyword`` 认这个 id，取回来还会
+    用 stage_name 二次校验，猜错也只会是「这关没作业」，不会挂错关。
+
+    查不到返回 None（上层照旧报「搜不到」）。
+    """
+    key = str(code or '').strip().upper()
+    if not key:
+        return None
+    with _lock:
+        if key in _infer_cache:
+            return _infer_cache[key]
+    row = None
+    m = _INFER_RE.match(key)
+    if m:
+        pre, kind, num = m.group(1).upper(), m.group(2).upper(), int(m.group(3))
+        # 同活动的基础关：优先第 1 关（TL-1 → act55side_01），没有再退到任意
+        # 一个「前缀-数字」的关（有的活动没有 1 号关）
+        base = ''
+        ref = None
+        for s in _stages(True):
+            if (s.get('code') or '').upper() == '%s-1' % pre:
+                ref = s
+                break
+        if ref is None:
+            for s in _stages(True):
+                c = (s.get('code') or '').upper()
+                if c.startswith(pre + '-') and c[len(pre) + 1:].isdigit():
+                    ref = s
+                    break
+        if ref is not None:
+            base = str(ref.get('stageId') or '').rsplit('_', 1)[0]
+        if base:
+            row = {
+                'stageId': '%s_%s%02d' % (base, kind.lower(), num),
+                'code': key, 'name': '',
+                'zoneId': ref.get('zoneId') or '',
+                'zoneName': ref.get('zoneName') or '',
+                'zoneType': ref.get('zoneType') or 'ACTIVITY',
+                'activity': ref.get('activity') or '',
+                # EX / HX / MO / S 都有突袭难度；F（火蓝之心第二区）没有
+                'raid': kind in ('EX', 'HX', 'MO', 'S'),
+                'difficulty': 'normal', 'difficultyCN': '',
+                'danger': '', 'story': False, 'inferred': True,
+            }
+    with _lock:
+        _infer_cache[key] = row
+    return row
+
+
 def stage_detail(stage_id):
     """按 stageId 取一行（含剧情关）；查不到返回 None"""
     sid = str(stage_id or '').split('#')[0]
@@ -226,6 +290,16 @@ def resolve(keyword: str) -> dict:
     if hit:
         return {'mode': 'stage', 'title': hit[0]['code'] + ' ' + hit[0]['name'],
                 'keyword': kw, 'stages': hit[:1]}
+
+    # 2.6 资源包里还没有的分区（当期活动的 EX / S 常常后于资源包上线）：
+    #     TL-S-4 → act55side_s04。**必须排在「前缀展开」和「全文搜兜底」
+    #     前面**，否则会被当成未知代号随便抓一条作业的 stage_name 顶上，
+    #     挂 S-4 实际抄 S-2 的作业（2026-11-19 用户实测）
+    inf = infer_stage(kw)
+    if inf:
+        return {'mode': 'stage',
+                'title': '%s %s' % (kw.upper(), inf.get('zoneName') or ''),
+                'keyword': kw, 'stages': [inf]}
 
     # 2.5 剧情关精确命中。9-1 / EG-3 / TL-ST-1 这类代号只属于剧情关，默认
     #     视图里没有，用户搜了会落空。但 12-1 这种既是剧情关代号、又是章节

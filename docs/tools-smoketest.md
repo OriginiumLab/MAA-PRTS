@@ -175,6 +175,25 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
 离线核对模板（不连模拟器也能验）：把用户截图喂给 `find_card_bytes`，四张模板
 都拿 0.0 分、命中位置就是红框中心。
 
+### B45 资源包缺分区（2026-11-19）
+
+用户实测：「还是不会选突袭，说的和实际给我选择的关不一样」。资源包是
+2026.10.29 的，当期活动只有 `TL-1~TL-10`，没有 `TL-S-4`，于是搜索拿
+「全文搜第一条的 stage_name」顶上，把 S-4 认成了 `act55side_s02`。
+
+- 推断：`infer_stage('TL-S-4') → act55side_s04`、`TL-EX-3 → act55side_ex03`、
+  `TL-MO-1 → act55side_mo01`；`TL-1` 和乱码返回 `None`（不瞎推）；
+  `resolve('TL-S-4')` 必须 `mode='stage'` 且 stageId 正确
+- 预检：`row_of('TL-S-4')` 认得出；`prereq_codes('TL-S-4')` 是
+  `S-1~S-4`；`expand(with_prereq=False)` 只出自己
+- 名单核对：`['TL-S-1'...'TL-S-5']` 对点名 `['TL-S-3','TL-S-4']` → 剔掉 S-5，
+  S-1~S-4 留着（同分区前面的关算前置）
+- 突袭不降级：突袭作业 `mode='blocked'` 时首轮仍排 `variant='raid'`
+  （日志告警但不改普通）；`prereq` 里的关只排普通；`@both` 出 normal + raid
+  两条；这关压根没有突袭作业时才退回普通
+- 预检全判「缺干员」时不拒绝（缺人能借，照排）；判「练度不足」时仍然报
+  「一关都打不了」
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

@@ -699,16 +699,18 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
                 'stages': [], 'story': res['stages'][0], 'stories': [],
                 'next': None}
     if not res['stages']:
-        # 回退：把关键词当关卡代号问作业站，用返回的 stage_name 反推
-        pool = [p for p in _pull({'document': keyword.strip()}, pages=1)
-                if p['content'].get('stage_name')]
-        if not pool:
-            return {'mode': 'unknown', 'title': '', 'keyword': keyword, 'stages': []}
-        sid = pool[0]['content']['stage_name']
-        stage = {'stageId': sid, 'code': keyword.strip().upper(), 'name': '',
-                 'zoneId': '', 'zoneName': '', 'raid': sid.endswith('#f#')}
-        res = {'mode': 'stage', 'title': '%s（%s）' % (keyword, sid),
-               'keyword': keyword, 'stages': [stage]}
+        # 资源包里没有：按代号规则推真实 stageId（当期活动的 EX / S 分区）。
+        # **不再拿「全文搜第一条的 stage_name」顶**——那条路会把 TL-S-4
+        # 认成 act55side_s02，挂 S-4 抄 S-2 的作业，用户看到的就是
+        # 「说的和实际给我选择的关不一样」。推不出来就如实说搜不到。
+        inf = resources.infer_stage(keyword)
+        if not inf:
+            return {'mode': 'unknown', 'title': '', 'keyword': keyword,
+                    'stages': []}
+        res = {'mode': 'stage',
+               'title': '%s %s' % (keyword.strip().upper(),
+                                   inf.get('zoneName') or ''),
+               'keyword': keyword, 'stages': [inf]}
 
     owned = build_owned(snap)
     # 排序算法跟账号存（用户在搜索框旁的下拉里选）：不再按干员数自动判萌新号

@@ -422,9 +422,10 @@ TOOLS = [
            'wakeup': {'type': 'boolean',
                       'description': 'true=连唤醒+导航一起跑（默认 false 直跑）'},
            'autoPrereq': {'type': 'boolean',
-                          'description': 'true=基础关的前置也一起补。默认只自动补 '
-                                         'EX/S/MO 的前置；mode=fight 纯刷关默认一关'
-                                         '都不补（刷材料时补上就是白烧理智）'},
+                          'description': '默认 false=不补前置，点名的关就是全部。'
+                                         'true=把前置关也补进计划（补进来的只打普通）'
+                                         '。用户说「S-3 点不开/没解锁，把前置一起补」'
+                                         '时才传 true，别自己默认补'},
            'raid': {'type': 'string', 'enum': ['auto', 'both', 'normal'],
                     'description': '没写 @ 后缀的关怎么打：auto（默认）=有突袭'
                                    '作业就只打突袭；both=普通+突袭都打（普通还没'
@@ -1237,9 +1238,9 @@ def _precheck_fight(args):
     except Exception:                       # noqa: BLE001 没账号就当匿名预检
         file = ''
     try:
-        auto = args.get('autoPrereq', 'auto')
+        # 和 skill_fight 保持一致：默认不补前置，确认卡上列的就是真正要打的关
+        auto = args.get('autoPrereq', False)
         mode = args.get('mode') or 'copy'
-        # 纯刷关默认不补前置（补上就变成每关打一遍，理智白花在已通关的关上）
         rep = stageplan.review(stages, file, mode=mode,
                                with_prereq=(auto is not False) and
                                (mode == 'copy' or auto is True),
@@ -1593,10 +1594,13 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
   比对这号练度。返回里有 `precheck` 且列了「练度不足 / 缺干员 / 前置未通」时，
   **必须先把「哪几关打不了、为什么」原样告诉用户**（练度不够要点出差哪个干员），
   再说能打的几关已在后台跑。一关都打不了时工具会直接返回 error，别改口说"开打了"。
-- **别把没解锁的关排进队列**：前一关没通，后面的关在地图上是灰的（用户实测：
-  S1/S2 没打，S3 连解锁都不行，排下去只是白等 8 分钟）。用户点名要 S3 时，
-  skill_fight 会自动把 S1、S2 补进计划；只想打指定的那关就传 autoPrereq=false，
-  并在回话里说清「这关可能还没解锁」。
+- **stages 只写用户点名的关，一个都不许自己加**：用户说「挂 S-3、S-4」就传
+  `["TL-S-3@raid","TL-S-4@both"]`，**不要自己补 S-1、S-2 这种前置**（用户
+  2026-11-19 实测：「我让他挂的关卡和他给我挂的关卡不一致」）。补前置是
+  `autoPrereq: true` 才会做的事，默认关；要补也在回话里先说清补了哪几关。
+- **别把没解锁的关排进队列**：前一关没通，后面的关在地图上是灰的。用户点名
+  要 S3 而 S1/S2 没打时，日志会写「不补前置：S3 要先通前面的关」，把这句话
+  转述给用户，问他「要不要一起补」，他同意再传 `autoPrereq: true`。
 - **活动代号一律查，不许凭记忆换算**：用户说「孤星」就搜 search_stages("孤星")
   或直接把中文名交给 skill_navigate，**不要自己猜成 SV**（孤星=CW，
   覆潮之下=SV，愚人号=SN，不义之财=CV）。猜错一次就是几轮白跑。

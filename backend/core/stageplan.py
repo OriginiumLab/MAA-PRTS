@@ -78,7 +78,12 @@ def stage_index():
 
 
 def row_of(code):
-    return stage_index().get((code or '').strip().upper())
+    row = stage_index().get((code or '').strip().upper())
+    if row:
+        return row
+    # 当期活动新开的 EX / S 分区还没进资源包：按代号规则推一条，不然预检
+    # 连「这是活动关」都不认识（列表核对、前置判断全失效）
+    return resources.infer_stage(code)
 
 
 def is_activity(row):
@@ -108,6 +113,10 @@ def chain(code):
     row = row_of(code)
     if not row or not is_activity(row):
         return [code]
+    # 推断出来的关（活动新分区，资源包还没收录）没有流程序，硬展开会把
+    # 别的活动的同类型关全拉进来（flow 缺失时序号是 1e9）
+    if _flow(row)[1] >= 1e8:
+        return [code]
     kind = kind_of(code)
     bucket, target = _flow(row)[0], _flow(row)[1]
     out = []
@@ -123,6 +132,29 @@ def chain(code):
     out.sort()
     codes = [c for _, c in out]
     return codes or [code]
+
+
+def prereq_codes(code):
+    """同分区排在它前面的关（含自己），资源包缺分区时按代号规则兜底
+
+    ``chain`` 靠资源包里的流程序算，当期活动新开的 EX / S 分区还没进包时
+    只能返回自己，于是「这关前面还有几关没通」的提醒就漏了。这里补一条
+    纯代号规则：``TL-S-4`` → ``TL-S-1``、``TL-S-2``、``TL-S-3``、``TL-S-4``。
+
+    只用于**提示**（不自动补、不进队列），猜错了最多是提示里多列一关。
+    """
+    code = str(code or '').strip().upper()
+    out = chain(code)
+    if len(out) > 1:
+        return out
+    m = _KIND_RE.search(code)
+    if not m:
+        return [code]
+    kind, num = m.group(1).upper(), int(m.group(2))
+    if num <= 1:
+        return [code]
+    pre = code[:m.start() + 1]
+    return ['%s%s-%d' % (pre, kind, i) for i in range(1, num)] + [code]
 
 
 def expand(stages, with_prereq=True, fill_base=False):
@@ -146,7 +178,7 @@ def expand(stages, with_prereq=True, fill_base=False):
     for c in want:
         k = kind_of(c)
         fill = with_prereq and (fill_base or k in ('ex', 's', 'mo', 'st'))
-        for x in (chain(c) if fill else [c]):
+        for x in (prereq_codes(c) if fill else [c]):
             if x in seen:
                 continue
             seen.add(x)
@@ -302,7 +334,9 @@ def review(stages, account_file='', mode='copy', with_prereq=True, fill_base=Fal
     :param stages: 用户要打的关卡（代号）
     :param account_file: 账号快照文件名；空则只判作业有没有，不判练度
     :param mode: ``copy`` 才有作业可查；``fight`` 只能给顺序、判不了练度
-    :param with_prereq: 是否把前置关补进计划（默认补）
+    :param with_prereq: 是否把前置关补进计划。**`skill_fight` 传 False**
+        （2026-11-19 用户口径：点名的关就是全部，别顺手多打）；只有用户说
+        「把前置一起补」（`autoPrereq=true`）时才传 True
     :param fill_base: 基础关也补前置。**默认 False**——用户说「刷 BB-7」
         时把 BB-1~BB-6 一起排进去就是白烧理智（见 :func:`expand`）
     :param max_check: 最多查几关的作业/练度。一关一次作业站请求，二十关就是
@@ -385,9 +419,9 @@ def review(stages, account_file='', mode='copy', with_prereq=True, fill_base=Fal
     in_plan = {i['code'] for i in plan}
     lack_note = []
     for code in requested:
-        if code in in_plan and len(chain(code)) == 1:
+        if code in in_plan and len(prereq_codes(code)) == 1:
             continue
-        lack = [c for c in chain(code)[:-1] if c not in in_plan]
+        lack = [c for c in prereq_codes(code)[:-1] if c not in in_plan]
         if lack:
             lack_note.append('%s 前面还有 %s' % (
                 code, '、'.join(lack[:8]) + ('…' if len(lack) > 8 else '')))

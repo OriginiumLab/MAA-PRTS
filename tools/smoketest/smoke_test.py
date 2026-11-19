@@ -3113,6 +3113,16 @@ def check_stage_precheck(tmp):
                                 'account': 'x.json'}, lambda *_: None)
         except ValueError:
             pass
+        # 2026-11-19 用户口径：默认「点名的关就是全部」，copy 模式也不再
+        # 自动补前置（他要打 S-3、S-4，结果 S-1、S-2 也被打了一遍）
+        assert cap.get('with_prereq') is False, cap
+        cap.clear()
+        try:
+            skills.skill_fight({'stages': ['BB-S-3'], 'mode': 'copy',
+                                'autoPrereq': True,
+                                'account': 'x.json'}, lambda *_: None)
+        except ValueError:
+            pass
         assert cap.get('with_prereq') is True, cap
     finally:
         stageplan.review = orig_rev
@@ -4223,6 +4233,127 @@ def check_event_nav(tmp):
     assert got2 == ['SV-EX-1'], got2
     assert any('SV-EX-2' in x and '没在计划里' in x for x in logs2), logs2
 
+def check_stage_infer(tmp):
+    """B45：资源包缺分区（当期活动 EX/S）时的四件事
+
+    2026-11-19 用户实测：「还是不会选突袭，说的和实际给我选择的关不一样」。
+    查下来是三处连环：
+      1) 资源包只有 TL-1~TL-10，没有 TL-S-4，于是搜索走「全文搜第一条的
+         stage_name」兜底，把 TL-S-4 认成 act55side_s02 —— 挂 S-4 抄 S-2 的
+         作业，突袭行也拿不到；
+      2) 预检默认补前置，用户只点名 S-3/S-4，S-1、S-2 也被从头打一遍；
+      3) 突袭作业判「缺干员」时程序默默降级成普通，用户看到的就是「不打突袭」。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import resources, stageplan, skills
+    from core import copilot as cp
+
+    # ① 代号推断：资源包里没有的分区按同活动基础关推 stageId
+    assert resources.resolve('TL-1')['stages'], 'TL 基础关应该在资源包里'
+    inf = resources.infer_stage('TL-S-4')
+    assert inf and inf['stageId'] == 'act55side_s04', inf
+    assert inf['raid'] is True and inf['difficulty'] == 'normal', inf
+    assert resources.infer_stage('TL-EX-3')['stageId'] == 'act55side_ex03'
+    assert resources.infer_stage('TL-MO-1')['stageId'] == 'act55side_mo01'
+    assert resources.infer_stage('TL-1') is None, '基础关不瞎推'
+    assert resources.infer_stage('胡言乱语') is None
+    rep = resources.resolve('TL-S-4')
+    assert rep['mode'] == 'stage' and rep['stages'][0]['code'] == 'TL-S-4', rep
+    assert rep['stages'][0]['stageId'] == 'act55side_s04', rep
+
+    # ② 预检认识推断出来的关：能算前置、能排序、默认不展开
+    assert (stageplan.row_of('TL-S-4') or {}).get('stageId') == 'act55side_s04'
+    assert stageplan.prereq_codes('TL-S-4') == [
+        'TL-S-1', 'TL-S-2', 'TL-S-3', 'TL-S-4'], stageplan.prereq_codes('TL-S-4')
+    assert [i['code'] for i in stageplan.expand(['TL-S-4'], with_prereq=False)] \
+        == ['TL-S-4']
+    assert [i['code'] for i in stageplan.expand(['TL-S-4'], with_prereq=True)] \
+        == ['TL-S-1', 'TL-S-2', 'TL-S-3', 'TL-S-4']
+
+    # ③ 名单核对：多出来的 S-5 剔掉，S-1~S-4（同分区前面的关）留着
+    got = skills._tidy_stage_list(
+        ['TL-S-1', 'TL-S-2', 'TL-S-3', 'TL-S-4', 'TL-S-5'],
+        ['TL-S-3', 'TL-S-4'], lambda *_: None)
+    assert got == ['TL-S-1', 'TL-S-2', 'TL-S-3', 'TL-S-4'], got
+
+    # ④ 突袭作业判「缺干员」也照排突袭；补进来的前置关只打普通；@both 两条
+    orig = cp.search
+
+    def fake_search(code, snap=None, **kw):
+        return {'mode': 'stage', 'stages': [
+            {'stage': {'code': code, 'variant': 'normal'},
+             'ops': [{'copilotId': 11, 'mode': 'ready', 'rating': 9, 'title': 'n'}]},
+            {'stage': {'code': code, 'variant': 'raid'},
+             'ops': [{'copilotId': 12, 'mode': 'blocked', 'missing': ['甲'],
+                      'rating': 9, 'title': 'r'}]}]}
+    cp.search = fake_search
+    try:
+        logs = []
+        picks, pool = skills._select_ops(['TL-S-3'], '', logs.append, raid='auto')
+        assert picks == [{'copilotId': 12, 'stageCode': 'TL-S-3',
+                          'variant': 'raid'}], picks
+        assert any('缺干员' in x for x in logs), logs
+
+        picks, _ = skills._select_ops(['TL-S-1'], '', logs.append, raid='auto',
+                                      prereq={'TL-S-1'})
+        assert picks and picks[0]['variant'] == 'normal', picks
+        assert any('补的前置关' in x for x in logs), logs
+
+        picks, _ = skills._select_ops(['TL-S-3'], '', logs.append, raid='auto',
+                                      wants={'TL-S-3': 'both'})
+        assert [p['variant'] for p in picks] == ['normal', 'raid'], picks
+
+        # 这关压根没有突袭作业时才退回普通
+        cp.search = lambda code, snap=None, **kw: {
+            'mode': 'stage', 'stages': [
+                {'stage': {'code': code, 'variant': 'normal'},
+                 'ops': [{'copilotId': 21, 'mode': 'ready', 'rating': 9,
+                          'title': 'n'}]}]}
+        picks, _ = skills._select_ops(['TL-S-2'], '', logs.append, raid='auto')
+        assert picks and picks[0]['variant'] == 'normal', picks
+    finally:
+        cp.search = orig
+
+    # ⑤ 预检全判「缺干员」时不拒绝（缺人能借助战），判「练度不足」才拒绝
+    orig_rev, orig_prep, orig_run, orig_acc = (
+        stageplan.review, skills._prepare_ops,
+        skills.maaplan.run_core, skills._account_file)
+    orig_dir = skills._default_maa_dir
+    try:
+        skills._account_file = lambda n: 'x.json'
+        skills._default_maa_dir = lambda: 'MAA'
+        skills._prepare_ops = lambda *a, **k: ([], {})
+        skills.maaplan.run_core = lambda *a, **k: {
+            'ok': True, 'stages_ok': [], 'stages_failed': [], 'swaps': []}
+
+        def fake_review(stages, *a, **k):
+            return {'plan': [{'code': 'TL-S-3', 'prereq': False,
+                              'state': 'blocked', 'reason': '缺干员',
+                              'notes': [], 'story': False, 'kind': 's'}],
+                    'playable': [], 'ops': {}, 'notes': [],
+                    'blocked': [{'code': 'TL-S-3', 'reason': '缺干员且借不到',
+                                 'notes': []}],
+                    'summary': 'x', 'requested': list(stages)}
+        stageplan.review = fake_review
+        res = skills.skill_fight({'stages': ['TL-S-3'], 'account': 'x'},
+                                 lambda *_: None)
+        assert res['ok'] and res['stages'] == ['TL-S-3'], res
+
+        stageplan.review = lambda *a, **k: dict(
+            fake_review(['TL-S-3']),
+            blocked=[{'code': 'TL-S-3', 'reason': '练度不足', 'notes': []}])
+        try:
+            skills.skill_fight({'stages': ['TL-S-3'], 'account': 'x'},
+                               lambda *_: None)
+        except ValueError as e:
+            assert '一关都打不了' in str(e), e
+        else:
+            raise AssertionError('练度不足也不该硬排')
+    finally:
+        (stageplan.review, skills._prepare_ops, skills.maaplan.run_core,
+         skills._account_file) = (orig_rev, orig_prep, orig_run, orig_acc)
+        skills._default_maa_dir = orig_dir
+
 
 # ---------------------------------------------------------------- 入口
 
@@ -4287,6 +4418,7 @@ def main():
         r.check('B42 工具调用断链自愈 + 点名作业真的生效', lambda: check_agent_tool_chain(tmp))
         r.check('B43 逐关战报 + 失败换作业重挂 + 分段扫图', lambda: check_battle_retry(tmp))
         r.check('B44 当期活动导航（有效期/指代/模板/点结算页/名单核对）', lambda: check_event_nav(tmp))
+        r.check('B45 资源包缺分区（EX/S 推断/默认不补前置/突袭不降级）', lambda: check_stage_infer(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -303,7 +303,7 @@ def _parse_stages(raw):
 
 
 def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
-                depth=3, strict=False):
+                depth=3, strict=False, prereq=None):
     """挑选每关要用的作业 → ``(picks, pool)``
 
     ``picks`` 是首轮要排的 ``[{'copilotId','stageCode','variant'}]``；
@@ -355,6 +355,7 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
               'no': 'normal'}.get(str(raid).strip().lower(), 'raid')
     wants = {str(k).upper(): v for k, v in (wants or {}).items()}
     fixed = {str(k).upper(): int(v) for k, v in (fixed or {}).items() if v}
+    prereq = {str(k).upper() for k in (prereq or ()) if k}
     picks, pool = [], {}
 
     def _ranked(row):
@@ -434,9 +435,20 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
         st_info = (raid_row or normal_row or {}).get('stage') or {}
         mainline = st_info.get('difficulty') in ('easy', 'tough', 'risky')
         want = wants.get(st.upper()) or gw
+        # 补进来的前置关只为「打通解锁下一关」，打突袭是白白多烧一倍理智
+        # （2026-11-19 用户实测：只点了 S-3/S-4，S-1、S-2 也按突袭打了一遍）
+        if st.upper() in prereq and st.upper() not in wants:
+            want = 'normal'
+            log('%s 是补的前置关，只打普通（打通就解锁）' % st)
         if mainline:
             want = 'normal'
-        raid_ok = (r_op is not None
+        # 「这关的突袭作业到底有没有」和「抄不抄得动」是两件事：
+        # 2026-11-19 用户实测「不会选突袭」——突袭作业练度要求比普通高，被判
+        # 「缺干员」后程序自己默默改打普通，用户看到的就是「我要突袭它打普通」。
+        # 现在只要**有**突袭作业就照排（`_note` 会如实告警），不偷偷降级；
+        # 真要降级是「这关压根没有突袭作业」。
+        has_raid = r_op is not None
+        raid_ok = (has_raid
                    and (r_op.get('mode') or 'blocked') in ('ready', 'borrow',
                                                            'unknown'))
 
@@ -444,7 +456,7 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
             return '（另有 %d 份备选，翻车会自动换）' % (n - 1) if n > 1 else ''
 
         if want == 'raid':
-            if raid_ok:
+            if has_raid:
                 _note(st, r_op)
                 log('%s：只打突袭（作业 #%s《%s》）%s'
                     % (st, r_op.get('copilotId'),
@@ -452,16 +464,14 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
                 _add(st, 'raid', r_cands)
                 continue
             if n_op is None:
-                log('跳过 %s：突袭作业不可抄，也没有普通版' % st)
+                log('跳过 %s：这关没有突袭作业，也没有普通版' % st)
                 continue
             if strict:
-                log('跳过 %s：没有能抄的突袭作业（这一轮只要突袭）' % st)
+                log('跳过 %s：这关没有突袭作业（这一轮只要突袭）' % st)
                 continue
-            log('%s：突袭作业打不了（%s），这关只打普通'
-                % (st, {'train': '练度不足', 'blocked': '缺干员'}.get(
-                    r_op.get('mode') if r_op else '', '没搜到')))
+            log('%s：作业站这关没有突袭作业，只打普通' % st)
         elif want == 'both':
-            if raid_ok and n_op is not None:
+            if has_raid and n_op is not None:
                 log('%s：普通 + 突袭（作业 #%s → #%s）'
                     % (st, n_op.get('copilotId'), r_op.get('copilotId')))
                 _note(st, n_op)
@@ -469,7 +479,7 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
                 _note(st, r_op)
                 _add(st, 'raid', r_cands)
                 continue
-            if raid_ok and n_op is None:
+            if has_raid and n_op is None:
                 _note(st, r_op)
                 log('%s：只打突袭（没有普通版作业）%s'
                     % (st, _alt(min(len(r_cands), depth))))
@@ -479,9 +489,9 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
                 log('跳过 %s：这轮要普通+突袭，但两份都没有' % st)
                 continue
             if strict:
-                log('跳过 %s：突袭这档没作业/打不了，这一轮只要突袭' % st)
+                log('跳过 %s：这关没有突袭作业（这一轮只要突袭）' % st)
                 continue
-            log('%s：突袭这档没作业/打不了，只排普通' % st)
+            log('%s：作业站这关没有突袭作业，只排普通' % st)
         # 走到这里就是「打普通」
         if n_op is None:
             if strict:
@@ -510,11 +520,31 @@ def _tidy_stage_list(stages, asked, log):
     ``SV-EX-2 ~ SV-EX-7``（跳掉 EX-1 之后又往后补了一关凑数），白烧一整轮
     理智。这里按白名单过滤，名单外的一律剔掉并写日志；用户点名却没排进去的
     （预检判定打不了）也点名说明。
+
+    白名单**先用代号规则自己算**（同活动同分区的序号 ≤ 点名最大序号），再
+    并上 ``stageplan.expand`` 的链：资源包里没有当期活动 EX / S 关时 expand
+    认不出前置，只靠它会漏。
     """
     asked = [str(s).upper() for s in (asked or []) if s]
     if not asked or not stages:
         return stages
     allow = set(asked)
+
+    def _key(code):
+        m = re.match(r'^([A-Za-z][A-Za-z0-9]{0,11})-(EX|HX|MO|S|F)-?(\d{1,2})$',
+                     str(code or '').upper())
+        return (m.group(1), m.group(2), int(m.group(3))) if m else None
+
+    top = {}
+    for a in asked:
+        k = _key(a)
+        if k:
+            top[(k[0], k[1])] = max(top.get((k[0], k[1]), 0), k[2])
+    if top:
+        for s in stages:
+            k = _key(s)
+            if k and k[2] <= top.get((k[0], k[1]), 0):
+                allow.add(str(s).upper())
     try:
         allow |= {x['code'].upper()
                   for x in stageplan.expand(list(asked), with_prereq=True,
@@ -538,14 +568,15 @@ def _tidy_stage_list(stages, asked, log):
 
 
 def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
-                 depth=3, strict=False):
+                 depth=3, strict=False, prereq=None):
     """``_select_ops`` + 落盘 → ``(copilotList, retry)``
 
     ``retry`` 直接塞进 ``spec['retry']``，run_core 据此在翻车后换作业重挂。
     每关只有一份候选时不给 retry（没得换，省一轮空转）。
     """
     picks, pool = _select_ops(stages, file, log, raid=raid, wants=wants,
-                              fixed=fixed, depth=depth, strict=strict)
+                              fixed=fixed, depth=depth, strict=strict,
+                              prereq=prereq)
     rows = maaplan.prepare_copilot(picks, _default_maa_dir(), log=log)
     retry = {}
     if any(len(v) > 1 for v in pool.values()):
@@ -562,12 +593,14 @@ def skill_fight(params, log, tid=None):
     编队（formation）/ 借助战（support）/ 吃理智药（sanityPotion）默认全开。
 
     **开打前先预检**（``precheck=True``，默认开，见 stageplan）：把关卡按游戏
-    顺序排、补齐前置关，再拿作业要求比对账号练度。练度不够 / 缺干员 / 没作业
-    的关卡**不排队**，只在日志和返回值里说明原因——用户实测过的坑：练度不够
-    还硬挂 S1~S4，MAA 跑 8 分钟第一关就过不去，后面三关根本没解锁。
+    顺序排，再拿作业要求比对账号练度。练度不够 / 缺干员 / 没作业的关卡
+    **不排队**，只在日志和返回值里说明原因——用户实测过的坑：练度不够还硬挂
+    S1~S4，MAA 跑 8 分钟第一关就过不去。
 
-    要打 S3 但 S1、S2 没打时，预检会把 S1、S2 一起补进计划（``autoPrereq``，
-    默认开）：不打前置，目标关在地图上是灰的。
+    **默认不补前置**（``autoPrereq=False``，2026-11-19 用户口径：「我让他挂
+    的关卡就是他点名的关」）：要打 S-3 就只排 S-3，不会顺手把 S-1、S-2 也打
+    一遍。确实没解锁、要一起补时传 ``autoPrereq=true``（或 'auto' = 只补
+    EX/S/MO 的前置）；补进来的前置关**只打普通**（打通就解锁，不打突袭）。
 
     **默认不唤醒、不导航**（noNav 直跑）：调用前界面在哪，Copilot 就从哪
     接手（当期活动 MAA 自己认路；老活动请先用 navigate skill 或手动到位）。
@@ -618,12 +651,15 @@ def skill_fight(params, log, tid=None):
     # 用户点名的关（预检会往里补前置关，比对时要用原样的这一份）
     asked = [s.upper() for s in stages]
     plan = None
+    prereq = set()
+    with_pre = False
     if params.get('precheck', True):
-        # autoPrereq：默认 'auto' = 只补 EX / S / MO 的前置（这几关才是「没通
-        # 就锁着」的高频场景，且最多 8 关）；True = 基础关也一起补；False = 不补。
-        # **纯刷关（fight）默认不补**：那是「刷 S-3 的材料」，补上前置就变成
-        # 每关打一遍，理智全花在已经通关的关上。
-        auto = params.get('autoPrereq', 'auto')
+        # autoPrereq：**默认「不补」**（2026-11-19 用户实测口径）。
+        # 以前默认把前置关一起补进计划，用户只点名 S-3/S-4，结果 S-1、S-2
+        # 也从头打了一遍（还按突袭打，白烧一倍理智）。他明确要求「我让他挂
+        # 的关卡就是他点名的关」，所以补前置改成显式开关：
+        #   'auto'（老行为，S/EX/MO 的前置一起补）/ True 全补 / False 不补
+        auto = params.get('autoPrereq', False)
         with_pre = (auto is not False) and (mode == 'copy' or auto is True)
         try:
             plan = stageplan.review(
@@ -635,12 +671,41 @@ def skill_fight(params, log, tid=None):
         else:
             stageplan.log_report(plan, log)
             if not plan['playable']:
-                raise ValueError('这号一关都打不了：\n' + '\n'.join(
-                    stageplan.details(plan)) + '\n' + '\n'.join(plan['notes']))
-            stages = plan['playable']
+                # 「缺干员」不等于打不了：MAA 会借助战（support_unit_usage=1），
+                # 而作业站最新的作业常常用当期新干员，预检拿它一比就全判缺人，
+                # 于是这号明明手动能打，程序却一关都不排（2026-11-19 用户口径：
+                # 「我手动跑 MAA 都能正常打」）。只要**全都是缺人**就照排；
+                # 练度不足（train）/ 这关没作业 仍然拒绝。
+                lack = [b for b in plan['blocked']
+                        if '缺' in (b.get('reason') or '')
+                        and '练度' not in (b.get('reason') or '')]
+                if lack and len(lack) == len(plan['blocked']):
+                    log('预检说这几关缺干员（%s），但缺人可以借助战，照排试试'
+                        % '、'.join(b['code'] for b in lack))
+                    stages = [b['code'] for b in lack]
+                else:
+                    raise ValueError('这号一关都打不了：\n' + '\n'.join(
+                        stageplan.details(plan)) + '\n' + '\n'.join(plan['notes']))
+            else:
+                stages = plan['playable']
+            prereq = {str(i['code']).upper()
+                      for i in (plan.get('plan') or []) if i.get('prereq')}
+            if prereq:
+                log('补前置：%s（只打普通，打通就解锁；不想补就说「只挂我'
+                    '点名的关」）' % '、'.join(sorted(prereq)))
 
     # ---- 关卡名单核对：只能比用户点名的多「前置关」，不能冒出别的编号 ----
     stages = _tidy_stage_list(stages, asked, log)
+
+    # 没让补前置时提醒一句：EX-3 / S-4 这类在游戏里要先通前面的关，点不开
+    # 关卡时用户能对上原因（不自动补，是因为默认「点名的关就是全部」）
+    if not with_pre:
+        need = [a for a in asked
+                if stageplan.kind_of(a) in ('ex', 's', 'mo')
+                and not re.search(r'-1$', a)]
+        if need:
+            log('不补前置：%s 在游戏里要先通同分区前面的关；要一起补就说'
+                '「把前置一起补」' % '、'.join(need))
 
     spec = {
         'tasks': ['startup', 'copilot' if mode == 'copy' else 'fight'],
@@ -669,7 +734,8 @@ def skill_fight(params, log, tid=None):
             spec['copilotList'], retry = _prepare_ops(
                 stages, file, log, raid=params.get('raid', 'auto'),
                 wants=wants, fixed=fixed,
-                depth=int(params.get('swapDepth') or 3))
+                depth=int(params.get('swapDepth') or 3),
+                prereq=prereq)
             if retry:
                 spec['retry'] = retry
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
@@ -723,6 +789,7 @@ def skill_fight(params, log, tid=None):
             % ((r or {}).get('error') or '看上面的报错')[:120])
     return {'ok': bool((r or {}).get('ok', True)), 'mode': mode, 'stages': stages,
             'account': file, 'noNav': not with_nav,
+            'prereq': sorted(prereq),
             'played': got_ok or trail, 'failed': failed,
             'failedReason': stageplan.explain_failure((r or {}).get('failed_why') or ''),
             'stagesOk': got_ok,
