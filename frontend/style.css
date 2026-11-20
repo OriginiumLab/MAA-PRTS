@@ -1237,13 +1237,15 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   font-weight: 700;
 }
 
-/* 作业详情弹窗：练度不足（橙）与需要借人（紫）——顶部提示条 + 干员名同色 */
+/* 作业详情弹窗：练度不足（橙）与需要借人（紫）——顶部提示条 + 干员名同色；
+   subbed 是干员替换（#92，如塞1由黍1顶替）：可用但注明换了人 */
 .op-flag { margin-bottom: 9px; padding: 8px 11px; border-radius: 10px; font-size: 12px; line-height: 1.6; border: 1px solid var(--line); }
 .op-flag b { font-weight: 600; }
 .op-flag.borrow { color: #b48cff; background: rgba(148, 108, 255, 0.10); border-color: rgba(148, 108, 255, 0.32); }
 .op-flag.train { color: var(--amber); background: rgba(245, 185, 85, 0.09); border-color: rgba(245, 185, 85, 0.30); }
 .op-name.borrow { color: #b48cff; }
 .op-name.train { color: var(--amber); }
+.op-name.subbed { color: var(--mint); }
 .op-name em { font-style: normal; font-size: 10.5px; opacity: .85; margin-left: 5px; }
 
 .op-top { display: flex; align-items: center; gap: 9px; padding-right: 44px; }

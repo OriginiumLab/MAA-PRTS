@@ -491,7 +491,9 @@ def api_maa_apply(_q, body):
     tid = maa.start_apply(items, profile=body.get('profile'),
                           mode=body.get('mode') or 'replace',
                           auto_start=body.get('autoStart', True),
-                          maa_dir=_maa_dir_for(body.get('file')))
+                          maa_dir=_maa_dir_for(body.get('file')),
+                          # 带上账号：写盘时按该账号练度做干员替换（#92）
+                          account=str(body.get('file') or '').strip() or None)
     return {'taskId': tid}
 
 

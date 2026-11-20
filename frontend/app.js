@@ -1288,11 +1288,12 @@ function diffLabel(dcn, variant) {
 }
 
 /* 干员 chips 全量铺开（容器 flex-wrap 换行）：折叠成 +N 会把缺的干员藏起来，
-   一眼看不出这份作业到底缺谁 */
+   一眼看不出这份作业到底缺谁。命中替换规则（#92，o.sub）的按「可用」上色，
+   列表保持无感，由谁顶替只在详情弹窗里说 */
 function opChips(op) {
   return visOpers(op.opers).map(o => {
     let cls = 'own';
-    if (!o.owned) cls = 'lack';
+    if (!o.owned && !o.sub) cls = 'lack';
     else if (!o.ok) cls = 'train';
     return `<span class="op-chip ${cls}" title="${esc(chipTitle(o))}">${esc(o.name)}</span>`;
   }).join('');
@@ -1309,6 +1310,7 @@ function chipTitle(o) {
   if (req.level != null) need.push(req.level + '级');
   if (req.implied) need.push('默认');
   const needTxt = need.length ? ` · 要求 ${need.join(' ')}` : '';
+  if (o.sub) return `由${o.sub.name}${o.sub.skill || ''}替换出战${needTxt}`;
   if (!o.owned) return '未拥有' + needTxt;
   return `${e} ${o.level} 级${m ? ' · ' + m : ''}${needTxt}`;
 }
@@ -1716,8 +1718,9 @@ async function showOpDetail(op, variant) {
         const shown = visOpers(d.opers);
         /* 缺谁：owned=false 是没这个人，owned && !ok 是练度不到。
            只有「差一人可借」这一档才说得出具体的借人对象（助战位只能带一个），
-           其余情况分开列：没的人和练度不够的人不是一回事 */
-        const bad = d.compared ? shown.filter(o => o.owned === false || o.ok === false) : [];
+           其余情况分开列：没的人和练度不够的人不是一回事。
+           命中替换规则（o.sub，#92）的不算缺：写入 MAA 时会被替补顶掉 */
+        const bad = d.compared ? shown.filter(o => !o.sub && (o.owned === false || o.ok === false)) : [];
         const borrowOne = (op.mode === 'borrow' && bad.length === 1) ? bad[0].name : '';
         const rest = bad.filter(o => o.name !== borrowOne);
         const lackOwn = rest.filter(o => o.owned === false).map(o => o.name);
@@ -1730,11 +1733,15 @@ async function showOpDetail(op, variant) {
           if (req.skill_level != null) bits.push(req.skill_level >= 8 ? ('专' + (req.skill_level - 7) + ' 技能' + (req.skill || 1)) : ('技能 ' + req.skill_level));
           if (req.module) bits.push('模组 ' + req.module);
           if (req.implied) bits.push('老作业未标注，按星级默认');
-          // 名字上色：借的那个人紫、缺练度的橙，跟顶部提示一对
+          // 名字上色：借的那个人紫、缺练度的橙，跟顶部提示一对；
+          // 替换条目（#92）绿字 + 「由黍1替换」标注
           const isBorrow = borrowOne && o.name === borrowOne;
-          const cls = isBorrow ? ' borrow' : (o.owned === false || o.ok === false ? ' train' : '');
+          const isSub = !!o.sub;
+          const cls = isBorrow ? ' borrow' : (isSub ? ' subbed'
+            : (o.owned === false || o.ok === false ? ' train' : ''));
           const tail = isBorrow ? '<em>借</em>'
-            : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : ''));
+            : (isSub ? `<em>由${esc(o.sub.name)}${o.sub.skill || ''}替换</em>`
+              : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : '')));
           return `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed rgba(255,255,255,.06);padding:5px 0">
             <span class="op-name${cls}">${esc(o.name)}${tail}</span>
             <span style="color:var(--text-3);font-size:11.5px">${esc(bits.join(' · ') || '无特殊要求')}</span>

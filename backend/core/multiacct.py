@@ -385,9 +385,11 @@ def apply(plan_data, tid=None):
                  for o in r['ops']]
         log('[%d/%d] 给「%s」写 %d 份作业（切号名 %s）'
             % (i, len(written), name, len(items), r['accountName']))
-        # auto_start=False：全部写完再统一启动，不然每写一个就拉起一次 MAA
+        # auto_start=False：全部写完再统一启动，不然每写一个就拉起一次 MAA；
+        # account 带上：写盘时按各账号练度做干员替换（#92）
         res = maa.apply_plan(items, profile=name, mode='replace',
-                             auto_start=False, tid=tid, maa_dir=d)
+                             auto_start=False, tid=tid, maa_dir=d,
+                             account=r.get('file'))
         total += res.get('added') or 0
     log('全部写完，共 %d 份作业；MAA 启动后会自动开始' % total)
     return {'profiles': [n for n, _ in written], 'ops': total}

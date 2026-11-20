@@ -636,6 +636,110 @@ def check_maa_import_level_only():
     assert 'skill_level' not in detail[0]['req'], detail[0]['req']
 
 
+def check_copilot_substitution():
+    """干员替换（#92）：塞1 由 黍1 顶替——匹配判可用 + 写 MAA 重写 + 边界不触发
+
+    规则表见 copilot.SUB_RULES（force 档：账号有黍且按塞雷娅条目的要求判
+    「等价练度」即换，塞雷娅自己有没有、达不达标都不看）。匹配侧与写入侧
+    必须同一个判定（sub_rule_for），两边口径不能漂。
+    """
+    from core import copilot
+
+    def own(name, elite=2, level=60, main=7, mastery=(3, 0, 0), skill_known=True):
+        c = {'charId': 'x', 'name': name, 'rarity': 6, 'elite': elite,
+             'level': level, 'skillLevel': main, 'favor': 0, 'skin': None,
+             'skills': ([{'id': 's%d' % (i + 1), 'name': '', 'mastery': m}
+                         for i, m in enumerate(mastery)]
+                        if skill_known else []),
+             'modules': []}
+        return copilot.build_owned({'chars': [c]})
+
+    saria1 = {'name': '塞雷娅', 'skill': 1,
+              'requirements': {'elite': 2, 'level': 60, 'skill_level': 7}}
+    content = {
+        'stage_name': 'act55side_s01',
+        'opers': [dict(saria1)],
+        'groups': [{'name': '奶', 'opers': [dict(saria1)]}],
+        # 两条动作都按名字点名塞雷娅：替换后名字要跟着改（无坐标的动作
+        # MaaCore 拿名字去场上找人，不改就指空）
+        'actions': [{'type': 'UseSkill', 'name': '塞雷娅'},
+                    {'type': 'Deploy', 'name': '塞雷娅', 'location': [4, 4],
+                     'direction': 'Right'}],
+    }
+    shu = own('黍')
+
+    # ① 没有 黍：塞雷娅 缺卡，顶层 + 组各计一个 missing → blocked
+    m, miss, tr, _t, detail, _s, _w = copilot.match_operation(content, {})
+    assert m == 'blocked' and len(miss) == 2, (m, miss)
+    assert all(d.get('sub') is None for d in detail)
+
+    # ② 有等价练度的 黍：整份作业判 ready（缺卡/练度不足都不再计），detail
+    #    带替换标记给前端在详情里标注「由黍1替换塞1」
+    m, miss, tr, _t, detail, _s, _w = copilot.match_operation(content, shu)
+    assert m == 'ready' and not miss and not tr, (m, miss, tr)
+    assert detail[0]['sub'] == {'name': '黍', 'skill': 1}, detail[0]['sub']
+    assert detail[0]['ok'] is True and detail[0]['owned'] is False
+    assert detail[1]['group'] is True and detail[1]['ok'] is True
+
+    # ③ 写入侧重写：顶层与干员组里的塞雷娅都换成黍，requirements 原样保留，
+    #    原始 content 不被改动（预取缓存跨账号共用，不能就地污染）
+    out, notes = copilot.apply_substitutions(content, shu)
+    assert out is not content and content['opers'][0]['name'] == '塞雷娅', \
+        '原始 content 不能被就地改掉'
+    assert out['opers'][0]['name'] == '黍' and out['opers'][0]['skill'] == 1
+    assert out['opers'][0]['requirements'] == saria1['requirements']
+    assert out['groups'][0]['opers'][0]['name'] == '黍'
+    assert all(a['name'] == '黍' for a in out['actions']), out['actions']
+    assert content['actions'][0]['name'] == '塞雷娅'   # 原始 content 未被改动
+    assert notes and '黍' in notes[0], notes
+    _assert_maa_parsable(out)
+    # 没命中时不拷贝直接原样返回
+    out2, notes2 = copilot.apply_substitutions(content, {})
+    assert out2 is content and not notes2
+
+    # ④ 边界：不换的几种情况
+    #    黍练度不到（精一 60 ≠ 精二 60）
+    weak = own('黍', elite=1, level=60)
+    assert copilot.sub_rule_for(saria1, weak) is None
+    #    专三要求但 黍1 没专精
+    m3 = {'name': '塞雷娅', 'skill': 1,
+          'requirements': {'skill_level': 9}}
+    assert copilot.sub_rule_for(m3, own('黍', mastery=(0, 0, 0))) is None
+    assert copilot.sub_rule_for(m3, shu) is not None, '黍1 专三该顶专三要求'
+    #    技能号不是 1 不换（MaaCore 里 skill 缺省 0 = 不指定，也不算塞1）
+    for sk in (0, 2, 3):
+        assert copilot.sub_rule_for({'name': '塞雷娅', 'skill': sk}, shu) is None, sk
+    #    黍已被作者写进阵容：再换会出现同名重复条目，不换
+    both = {'stage_name': 'x', 'actions': [],
+            'opers': [dict(saria1), {'name': '黍', 'skill': 1}]}
+    assert copilot.sub_rule_for(saria1, shu,
+                                siblings=['塞雷娅', '黍']) is None
+    m, miss, *_ = copilot.match_operation(both, shu)
+    assert len(miss) == 1 and miss[0] == '塞雷娅', (m, miss)
+    outb, notesb = copilot.apply_substitutions(both, shu)
+    assert not notesb and outb is both
+    #    干员组内已有黍：组内成员不换（顶层无塞雷娅，整份不动）
+    gonly = {'stage_name': 'x', 'actions': [], 'opers': [],
+             'groups': [{'name': '奶', 'opers': [dict(saria1),
+                                                 {'name': '黍', 'skill': 1}]}]}
+    outg, notesg = copilot.apply_substitutions(gonly, shu)
+    assert not notesg and outg is gonly
+
+    # ⑤ force 档：塞雷娅 自己有且达标也照样换（黍是上位替代）
+    bothok = {**shu, **own('塞雷娅')}
+    r = copilot.sub_rule_for(saria1, bothok)
+    assert r is not None and r['kind'] == 'force'
+    dop = copilot.detail_opers({'opers': [dict(saria1)]}, bothok)
+    assert dop[0]['owned'] is True and dop[0]['ok'] is True
+    assert dop[0]['sub'] == {'name': '黍', 'skill': 1}
+
+    # ⑥ MAA 识别导入的账号（无技能数据）：只比精英化/等级，替换同样成立
+    maa_shu = own('黍', skill_known=False)
+    assert copilot.sub_rule_for({'name': '塞雷娅', 'skill': 1}, maa_shu) is not None
+    # 没带账号上下文的详情不判替换（前端不标）
+    assert copilot.detail_opers({'opers': [dict(saria1)]})[0]['sub'] is None
+
+
 def _assert_maa_parsable(content):
     """按 MaaCore CopilotConfig::parse 的致命校验复检，非法就抛 AssertionError
 
@@ -4776,6 +4880,7 @@ def main():
         r.check('B45 资源包缺分区（EX/S 推断/默认不补前置/突袭不降级）', lambda: check_stage_infer(tmp))
         r.check('B46 牛杂小工具（小游戏/活动商店/黑名单位置/卡教程提示）', lambda: check_maa_tool(tmp))
         r.check('B47 卫戍协议（核心检测/版本目录扫描/状态兜底/MAA 连接默认值/选项清洗/核心补丁）', lambda: check_garrison(tmp))
+        r.check('B48 干员替换（塞1←黍1：匹配/写入/干员组/不触发边界）', check_copilot_substitution)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

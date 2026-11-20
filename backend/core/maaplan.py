@@ -515,10 +515,12 @@ def _copilot_dir(maa_dir):
     return os.path.join(maa_dir, 'config', 'copilot')
 
 
-def prepare_copilot(ops, maa_dir, log=None):
+def prepare_copilot(ops, maa_dir, log=None, account=None):
     """下载并落盘作业，返回 MaaCore 的 copilot_list 条目
 
     ``filename`` **必须是绝对路径**（实测：相对路径不报错，但任务静默不入队）。
+
+    ``account`` 是账号文件名：给了就按该账号练度做干员替换（#92）再落盘。
 
     ``stage_name`` 是 **导航名**，必须是**关卡代号**（``TL-S-1`` / ``1-7``），
     不是作业里的关卡内部 id。看 MaaCore 的 MultiCopilotTaskPlugin::_run：
@@ -535,6 +537,7 @@ def prepare_copilot(ops, maa_dir, log=None):
     from . import copilot
 
     log = log or (lambda *_: None)
+    owned = copilot.owned_of(account)
     os.makedirs(_copilot_dir(maa_dir), exist_ok=True)
     rows, done = [], {}
     for it in ops or []:
@@ -542,6 +545,9 @@ def prepare_copilot(ops, maa_dir, log=None):
         code = it.get('stageCode') or str(cid)
         if cid not in done:
             content, flags, sname, notes, pre = copilot.fetch_prepared(cid)
+            sub_notes = []
+            if owned:
+                content, sub_notes = copilot.apply_substitutions(content, owned)
             fname = '%s_%s.json' % (_SAFE.sub('_', code).strip() or 'stage', cid)
             path = os.path.normpath(os.path.join(_copilot_dir(maa_dir), fname))
             with open(path, 'w', encoding='utf-8') as f:
@@ -551,6 +557,8 @@ def prepare_copilot(ops, maa_dir, log=None):
                                    it.get('title') or ''))
             for n in notes or []:
                 log('    修正：%s' % n)
+            for n in sub_notes or []:
+                log('    替换：%s' % n)
         path, sname, flags = done[cid]
         nav = _clean_stage(code)
         variants = copilot.entry_variants(flags, it.get('variant'), sname)
@@ -1784,7 +1792,8 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
         if not new_ops:
             log('没有更多能换的作业了（每关的候选都试过）')
             break
-        rows = prepare_copilot(new_ops, d, log=lambda m: log('  ' + m))
+        rows = prepare_copilot(new_ops, d, account=spec.get('accountFile'),
+                               log=lambda m: log('  ' + m))
         for key, code, var, prev, nxt in picked:
             used = attempted.setdefault(key, set())
             used.add(nxt)
@@ -1861,7 +1870,7 @@ def run_plan(rows, spec_base, tid=None):
         cp = []
         if r.get('ops'):
             log('准备 %d 份作业…' % len(r['ops']))
-            cp = prepare_copilot(r['ops'], d,
+            cp = prepare_copilot(r['ops'], d, account=r.get('file'),
                                  log=lambda m: log('  ' + m))
         spec = dict(spec_base)
         spec.update({
@@ -1869,6 +1878,8 @@ def run_plan(rows, spec_base, tid=None):
             'switchAccount': True,
             'clientType': client_type_of(r.get('channel')),
             'copilotList': cp,
+            # 重挂（_retry_failed）换作业时按同一账号练度做替换（#92）
+            'accountFile': r.get('file') or '',
         })
         try:
             res = run_core(spec, tid)

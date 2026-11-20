@@ -172,6 +172,63 @@ def norm(name):
     return re.sub(r'\s+', '', str(name or ''))
 
 
+# ---------------------------------------------------------------- 干员替换（#92）
+# 作业站的老作业经常点名塞雷娅这类开服六星，后来的号未必有、或练度跟不上。
+# 这里按「干员名 + 技能号」硬编码一批替换规则，分两档：
+#   force    强制替换：账号里有替补且练度等价（按被替条目的要求判，见
+#            sub_rule_for）就换——原干员有没有、达不达标都不看
+#   fallback 可替：原干员缺卡或练度不足时才用替补顶上（目前没有条目）
+# 只做单向：反向（作业要黍1 用塞1 顶）不做，需要时加一条新规则即可。
+# 匹配侧（match_operation / detail_opers）与写 MAA 侧（apply_substitutions）
+# 都走 sub_rule_for 这同一个判定，两边口径不会漂。
+SUB_RULES = [
+    # 塞雷娅 1 技能（奶盾）由 黍 1 技能顶替：黍是上位替代，练度等价就强制换
+    {'from': '塞雷娅', 'from_skill': 1, 'to': '黍', 'to_skill': 1, 'kind': 'force'},
+]
+
+
+def sub_rule_for(op, owned_map, siblings=()):
+    """作业条目命中的替换规则（None = 不换）。
+
+    命中条件：条目名 + 技能号与规则一致（MaaCore 里 skill 缺省是 0＝不指定
+    技能，所以只有显式写了技能号的条目才参与替换），且账号拥有替补、替补按
+    **这条目的要求**判定达标（等价练度）。force 档到此即命中；fallback 档还
+    要原干员本身不可用（缺卡或练度不足）才顶上。
+
+    siblings 是同一容器（顶层 opers / 同一个 group）里已点名的干员：替补已经
+    在里面就不换，否则会把一份作业写出两个同名条目（同位置重复部署）。
+    """
+    if not owned_map or not isinstance(op, dict):
+        return None
+    name = norm(op.get('name'))
+    try:
+        skill = int(op.get('skill') or 0)
+    except (TypeError, ValueError):
+        return None
+    named = {norm(s) for s in siblings if s}
+    owned = owned_map.get(name)
+    for r in SUB_RULES:
+        if name != norm(r['from']) or skill != r['from_skill']:
+            continue
+        if norm(r['to']) in named:
+            continue
+        sub = owned_map.get(norm(r['to']))
+        if not sub or not req_met(op, sub):
+            continue                     # 替补没有 / 练度不等价 → 不换
+        if r['kind'] == 'force':
+            return r
+        if not owned or not req_met(op, owned):
+            return r                     # 可替：原干员不可用才顶上
+    return None
+
+
+def sub_brief(rule):
+    """规则 → 前端标注用的短结构（名字 + 技能号），没命中返回 None"""
+    if not rule:
+        return None
+    return {'name': rule['to'], 'skill': rule['to_skill']}
+
+
 # ---------------------------------------------------------------- 匹配
 def progress_score(rarity, elite, level):
     lv = MAX_LEVELS.get(int(rarity or 6), MAX_LEVELS[6])
@@ -251,9 +308,14 @@ def req_met(req, owned):
 
 
 def _group_ok(group, owned_map):
-    cands = [c for c in (group.get('opers') or []) if isinstance(c, dict)
-             and norm(c.get('name')) in owned_map]
+    members = [c for c in (group.get('opers') or []) if isinstance(c, dict)]
+    named = [c.get('name') for c in members]
+    cands = [c for c in members if norm(c.get('name')) in owned_map]
     if any(req_met(c, owned_map[norm(c.get('name'))]) for c in cands):
+        return 'ready'
+    # 组内没一个直接可用时再看替换：干员组「满足任一即可」，某个成员能被
+    # 替补顶上（见 SUB_RULES）整个组就算齐（#92）
+    if any(sub_rule_for(c, owned_map, named) for c in members):
         return 'ready'
     return 'train' if cands else 'missing'
 
@@ -276,12 +338,17 @@ def match_operation(content, owned_map):
     six = 0
     wsum = 0.0
 
+    # 替换规则按「同容器已点名」判重（替补已在阵容里就不换），顶层 opers 的
+    # siblings 是全部具名干员（#92）
+    top_names = [o.get('name') for o in opers]
+
     for op in opers:
         name = norm(op.get('name'))
         owned = owned_map.get(name)
-        wsum += op_weight(name)
-        ok = bool(owned and req_met(op, owned))
-        if not owned:
+        sub = sub_rule_for(op, owned_map, top_names)
+        wsum += op_weight(norm(sub['to'])) if sub else op_weight(name)
+        ok = bool(owned and req_met(op, owned)) or sub is not None
+        if not owned and not sub:
             missing.append(op.get('name'))
         elif not ok:
             training.append(op.get('name'))
@@ -301,6 +368,9 @@ def match_operation(content, owned_map):
             'req': req,
             'skill': op.get('skill'),
             'skillKnown': bool(owned.get('skillKnown', True)) if owned else None,
+            # 命中替换时 ok=True 但账号里未必有原干员；sub 给前端在详情里
+            # 标注「由黍1替换塞1」，列表卡片保持无感（#92）
+            'sub': sub_brief(sub),
         })
 
     for g in groups:
@@ -878,21 +948,103 @@ def detail_opers(content, owned_map=None):
     """
     idx = _char_index()
     out = []
+    # 顶层 opers 整体当 siblings（与 match_operation 同口径）：替补已被作者
+    # 自己写进阵容时不再替换（#92）
+    top_names = [o.get('name') for o in (content.get('opers') or [])
+                 if isinstance(o, dict)]
     for op in content.get('opers') or []:
         o = dict(op)
         stars = (idx.get(o.get('name') or '') or (6,))[0]
         owned = (owned_map or {}).get(norm(o.get('name')))
         known = bool(owned.get('skillKnown', True)) if owned else True
+        sub = sub_rule_for(op, owned_map, top_names) if owned_map else None
         # 键名与搜索侧 _item 的 'req' 统一：两处各叫各的（req/requirements），
         # 任一侧改名另一侧就静默显示「无特殊要求」（#63）
         o['req'] = effective_req(op, stars, strict_skill=known)
         o['skillKnown'] = known if owned else None
         o['owned'] = bool(owned) if owned_map is not None else None
-        o['ok'] = (bool(owned) and req_met(op, owned)) if owned_map is not None else None
+        o['ok'] = ((bool(owned) and req_met(op, owned)) or sub is not None) \
+            if owned_map is not None else None
         o['elite'] = owned.get('elite') if owned else None
         o['level'] = owned.get('level') if owned else None
+        o['sub'] = sub_brief(sub)
         out.append(o)
     return out
+
+
+def apply_substitutions(content, owned_map):
+    """写往 MAA 的作业按 SUB_RULES 换干员（#92），返回 (新 json, 说明列表)。
+
+    没命中时不拷贝原样返回（预取缓存里那份绝不能被就地改掉——它是跨账号
+    共用的）；命中才深拷贝重写。条目的 requirements 原样保留：能换的前提就是
+    替补按这套要求判过「等价练度」，MAA 编队时还会再核一遍。
+    """
+    hits = _sub_hits(content, owned_map)
+    if not hits:
+        return content, []
+    c = json.loads(json.dumps(content, ensure_ascii=False))   # 深拷贝，不动缓存
+    idx = _char_index()
+    notes = []
+    applied = {}    # from 名 → 规则：actions 改名要与实际生效的替换一致
+
+    def rewrite(ops, siblings):
+        for op in ops:
+            r = sub_rule_for(op, owned_map, siblings)   # 与 _sub_hits 同参同判
+            if not r:
+                continue
+            op['name'] = r['to']
+            op['skill'] = r['to_skill']
+            # 换完再过一遍 MAA 合法性修正（技能号与星级、精英下限），规则是
+            # 手工维护的，这条只是兜底
+            _fix_oper(op, idx, notes)
+            applied[norm(r['from'])] = r
+            notes.append('%s（技能%d）由 %s（技能%d）替换：账号练度等价'
+                         % (r['from'], r['from_skill'], r['to'], r['to_skill']))
+
+    tops = [o for o in (c.get('opers') or []) if isinstance(o, dict)]
+    rewrite(tops, [o.get('name') for o in tops])
+    for g in (c.get('groups') or []):
+        if isinstance(g, dict):
+            members = [o for o in (g.get('opers') or []) if isinstance(o, dict)]
+            rewrite(members, [o.get('name') for o in members])
+    # actions 里按名字点被替干员的（没给坐标时 MaaCore 拿名字去场上找，
+    # BattleProcessTask 的 m_oper_in_group），roster 换了名字它也得跟着换，
+    # 否则「开技能」类的动作会指空。带着 role 的把 role 一并去掉——规则的
+    # 替补未必同职业，名字才是可靠键
+    for a in (c.get('actions') or []):
+        if not isinstance(a, dict):
+            continue
+        r = applied.get(norm(a.get('name')))
+        if r:
+            a['name'] = r['to']
+            a.pop('role', None)
+    return c, notes
+
+
+def _sub_hits(content, owned_map):
+    """content 里有没有条目命中替换规则（顶层 opers 与干员组分开算 siblings）"""
+    hits = []
+    tops = [o for o in (content.get('opers') or []) if isinstance(o, dict)]
+    top_names = [o.get('name') for o in tops]
+    hits += [op for op in tops if sub_rule_for(op, owned_map, top_names)]
+    for g in (content.get('groups') or []):
+        if not isinstance(g, dict):
+            continue
+        members = [o for o in (g.get('opers') or []) if isinstance(o, dict)]
+        named = [o.get('name') for o in members]
+        hits += [op for op in members if sub_rule_for(op, owned_map, named)]
+    return hits
+
+
+def owned_of(file):
+    """账号文件名 → owned_map（没给 / 读不到返回 None）：写 MAA 时判替换用"""
+    if not file:
+        return None
+    try:
+        from . import accounts          # 懒加载：copilot 被到处 import，别成环
+        return build_owned(accounts.get_account(file))
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- 交给 MAA 前修正
