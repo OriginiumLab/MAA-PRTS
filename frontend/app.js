@@ -4016,6 +4016,7 @@ const GAR_BUSY = ['running', 'starting', 'stopping'];
 let _garTimer = null;    // 面板轮询句柄：只在卫戍协议 tab 激活时跑
 let _garSeq = 0;         // 请求代次：切账号/离开面板后丢弃旧响应
 let _garLogSeq = {};     // file → 核心日志已追加到哪条 seq（按 seq 去重）
+let _garDlStuck = 0;     // 「已下载却仍要下载」连续次数：超过阈值就停下报错，别无限重试
 
 function resetGarView() {
   const box = $('#gar-log');
@@ -4144,6 +4145,24 @@ async function garStartDownload() {
   catch (e) { /* 失败原因下一轮轮询会带出来 */ }
 }
 
+/* needsDownload 的统一处理：正常放行下载；若后端连着回「已完成却仍缺核心」
+   （版本目录识别失败之类），最多再催两次，之后停在错误态。
+   旧版这里无条件调 start，会永远卡在「核心就绪，正在启动…」。 */
+function garHandleMissing(d) {
+  showGarDownload(d);
+  const stage = (d.download || {}).stage;
+  if (stage === 'idle') { _garDlStuck = 0; garStartDownload(); return; }
+  if (stage !== 'done') { if (stage !== 'error') _garDlStuck = 0; return; }
+  if (_garDlStuck < 2) { _garDlStuck++; garStartDownload(); return; }
+  showGarDownload(Object.assign({}, d, {
+    download: {
+      stage: 'error',
+      error: '核心包已下载，但程序没找到它（版本目录识别失败）。请点重试；'
+        + '仍不行就删掉 garrison 目录后重下。',
+    },
+  }));
+}
+
 function showGarDownload(d) {
   const box = $('#gar-empty'), grid = $('#gar-grid'), logCard = $('#gar-log-card');
   if (!box) return;
@@ -4177,7 +4196,7 @@ function showGarDownload(d) {
     ${err}`;
   box.hidden = false;
   const r = $('#gar-dl-retry');
-  if (r) r.addEventListener('click', garStartDownload);
+  if (r) r.addEventListener('click', () => { _garDlStuck = 0; garStartDownload(); });
 }
 
 function hideGarEmpty() {
@@ -4207,11 +4226,10 @@ async function renderGarrison(force) {
     d.file = S.current;
     S.gar = d;
     if (d.needsDownload) {
-      showGarDownload(d);
-      const st = (d.download || {}).stage;
-      if (st === 'idle' || st === 'done') garStartDownload();   // 全自动：打开即开始（done=装好的核心又没了，重下）
+      garHandleMissing(d);
       return;
     }
+    _garDlStuck = 0;
     if (!d.nodeOk || !d.ready) { showGarEmpty(d); return; }
     hideGarEmpty();
     paintGarInputs();
@@ -4242,11 +4260,10 @@ async function garTick() {
     const wasDownloading = !!S.gar.needsDownload;
     S.gar = d;
     if (d.needsDownload) {
-      showGarDownload(d);
-      const st = (d.download || {}).stage;
-      if (st === 'idle' || st === 'done') garStartDownload();
+      garHandleMissing(d);
       return;
     }
+    _garDlStuck = 0;
     if (wasDownloading) { renderGarrison(true); return; }   // 刚下载完：重建整面板
     if (!d.ready) return;
     paintGarState(d);

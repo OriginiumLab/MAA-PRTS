@@ -4656,13 +4656,31 @@ def check_garrison(tmp):
 
     # 已装短路：start() 直接 done，不起线程不下载（用 core_dir 断言即可，
     # 别走 api_garrison_status——coreOk+nodeOk 会真去拉宿主进程）
-    os.makedirs(os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core'))
-    open(os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core',
-                      'service.mjs'), 'w').close()
+    pkg = garrisondl.garrison_dir()
+    for v in ('1.1.4', '1.1.5'):
+        d = os.path.join(pkg, 'medal-farm-v%s' % v, 'core')
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, 'service.mjs'), 'w').close()
     snap = garrisondl.start()
     assert snap['stage'] == 'done', snap
-    assert garrison.core_dir().endswith('medal-farm-v1.1.4' + os.sep + 'core'), garrison.core_dir()
-    shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
+    # 版本号不能写死：下载器按小黑盒记录装的是上游最新版（v1.1.5），探测必须
+    # 扫 medal-farm-v* 取最高版本——旧版只认 v1.1.4，装好新版却报「没核心」，
+    # 前端于「已下载 + 仍要下载」之间无限重试，一直停在「核心就绪，正在启动…」
+    assert os.path.normcase(garrison.core_dir()) == os.path.normcase(
+        os.path.join(pkg, 'medal-farm-v1.1.5', 'core')), garrison.core_dir()
+    shutil.rmtree(pkg, ignore_errors=True)
+
+    # 装好了却仍找不到核心：状态机要把矛盾摆到明面（error），不能把前端
+    # 留在「核心就绪，正在启动…」的死循环里
+    saved_dl = garrisondl.state()
+    garrisondl._DL.update({'stage': 'done', 'version': '1.1.9', 'error': ''})
+    try:
+        st = garrison.status('g-acc.json')
+        assert st['needsDownload'] is True, st
+        assert st['download']['stage'] == 'error', st
+        assert '1.1.9' in (st['download'].get('error') or ''), st
+    finally:
+        garrisondl._DL.update(saved_dl)
 
     # 8) 核心文本补丁：规则随包分发、能打上、幂等、脱靶不动文件
     #    （核心 service.mjs 是第三方混淆包：认不出「确认准备就绪吗」弹窗、
@@ -4757,7 +4775,7 @@ def main():
         r.check('B44 当期活动导航（有效期/指代/模板/点结算页/名单核对）', lambda: check_event_nav(tmp))
         r.check('B45 资源包缺分区（EX/S 推断/默认不补前置/突袭不降级）', lambda: check_stage_infer(tmp))
         r.check('B46 牛杂小工具（小游戏/活动商店/黑名单位置/卡教程提示）', lambda: check_maa_tool(tmp))
-        r.check('B47 卫戍协议（核心检测/MAA 连接默认值/选项清洗/空环境口径/核心补丁）', lambda: check_garrison(tmp))
+        r.check('B47 卫戍协议（核心检测/版本目录扫描/状态兜底/MAA 连接默认值/选项清洗/核心补丁）', lambda: check_garrison(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

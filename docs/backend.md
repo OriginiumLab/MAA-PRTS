@@ -1258,3 +1258,23 @@ MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速�
 核心升级（v1.1.5+）后若 `find` 脱靶，补丁只会在 app.log 里留一行 miss，核心照常
 跑、但这个弹窗问题会复发 —— 那时更新 `patches.json` 里的 `find` 就行，逻辑不用改。
 
+
+### 核心目录别写死版本号（2026-11-20 实证）
+
+`garrison.core_dir()` 原来的候选里写死 `garrison/medal-farm-v1.1.4/core`，而
+`garrisondl` 是按本机小黑盒记录装**上游最新版**（那次装的是 v1.1.5）。两边一错位
+就成了死循环：下载器 `_installed_pkg_dir()` 扫到 v1.1.5 → `start()` 立刻置
+`stage=done`；`core_dir()` 只认 1.1.4 → 返回空 → `needsDownload` 恒为 true；
+前端在 `stage === 'done'` 分支里又调 `start()`，每 1.4 秒一轮，永远停在
+「核心就绪，正在启动…」，重启也没用（下次 `start()` 照样 immediately done）。
+
+现在分两层收口：
+
+| 层 | 行为 |
+|----|------|
+| `core_dir()` | 先扫 `garrison/medal-farm-v*/core` 与 `garrison-standalone/medal-farm-v*/core`，按 `garrisondl.ver_key` 取**版本最高**的一份（数字比较，`1.1.10 > 1.1.9`）；扫不到才退回 `garrison/core` 这类无版本号的固定位置 |
+| `status()` | 若 `needsDownload` 却拿到 `download.stage == 'done'`，直接把 stage 改写成 `error` 并说明「核心包 vX 已下载，但没找到 core/service.mjs」 |
+| 前端 | `garHandleMissing()` 只在 `idle` 自动触发下载；`done` 最多再催两次，之后停在错误态给重试按钮（点击重试会重置计数），不会无限轮询 |
+
+**推论**：以后核心升到 v1.2.0、v2.0.0 都不用改代码；只有把包挪到非
+`medal-farm-v*` 的目录结构时才需要动 `core_dir()`。

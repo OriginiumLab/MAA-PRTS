@@ -65,18 +65,45 @@ def node_exe() -> str:
         return ''
 
 
+def _latest_pkg_core(base: str) -> str:
+    """``<base>/medal-farm-v<版本>/core`` 里挑版本最高的一个，没有返回 ''"""
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return ''
+    best = None
+    for name in names:
+        m = garrisondl.PKG_DIR_RE.match(name)
+        if not m:
+            continue
+        core = os.path.join(base, name, 'core')
+        if not os.path.isfile(os.path.join(core, 'service.mjs')):
+            continue
+        if best is None or garrisondl.ver_key(m.group(1)) > garrisondl.ver_key(best[0]):
+            best = (m.group(1), core)
+    return best[1] if best else ''
+
+
 def core_dir() -> str:
-    """按约定位置找卫戍协议核心（含 service.mjs 的目录），找不到返回 ''"""
+    """按约定位置找卫戍协议核心（含 service.mjs 的目录），找不到返回 ''
+
+    目录名里的版本号**不能写死**：核心包由 garrisondl 按本机小黑盒记录安装，
+    版本跟着上游走（v1.1.4 → v1.1.5 → …）。这里先扫 ``medal-farm-v*`` 取
+    版本最高的那份，再退回无版本号的固定位置，避免「下载器装好了新版、
+    探测却只认旧目录名」导致前端一直卡在「核心就绪，正在启动」。
+    """
     cands = []
     try:
         cands.append(settings.norm_dir(settings.load().get('garrisonCoreDir') or ''))
     except Exception:
         pass
     root = settings.project_root()
+    for base in (os.path.join(root, 'garrison'),
+                 os.path.join(root, 'garrison-standalone')):
+        cands.append(_latest_pkg_core(base))
     cands += [
         os.path.join(root, 'garrison', 'core'),
-        os.path.join(root, 'garrison', 'medal-farm-v1.1.4', 'core'),
-        os.path.join(root, 'garrison-standalone', 'medal-farm-v1.1.4', 'core'),
+        os.path.join(root, 'garrison-standalone', 'core'),
     ]
     for d in cands:
         if d and os.path.isfile(os.path.join(d, 'service.mjs')):
@@ -395,13 +422,22 @@ def status(file: str) -> dict:
     node = node_exe()
     core = core_dir()
     dft, src = defaults(file)
+    dl = garrisondl.state()
+    if not core and dl.get('stage') == 'done':
+        # 下载器说「装好了」、core_dir 却仍找不到：别把前端留在
+        # 「核心就绪，正在启动…」里无限重试，直接把矛盾摆出来让用户重试/重下。
+        dl = dict(dl, stage='error', error=(
+            '核心包 v%s 已下载，但没找到可用的 core/service.mjs。请点重试；'
+            '仍然不行就把 %s 整个删掉再重下。'
+            % (dl.get('version') or '未知版本',
+               os.path.join(settings.project_root(), 'garrison'))))
     out = {
         'nodeOk': bool(node), 'coreOk': bool(core), 'coreDir': core,
         'defaults': dft, 'fromMaa': src,
         'ready': False, 'running': False, 'state': None,
         'hasCheckpoint': os.path.isfile(_checkpoint_path(file)),
         'needsDownload': not core,
-        'download': garrisondl.state(),
+        'download': dl,
     }
     if node and core:
         try:
