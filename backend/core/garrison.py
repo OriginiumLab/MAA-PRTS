@@ -192,12 +192,8 @@ def _maa_dir_for(file: str) -> str:
     return settings.load()['maaDir']
 
 
-def defaults(file: str):
-    """速刷默认参数：从账号绑定 MAA 的连接配置里抄。
-
-    返回 ``(options, 来源)``；MAA 配置读不到时给核心自己的兜底值
-    （mumu + 16384），前端会展示来源让用户知道这份默认值从哪来。
-    """
+def _maa_defaults(file: str):
+    """从账号绑定 MAA 的连接配置里抄出来的裸默认值（不含用户偏好 overlay）"""
     opts = {
         'device': 'mumu', 'mode': 'quick', 'speed': 1.5, 'medalWins': 3,
         'adbAddress': '127.0.0.1:16384', 'adbPath': '',
@@ -225,6 +221,58 @@ def defaults(file: str):
     except Exception:
         pass
     return opts, src
+
+
+# 可持久化的速刷选项键（账号 json 里的 garrisonOpts 只认这些）
+OPT_KEYS = ('device', 'mode', 'adbAddress', 'adbPath', 'medalWins', 'speed',
+            'screenshotMethod', 'pcUiScale')
+
+
+def _stored_opts(file: str) -> dict:
+    """账号 json 里存过的用户改动（garrisonOpts），按白名单取"""
+    if not file:
+        return {}
+    try:
+        from . import accounts
+        snap = accounts.get_account(file)
+        st = snap.get('garrisonOpts') or {}
+        return {k: st[k] for k in OPT_KEYS
+                if isinstance(st, dict) and k in st}
+    except Exception:
+        return {}
+
+
+def defaults(file: str):
+    """速刷默认参数：MAA 配置抄来的基底 + 账号里存过的用户改动。
+
+    返回 ``(options, 来源)``。用户在面板改过的选项按账号持久化
+    （save_opts 只存与 MAA 基底不同的键），重启不丢；没改过的键
+    继续跟随 MAA 配置。
+    """
+    opts, src = _maa_defaults(file)
+    stored = _stored_opts(file)
+    for k in OPT_KEYS:
+        if k in stored and k in opts:
+            opts[k] = stored[k]
+    return opts, src
+
+
+def save_opts(file: str, options: dict) -> dict:
+    """用户改的速刷选项写回账号 json。
+
+    以账号**当前生效值**为基底叠加传入项再清洗（只传一个键不会把别的
+    键锁到全局兜底值），然后与「MAA 抄来的裸默认」逐键比对，只存不同
+    的键——改回默认值的键自动剔除，没动过的键永远跟着 MAA 配置走。
+    返回合并后的生效默认值（含实际存了哪些键，便于排查）。
+    """
+    cur, _src0 = defaults(file)
+    clean = sanitize({**cur, **(options or {})})
+    base, _src = _maa_defaults(file)
+    diff = {k: clean[k] for k in OPT_KEYS if clean.get(k) != base.get(k)}
+    from . import accounts as _acc
+    _acc.save_pref(file, {'garrisonOpts': diff})
+    merged, src = defaults(file)
+    return {'defaults': merged, 'fromMaa': src, 'saved': diff}
 
 
 def sanitize(body: dict) -> dict:

@@ -4050,8 +4050,20 @@ function collectGarOpts() {
     medalWins: Number(v('#gar-wins')) || 3, speed: Number(v('#gar-speed')) || 1.5,
     pcUiScale: Number(v('#gar-scale')) || 90, screenshotMethod: v('#gar-shot'),
   };
-  S.garOpts[S.current] = o;   // 记住用户的改动，切号再回来还在
+  S.garOpts[S.current] = o;   // 会话内缓存：切号再回来还在
+  // 持久化到账号 json（只存与 MAA 默认不同的键），重启不再回默认。
+  // 串行排队（同 saveSettings）：连续改几项时后到的旧请求会覆盖新值
+  garSaveOptsQ(S.current, o);
   return o;
+}
+
+/* 速刷选项保存队列：按改动顺序落盘，失败吞掉不打扰（面板仍按当前值跑） */
+let _garOptsSaveQ = Promise.resolve();
+function garSaveOptsQ(file, options) {
+  if (!file) return;
+  const run = () => api('/api/garrison/opts', { file, options: options })
+    .catch(() => {});
+  _garOptsSaveQ = _garOptsSaveQ.then(run, run);
 }
 
 function garAppendLog(items) {

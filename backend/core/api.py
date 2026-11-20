@@ -596,6 +596,12 @@ def api_garrison_download(_q, _body):
     return garrison.start_download()
 
 
+def api_garrison_opts(_q, body):
+    """保存用户改过的速刷选项（按账号持久化，只存与 MAA 默认不同的键）"""
+    body = body or {}
+    return garrison.save_opts(_account_for(body.get('file')), body.get('options') or {})
+
+
 def _garrison_options(q, body):
     """test/start/resume 共用：账号 + 前端提交的连接选项"""
     body = body or {}
@@ -890,6 +896,7 @@ ROUTES = {
     # 卫戍协议·策略刻章速刷
     '/api/garrison/status': api_garrison_status,
     '/api/garrison/download/start': api_garrison_download,
+    '/api/garrison/opts': api_garrison_opts,
     '/api/garrison/test': api_garrison_test,
     '/api/garrison/start': api_garrison_start,
     '/api/garrison/resume': api_garrison_resume,

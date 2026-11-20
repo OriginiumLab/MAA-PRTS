@@ -4709,6 +4709,26 @@ def check_garrison(tmp):
     with open(svc, encoding='utf-8') as f:
         assert f.read() == 'untouched core', '脱靶时一个字节都不能动'
 
+    # 9) 速刷选项按账号持久化：save_opts 只存差异键、defaults 生效 overlay、
+    #    改回默认自动剔除——用户「调了 2.5×/6 胜重启全回默认」的病根
+    assert '/api/garrison/opts' in api.ROUTES
+    _write_maa('MuMuEmulator12', '127.0.0.1:16416')
+    r = garrison.save_opts('g-acc.json', {'mode': 'standard', 'speed': 2.5,
+                                          'medalWins': 6})
+    assert set(r['saved']) == {'mode', 'speed', 'medalWins'}, r['saved']
+    with open(acc, encoding='utf-8') as f:
+        snap = json.load(f)
+    assert snap['garrisonOpts'] == r['saved'], snap.get('garrisonOpts')
+    # 重启语义：重新读账号（defaults）就能拿回用户改动，未改的键跟随 MAA
+    d2, _src = garrison.defaults('g-acc.json')
+    assert d2['mode'] == 'standard' and d2['speed'] == 2.5 and d2['medalWins'] == 6, d2
+    assert d2['device'] == 'mumu' and d2['screenshotMethod'] == 'fast'
+    assert d2['adbAddress'] == '127.0.0.1:16416', d2
+    # 改回默认值的键自动剔除
+    r = garrison.save_opts('g-acc.json', {'mode': 'quick', 'speed': 2.5, 'medalWins': 6})
+    assert set(r['saved']) == {'speed', 'medalWins'}, r['saved']
+    assert '/api/garrison/opts' in api.ROUTES
+
 
 # ---------------------------------------------------------------- 入口
 
