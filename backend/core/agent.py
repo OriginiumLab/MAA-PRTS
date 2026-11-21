@@ -719,7 +719,8 @@ def _tool_op_detail(args):
     opers = copilot.detail_opers(content, owned)
     lack, borrow = [], []
     for o in opers:
-        if o.get('owned') is False:
+        # 命中替换规则（sub，#92）的不算缺：写入 MAA 时会被练度等价的替补顶掉
+        if o.get('owned') is False and not o.get('sub'):
             borrow.append(o.get('name'))
     return {
         'id': int(cid),
@@ -727,9 +728,10 @@ def _tool_op_detail(args):
         'stage': content.get('stage_name') or '',
         'opers': [{'name': o.get('name'), 'owned': o.get('owned'),
                    'ok': o.get('ok'), 'elite': o.get('elite'),
-                   'level': o.get('level')} for o in opers],
+                   'level': o.get('level'), 'sub': o.get('sub')} for o in opers],
         'notOwned': borrow,
-        'note': 'owned=false 是要借的人；ok=false 是练度不够',
+        'note': 'owned=false 是要借的人；ok=false 是练度不够；'
+                'sub 有值 = 该干员写入 MAA 时会被替换（如黍1顶塞1，#92）',
     }
 
 
@@ -871,7 +873,8 @@ def _tool_add_stages(args, session=None):
         return blocked
     tid = maa.start_apply(items, profile=None, mode='replace',
                           auto_start=start,
-                          maa_dir=(accounts.get_account(acc).get('maa') or {}).get('dir') or None)
+                          maa_dir=(accounts.get_account(acc).get('maa') or {}).get('dir') or None,
+                          account=acc)   # 带上账号：写盘时做干员替换（#92）
     return {'started': True, 'taskId': tid, 'count': len(items),
             'skipped': skipped, 'note': '已提交写入 MAA，不要在这里等它跑完'}
 

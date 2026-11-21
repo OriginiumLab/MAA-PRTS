@@ -148,10 +148,14 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+// goal 白名单：medal=策略徽章（默认）；task-N=叠层目标（v1.1.7 起支持）。
+// 与后端 garrison.py 的 GOALS 保持一致。
+const GOALS = ['medal', 'task-1', 'task-2', 'task-3', 'task-4', 'task-5', 'task-6', 'task-7'];
+
 function buildOptions(body = {}) {
   const device = body.device ?? 'mumu';
   const options = {
-    goal: 'medal',
+    goal: GOALS.includes(body.goal) ? body.goal : 'medal',
     medalWins: Number(body.medalWins) === 6 ? 6 : 3,
     mode: body.mode === 'standard' ? 'standard' : 'quick',
     debug: Boolean(body.debug),

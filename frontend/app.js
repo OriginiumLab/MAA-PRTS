@@ -1288,11 +1288,12 @@ function diffLabel(dcn, variant) {
 }
 
 /* 干员 chips 全量铺开（容器 flex-wrap 换行）：折叠成 +N 会把缺的干员藏起来，
-   一眼看不出这份作业到底缺谁 */
+   一眼看不出这份作业到底缺谁。命中替换规则（#92，o.sub）的按「可用」上色，
+   列表保持无感，由谁顶替只在详情弹窗里说 */
 function opChips(op) {
   return visOpers(op.opers).map(o => {
     let cls = 'own';
-    if (!o.owned) cls = 'lack';
+    if (!o.owned && !o.sub) cls = 'lack';
     else if (!o.ok) cls = 'train';
     return `<span class="op-chip ${cls}" title="${esc(chipTitle(o))}">${esc(o.name)}</span>`;
   }).join('');
@@ -1309,6 +1310,7 @@ function chipTitle(o) {
   if (req.level != null) need.push(req.level + '级');
   if (req.implied) need.push('默认');
   const needTxt = need.length ? ` · 要求 ${need.join(' ')}` : '';
+  if (o.sub) return `由${o.sub.name}${o.sub.skill || ''}替换出战${needTxt}`;
   if (!o.owned) return '未拥有' + needTxt;
   return `${e} ${o.level} 级${m ? ' · ' + m : ''}${needTxt}`;
 }
@@ -1716,8 +1718,9 @@ async function showOpDetail(op, variant) {
         const shown = visOpers(d.opers);
         /* 缺谁：owned=false 是没这个人，owned && !ok 是练度不到。
            只有「差一人可借」这一档才说得出具体的借人对象（助战位只能带一个），
-           其余情况分开列：没的人和练度不够的人不是一回事 */
-        const bad = d.compared ? shown.filter(o => o.owned === false || o.ok === false) : [];
+           其余情况分开列：没的人和练度不够的人不是一回事。
+           命中替换规则（o.sub，#92）的不算缺：写入 MAA 时会被替补顶掉 */
+        const bad = d.compared ? shown.filter(o => !o.sub && (o.owned === false || o.ok === false)) : [];
         const borrowOne = (op.mode === 'borrow' && bad.length === 1) ? bad[0].name : '';
         const rest = bad.filter(o => o.name !== borrowOne);
         const lackOwn = rest.filter(o => o.owned === false).map(o => o.name);
@@ -1730,11 +1733,15 @@ async function showOpDetail(op, variant) {
           if (req.skill_level != null) bits.push(req.skill_level >= 8 ? ('专' + (req.skill_level - 7) + ' 技能' + (req.skill || 1)) : ('技能 ' + req.skill_level));
           if (req.module) bits.push('模组 ' + req.module);
           if (req.implied) bits.push('老作业未标注，按星级默认');
-          // 名字上色：借的那个人紫、缺练度的橙，跟顶部提示一对
+          // 名字上色：借的那个人紫、缺练度的橙，跟顶部提示一对；
+          // 替换条目（#92）绿字 + 「由黍1替换」标注
           const isBorrow = borrowOne && o.name === borrowOne;
-          const cls = isBorrow ? ' borrow' : (o.owned === false || o.ok === false ? ' train' : '');
+          const isSub = !!o.sub;
+          const cls = isBorrow ? ' borrow' : (isSub ? ' subbed'
+            : (o.owned === false || o.ok === false ? ' train' : ''));
           const tail = isBorrow ? '<em>借</em>'
-            : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : ''));
+            : (isSub ? `<em>由${esc(o.sub.name)}${o.sub.skill || ''}替换</em>`
+              : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : '')));
           return `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed rgba(255,255,255,.06);padding:5px 0">
             <span class="op-name${cls}">${esc(o.name)}${tail}</span>
             <span style="color:var(--text-3);font-size:11.5px">${esc(bits.join(' · ') || '无特殊要求')}</span>
@@ -4035,7 +4042,8 @@ function paintGarInputs() {
   if (!o) return;
   const set = (id, v) => { const el = $(id); if (el && v !== undefined && v !== null) el.value = String(v); };
   set('#gar-device', o.device);
-  set('#gar-mode', o.mode);
+  set('#gar-mode', 'quick');   // 上游 v1.1.7 起仅支持极速
+  set('#gar-goal', o.goal);
   set('#gar-adb', o.adbAddress);
   set('#gar-wins', o.medalWins);
   set('#gar-speed', o.speed);
@@ -4046,12 +4054,24 @@ function paintGarInputs() {
 function collectGarOpts() {
   const v = id => $(id) ? $(id).value : '';
   const o = {
-    device: v('#gar-device'), mode: v('#gar-mode'), adbAddress: v('#gar-adb').trim(),
+    device: v('#gar-device'), mode: v('#gar-mode'), goal: v('#gar-goal'), adbAddress: v('#gar-adb').trim(),
     medalWins: Number(v('#gar-wins')) || 3, speed: Number(v('#gar-speed')) || 1.5,
     pcUiScale: Number(v('#gar-scale')) || 90, screenshotMethod: v('#gar-shot'),
   };
-  S.garOpts[S.current] = o;   // 记住用户的改动，切号再回来还在
+  S.garOpts[S.current] = o;   // 会话内缓存：切号再回来还在
+  // 持久化到账号 json（只存与 MAA 默认不同的键），重启不再回默认。
+  // 串行排队（同 saveSettings）：连续改几项时后到的旧请求会覆盖新值
+  garSaveOptsQ(S.current, o);
   return o;
+}
+
+/* 速刷选项保存队列：按改动顺序落盘，失败吞掉不打扰（面板仍按当前值跑） */
+let _garOptsSaveQ = Promise.resolve();
+function garSaveOptsQ(file, options) {
+  if (!file) return;
+  const run = () => api('/api/garrison/opts', { file, options: options })
+    .catch(() => {});
+  _garOptsSaveQ = _garOptsSaveQ.then(run, run);
 }
 
 function garAppendLog(items) {
@@ -4230,6 +4250,7 @@ async function renderGarrison(force) {
       return;
     }
     _garDlStuck = 0;
+    _garUpdActive = paintGarUpdateBar(d);   // 后台升级新版时先亮横幅
     if (!d.nodeOk || !d.ready) { showGarEmpty(d); return; }
     hideGarEmpty();
     paintGarInputs();
@@ -4264,10 +4285,44 @@ async function garTick() {
       return;
     }
     _garDlStuck = 0;
+    // 保持最新：已装核心但后台在升级 → 横幅；升级完成 → 一次性提示重启生效
+    const updActive = paintGarUpdateBar(d);
+    if (_garUpdActive && !updActive && (d.download || {}).stage === 'done') {
+      toast(`核心已更新到 v${(d.download || {}).version || ''}，重启程序后生效`, 'ok', 6000);
+    }
+    _garUpdActive = updActive;
     if (wasDownloading) { renderGarrison(true); return; }   // 刚下载完：重建整面板
     if (!d.ready) return;
     paintGarState(d);
   } catch (e) { /* 断线别刷屏：下一轮再试 */ }
+}
+
+/* 保持最新的横幅：coreOk 但下载状态机在跑（升级新版）时显示进度；
+   升级被兼容门禁挡下（error）也亮一条，让用户知道为什么停在旧版 */
+let _garUpdActive = false;
+function paintGarUpdateBar(d) {
+  const bar = $('#gar-update-bar');
+  if (!bar) return false;
+  const dl = d.download || {};
+  const active = d.coreOk && ['connecting', 'downloading', 'verifying'].includes(dl.stage);
+  if (active) {
+    let text = `核心更新中 v${dl.version || ''}`;
+    if (dl.stage === 'downloading') {
+      text += ` · 下载 ${dl.total ? (100 * dl.done / dl.total).toFixed(0) : '?'}%（${dl.done >> 20}/${(dl.total || dl.done) >> 20} MB）`;
+    } else if (dl.stage === 'verifying') {
+      text += ` · 校验 ${dl.files}/${dl.filesTotal || '…'}`;
+    } else {
+      text += `（${dl.source || ''}）`;
+    }
+    bar.textContent = text;
+    bar.hidden = false;
+  } else if (d.coreOk && dl.stage === 'error' && dl.error) {
+    bar.textContent = `核心更新未完成：${dl.error.split('\n')[0]}`;
+    bar.hidden = false;
+  } else {
+    bar.hidden = true;
+  }
+  return active;
 }
 
 async function garAction(kind) {

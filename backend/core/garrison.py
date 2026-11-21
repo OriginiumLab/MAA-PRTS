@@ -42,6 +42,10 @@ HOST_JS = os.path.join(settings.RES, 'resources', 'garrison', 'host.mjs')
 PATCH_FILE = os.path.join(settings.RES, 'resources', 'garrison', 'patches.json')
 
 DEVICES = ('mumu', 'ldplayer', 'pc')
+# 速刷目标（核心 goal 注册表，v1.1.7 起）：medal=策略徽章（默认）；
+# task-N=实验性叠层目标（先锋服实测口径：task-1..5 为 100 层、task-6/7 为 50 层）。
+# 与 resources/garrison/host.mjs 的 GOALS 保持一致。
+GOALS = ('medal', 'task-1', 'task-2', 'task-3', 'task-4', 'task-5', 'task-6', 'task-7')
 SHOT_METHODS = ('auto', 'fast', 'adb')
 BUSY = ('running', 'starting', 'stopping')
 
@@ -192,14 +196,10 @@ def _maa_dir_for(file: str) -> str:
     return settings.load()['maaDir']
 
 
-def defaults(file: str):
-    """速刷默认参数：从账号绑定 MAA 的连接配置里抄。
-
-    返回 ``(options, 来源)``；MAA 配置读不到时给核心自己的兜底值
-    （mumu + 16384），前端会展示来源让用户知道这份默认值从哪来。
-    """
+def _maa_defaults(file: str):
+    """从账号绑定 MAA 的连接配置里抄出来的裸默认值（不含用户偏好 overlay）"""
     opts = {
-        'device': 'mumu', 'mode': 'quick', 'speed': 1.5, 'medalWins': 3,
+        'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'speed': 1.5, 'medalWins': 3,
         'adbAddress': '127.0.0.1:16384', 'adbPath': '',
         'screenshotMethod': 'auto', 'pcUiScale': 90,
     }
@@ -227,6 +227,58 @@ def defaults(file: str):
     return opts, src
 
 
+# 可持久化的速刷选项键（账号 json 里的 garrisonOpts 只认这些）
+OPT_KEYS = ('device', 'mode', 'goal', 'adbAddress', 'adbPath', 'medalWins', 'speed',
+            'screenshotMethod', 'pcUiScale')
+
+
+def _stored_opts(file: str) -> dict:
+    """账号 json 里存过的用户改动（garrisonOpts），按白名单取"""
+    if not file:
+        return {}
+    try:
+        from . import accounts
+        snap = accounts.get_account(file)
+        st = snap.get('garrisonOpts') or {}
+        return {k: st[k] for k in OPT_KEYS
+                if isinstance(st, dict) and k in st}
+    except Exception:
+        return {}
+
+
+def defaults(file: str):
+    """速刷默认参数：MAA 配置抄来的基底 + 账号里存过的用户改动。
+
+    返回 ``(options, 来源)``。用户在面板改过的选项按账号持久化
+    （save_opts 只存与 MAA 基底不同的键），重启不丢；没改过的键
+    继续跟随 MAA 配置。
+    """
+    opts, src = _maa_defaults(file)
+    stored = _stored_opts(file)
+    for k in OPT_KEYS:
+        if k in stored and k in opts:
+            opts[k] = stored[k]
+    return opts, src
+
+
+def save_opts(file: str, options: dict) -> dict:
+    """用户改的速刷选项写回账号 json。
+
+    以账号**当前生效值**为基底叠加传入项再清洗（只传一个键不会把别的
+    键锁到全局兜底值），然后与「MAA 抄来的裸默认」逐键比对，只存不同
+    的键——改回默认值的键自动剔除，没动过的键永远跟着 MAA 配置走。
+    返回合并后的生效默认值（含实际存了哪些键，便于排查）。
+    """
+    cur, _src0 = defaults(file)
+    clean = sanitize({**cur, **(options or {})})
+    base, _src = _maa_defaults(file)
+    diff = {k: clean[k] for k in OPT_KEYS if clean.get(k) != base.get(k)}
+    from . import accounts as _acc
+    _acc.save_pref(file, {'garrisonOpts': diff})
+    merged, src = defaults(file)
+    return {'defaults': merged, 'fromMaa': src, 'saved': diff}
+
+
 def sanitize(body: dict) -> dict:
     """前端提交的选项清洗：只放行核心认识的枚举与范围，其余回默认"""
     body = body or {}
@@ -239,6 +291,7 @@ def sanitize(body: dict) -> dict:
     return {
         'device': device,
         'mode': body.get('mode') if body.get('mode') in ('quick', 'standard') else 'quick',
+        'goal': body.get('goal') if body.get('goal') in GOALS else 'medal',
         'medalWins': 6 if str(body.get('medalWins')) == '6' else 3,
         'speed': speed,
         'adbAddress': str(body.get('adbAddress') or dft['adbAddress']).strip() or dft['adbAddress'],
@@ -418,6 +471,8 @@ def status(file: str) -> dict:
 
     核心缺失时带 ``needsDownload`` + 下载进度（garrisondl 的状态机），
     前端据此自动开始下载并显示进度条；下载是全局一份（不分账号）。
+    核心升级（保持最新）不在轮询里做：由「程序启动」和「速刷任务全部
+    停止后」（stop()）两个事件触发 garrisondl.check_update()。
     """
     node = node_exe()
     core = core_dir()
@@ -477,7 +532,49 @@ def stop(file: str) -> dict:
     h = host_of(file)
     if not _alive(h):
         raise ValueError('当前没有速刷任务在跑')
-    return _call(h, 'POST', '/api/stop', {}, timeout=15)   # type: ignore[arg-type]
+    r = _call(h, 'POST', '/api/stop', {}, timeout=15)   # type: ignore[arg-type]
+    _schedule_update_check()
+    return r
+
+
+def _schedule_update_check():
+    """速刷任务被停止后安排一次更新检查（后台、全闲才动手）。
+
+    只在有宿主存在时才起线程：stop 失败（没有宿主）不应触发检查，
+    否则会在不该动手的时刻（比如宿主都关了）意外开始升级。
+    """
+    with _lock:
+        has_hosts = bool(_HOSTS)
+    if not has_hosts:
+        return
+    threading.Thread(target=_check_update_when_idle, daemon=True,
+                     name='garrison-upd-check').start()
+
+
+def _check_update_when_idle(timeout=45.0):
+    """等全部速刷任务停稳（stopping→stopped），都闲下来了就查一次更新。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _lock:
+            hosts = list(_HOSTS.items())
+        busy_any = False
+        for _f, h in hosts:
+            if not _alive(h):
+                continue
+            try:
+                if (_state_of(h).get('state') or {}).get('status') in BUSY:
+                    busy_any = True
+                    break
+            except Exception:
+                busy_any = True   # 拿不到状态先当它在跑，别在忙时动手
+                break
+        if not busy_any:
+            try:
+                garrisondl.check_update()
+            except Exception:
+                pass
+            return
+        time.sleep(2.0)
 
 
 def stop_all(timeout=6.0):

@@ -36,17 +36,46 @@ from . import applog, settings
 PKG_ID = 'ai-desktop.arknights-medal-farm'
 PKG_DIR_RE = re.compile(r'^medal-farm-v(\d+(?:\.\d+)*)$')
 
-FALLBACK = {
-    'version': '1.1.4',
-    'url': ('https://static.max-c.com/heybox/desktop/extension/'
-            'ai-desktop.arknights-medal-farm/version/1.1.4/'
-            '970f8e97e13fd427abf63289c53c8a68765d4ac870f745c5f3c58250a25829ff-'
-            '20261118T140851382Z/ai-desktop.arknights-medal-farm-1.1.4.hbext'),
-    'sha256': '970f8e97e13fd427abf63289c53c8a68765d4ac870f745c5f3c58250a25829ff',
-    'bytes': 61071704,
-    'files': None,
-    'source': '官方直链（回退）',
-}
+# 已验证直链（匿名可下载，整包 sha256 锚定）：按版本降序作回退链——
+# 记录里的新版不在适配表时，装「表内最新」的直链版本而不是一味落到最老。
+FALLBACKS = [
+    {
+        'version': '1.1.7',
+        'url': ('https://static.max-c.com/heybox/desktop/extension/'
+                'ai-desktop.arknights-medal-farm/version/1.1.7/'
+                '6bc385116129d13b2e66679d100551950c6b03c793a92cfe1bc9f53f6db3166b-'
+                '20261120T150609837Z/ai-desktop.arknights-medal-farm-1.1.7.hbext'),
+        'sha256': '6bc385116129d13b2e66679d100551950c6b03c793a92cfe1bc9f53f6db3166b',
+        'bytes': 61089122,
+        'files': None,
+        'source': '官方直链（回退）',
+    },
+
+    {
+        'version': '1.1.5',
+        'url': ('https://static.max-c.com/heybox/desktop/extension/'
+                'ai-desktop.arknights-medal-farm/version/1.1.5/'
+                '596196307afbdc4c102d66b85b7210ebb292612fd6f1e0d2d2c51ab83445c8b0-'
+                '20261119T163854129Z/ai-desktop.arknights-medal-farm-1.1.5.hbext'),
+        'sha256': '596196307afbdc4c102d66b85b7210ebb292612fd6f1e0d2d2c51ab83445c8b0',
+        'bytes': 61083080,
+        'files': None,
+        'source': '官方直链（回退）',
+    },
+    {
+        'version': '1.1.4',
+        'url': ('https://static.max-c.com/heybox/desktop/extension/'
+                'ai-desktop.arknights-medal-farm/version/1.1.4/'
+                '970f8e97e13fd427abf63289c53c8a68765d4ac870f745c5f3c58250a25829ff-'
+                '20261118T140851382Z/ai-desktop.arknights-medal-farm-1.1.4.hbext'),
+        'sha256': '970f8e97e13fd427abf63289c53c8a68765d4ac870f745c5f3c58250a25829ff',
+        'bytes': 61071704,
+        'files': None,
+        'source': '官方直链（回退）',
+    },
+]
+FALLBACK = FALLBACKS[-1]   # 最老一档，兼容旧引用
+
 
 MIN_TOTAL_BYTES = 50 * 1024 * 1024
 MIN_FILE_COUNT = 100
@@ -141,7 +170,25 @@ def record_candidates():
 
 
 def candidates():
-    return record_candidates() + [dict(FALLBACK)]
+    # 全部下载源：本机记录 ∪ 已验证直链，按版本降序（同版本记录优先——
+    # 带官方逐文件 sha256 清单，校验更严）
+    recs = record_candidates()
+    seen = {r['version'] for r in recs}
+    out = recs + [dict(f) for f in FALLBACKS if f['version'] not in seen]
+    out.sort(key=lambda r: ver_key(r['version']), reverse=True)
+    return out
+
+def _pick_candidate(installed: str):
+    # 该装哪个：候选里第一个「适配表内且比已装新」的；没有返回 None。
+    # 记录里只有表外新版（如 1.1.6）时，顺着回退链选表内最新的直链版本
+    # （如 1.1.5），而不是一味落到最老的 1.1.4。
+    for rec in candidates():
+        if not _is_adapted(rec['version']):
+            continue
+        if installed and ver_key(rec['version']) <= ver_key(installed):
+            continue
+        return rec
+    return None
 
 
 # ---------------------------------------------------------------- 引擎
@@ -274,8 +321,34 @@ def _extract_verify(hbext, out_dir, manifest=None):
     return len(got)
 
 
+def _adapted_versions():
+    """patches.json 里硬编码的「已适配核心版号」表；读不到按无限制处理
+
+    更新器只升到表内版本（表外新版等补丁适配后再放行），比在暂存区上
+    数补丁命中更直白，也省一次 61MB 的无效下载。
+    """
+    p = os.path.join(settings.RES, 'resources', 'garrison', 'patches.json')
+    try:
+        with open(p, encoding='utf-8') as f:
+            v = (json.load(f) or {}).get('adaptedVersions')
+        return [str(x) for x in v] if isinstance(v, list) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _is_adapted(version: str) -> bool:
+    allowed = _adapted_versions()
+    return allowed is None or str(version) in allowed
+
+
 def _install(hbext, version, manifest=None):
-    """解压校验 → 前置校验 → 原子落位 garrison/medal-farm-v<版本>；失败不伤旧版。"""
+    """解压校验 → 前置校验 → 补丁兼容门禁 → 原子落位；失败不伤旧版。
+
+    门禁：上游换版本常把混淆产物整个重排（v1.1.4 → v1.1.5 连文案都换了），
+    我们的补丁一条都命不中＝这个版本没适配过，升上去等于把已修的 OCR
+    容错/弹窗识别全丢掉。宁可停在旧版等适配——全新安装同理会顺着回退
+    链落到已适配的版本上。
+    """
     pkg = os.path.join(garrison_dir(), 'medal-farm-v%s' % version)
     stage = os.path.join(download_dir(), 'stage')
     shutil.rmtree(stage, ignore_errors=True)
@@ -330,16 +403,49 @@ def state() -> dict:
 
 
 def start() -> dict:
-    """启动（或继续）下载；已在跑/已完成时原样返回。返回 state 快照。"""
+    """启动（或继续）下载/升级；已在跑/已是最新时原样返回。返回 state 快照。
+
+    没装过 → 走下载链装「表内最新」（记录 ∪ 已验证直链）；装着旧版且
+    候选里有「适配表内且更新」的版本（_pick_candidate）→ 升级；升级
+    失败不影响已装版本继续使用。
+    """
     with _LOCK:
         running = _RUNNING[0]
     if running:
         return state()
-    if _installed_pkg_dir():
+    cur = _installed_pkg_dir()
+    if cur and _pick_candidate(cur) is None:
         _set(stage='done', error='', endedAt=time.time())
         return state()
     threading.Thread(target=_run, daemon=True, name='garrison-dl').start()
     return state()
+
+
+def check_update() -> None:
+    """看一眼有没有可升的目标（适配表内且比已装新），有就后台升级。
+
+    触发时机由调用方决定：程序启动时（main）、速刷任务全部停止后
+    （garrison.stop）。没有可升目标就是一次本地扫描，零成本；记录里的
+    新版不在适配表时记一行日志、不动已装版本。
+    """
+    with _LOCK:
+        running = _RUNNING[0]
+    if running:
+        return
+    cur = _installed_pkg_dir()
+    if not cur:
+        return
+    target = _pick_candidate(cur)
+    if not target:
+        recs = record_candidates()
+        if recs and ver_key(recs[0]['version']) > ver_key(cur) \
+                and not _is_adapted(recs[0]['version']):
+            applog.log('[卫戍协议] 核心新版本 v%s 尚无对应补丁（已适配：%s），暂不更新'
+                       % (recs[0]['version'], '/'.join(_adapted_versions() or ['?'])))
+        return
+    applog.log('[卫戍协议] 检测到核心新版本（本机 v%s → v%s），后台升级'
+               % (cur, target['version']))
+    threading.Thread(target=_run, daemon=True, name='garrison-upgrade').start()
 
 
 def _run():
@@ -364,7 +470,12 @@ def _run():
             shutil.rmtree(lock_dir, ignore_errors=True)
         os.mkdir(lock_dir)
 
+        installed = _installed_pkg_dir()
         for rec in candidates():
+            if not _is_adapted(rec['version']):
+                continue   # 版号不在适配表：等补丁，不下载
+            if installed and ver_key(rec['version']) <= ver_key(installed):
+                continue   # 防降级：已装新版时旧记录/回退直链一律不装
             label = 'v%s（%s）' % (rec['version'], rec['source'])
             try:
                 _set(stage='connecting', source=rec['source'], version=rec['version'],

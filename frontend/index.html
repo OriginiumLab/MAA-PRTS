@@ -267,6 +267,8 @@
         <div class="sign-title">卫戍协议<span id="gar-sub">—</span></div>
         <div class="sign-tools"><span class="sign-tip" id="gar-tip"></span></div>
       </div>
+      <!-- 保持最新：已装核心但后台在升新版时显示（下载/校验进度随轮询刷新） -->
+      <div class="gar-update-bar" id="gar-update-bar" hidden></div>
       <div class="sign-scroll">
         <!-- 环境不齐（缺 Node / 缺核心）时的安装指引，替掉下面两块 -->
         <div class="gar-empty" id="gar-empty" hidden></div>
@@ -302,9 +304,19 @@
                   <option value="pc">明日方舟 PC 版</option>
                 </select></label>
               <label class="field-row"><span>模拟模式</span>
-                <select id="gar-mode">
-                  <option value="quick">极速模拟（推荐）</option>
-                  <option value="standard">标准模拟</option>
+                <select id="gar-mode" disabled title="上游 v1.1.7 起仅支持极速模拟">
+                  <option value="quick">极速模拟</option>
+                </select></label>
+              <label class="field-row"><span>速刷目标</span>
+                <select id="gar-goal" title="medal=策略徽章（默认）；叠层=实验性目标，通关成功率不确定">
+                  <option value="medal">策略徽章（精准/奥术）</option>
+                  <option value="task-1">叠层 · 炎/莱塔尼亚/奥术 100 层</option>
+                  <option value="task-2">叠层 · 阿戈尔/卡西米尔/突袭 100 层</option>
+                  <option value="task-3">叠层 · 叙拉古/萨尔贡/精准 100 层</option>
+                  <option value="task-4">叠层 · 维多利亚/谢拉格/灵巧 100 层</option>
+                  <option value="task-5">叠层 · 乌萨斯/伊比利亚/聚合 100 层</option>
+                  <option value="task-6">叠层 · 奇迹/远见/投资人 50 层</option>
+                  <option value="task-7">叠层 · 迅捷/不屈/坚守/助力 50 层</option>
                 </select></label>
               <label class="field-row"><span>ADB 地址</span>
                 <input type="text" id="gar-adb" placeholder="127.0.0.1:16384"></label>

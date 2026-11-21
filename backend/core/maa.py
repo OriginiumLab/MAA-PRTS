@@ -286,10 +286,16 @@ def _safe(name):
     return SAFE.sub('_', name).strip() or 'stage'
 
 
-def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, maa_dir=None):
-    """items: [{copilotId, stageCode, title}] → 写入 MAA 多作业列表"""
+def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, maa_dir=None,
+               account=None):
+    """items: [{copilotId, stageCode, title}] → 写入 MAA 多作业列表
+
+    account 是账号文件名：给了就按该账号练度做干员替换（#92，见
+    copilot.SUB_RULES），落盘的作业里塞雷娅这类条目会被练度等价的替补顶掉。
+    """
     log = tasks.log_factory(tid) if tid else (lambda *_: None)
     d = _dir(maa_dir)
+    owned = copilot.owned_of(account)
 
     log('MAA 目录：%s' % d)
     # 先校验配置可读、档案存在，再关进程：目录配错 / gui.new.json 损坏时
@@ -371,6 +377,10 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
             log('[%d/%d] 复用已就绪的作业 #%s %s' % (idx, len(items), cid, it.get('title') or ''))
         else:
             content, flags, sname = fetched[cid]
+            if owned:
+                content, sub_notes = copilot.apply_substitutions(content, owned)
+                for n in sub_notes:
+                    log('    替换：%s' % n)
             fname = '%s_%s.json' % (_safe(stage_code), cid)
             os.makedirs(_copilot_dir(d), exist_ok=True)
             fpath = os.path.join(_copilot_dir(d), fname)
@@ -424,13 +434,14 @@ def apply_plan(items, profile=None, mode='replace', auto_start=True, tid=None, m
             'added': len(new_entries), 'files': files, 'started': started}
 
 
-def start_apply(items, profile=None, mode='replace', auto_start=True, maa_dir=None):
+def start_apply(items, profile=None, mode='replace', auto_start=True, maa_dir=None, account=None):
     title = '写入 MAA（%d 份作业）' % len(items or [])
     holder = {}
 
     def go():
         try:
-            res = apply_plan(items, profile, mode, auto_start, holder['tid'], maa_dir=maa_dir)
+            res = apply_plan(items, profile, mode, auto_start, holder['tid'],
+                             maa_dir=maa_dir, account=account)
             tasks.finish(holder['tid'], result=res)
         except Exception as e:
             import traceback

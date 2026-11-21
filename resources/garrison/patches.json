@@ -1,6 +1,10 @@
 {
-  "coreVersion": "1.1.4",
-  "note": "对第三方核心 service.mjs 的最小文本补丁。核心是 GPL-3.0-or-later 的报混淆包，不进仓库、由 garrisondl.py 按版本下载；这里只存纯文本替换规则，启动前幂等应用（首次改动前留 service.mjs.orig 备份）。规则脱靶（核心升级换了写法）只记日志跳过，不影响启动。",
+  "note": "对第三方核心 service.mjs 的最小文本补丁。核心是 GPL-3.0-or-later 的报混淆包，不进仓库、由 garrisondl.py 按版本下载；adaptedVersions 硬编码已适配的核心版号——更新器只升到表内版本（表外新版等适配）；这里只存纯文本替换规则，启动前幂等应用（首次改动前留 service.mjs.orig 备份）。规则脱靶（核心升级换了写法）只记日志跳过，不影响启动。",
+  "adaptedVersions": [
+    "1.1.4",
+    "1.1.5",
+    "1.1.7"
+  ],
   "patches": [
     {
       "id": "confirm-ready-temp-zone",
@@ -16,9 +20,57 @@
     },
     {
       "id": "free-claim-trust-detail-title",
-      "why": "免费领取（三合一赠送 / 召唤模块奖励，$e 第三参 b=true）的兜底：卡片名与详情标题两侧 OCR 对不上时（如单字名「夕」在小字号卡面上被读成形近字），核心原本直接判核对失败、关弹窗、弃领。改为免费场景下若大字号详情标题读出了非空文本，就信详情、按它的名字继续领——最坏结果是领了另一张免费卡，不会误花金币（购买/出售 b=false 不走此兜底，核对标准不变）。",
+      "why": "免费领取（三合1赠送高星干员 / 召唤模块奖励，$e 第三参 b=true）的兜底：卡片名与详情标题两侧 OCR 对不上时（如单字名「夕」在小字号卡面上被读成形近字），核心原本直接判核对失败、关弹窗、弃领。改为免费场景下若大字号详情标题读出了非空文本，就信详情、按它的名字继续领——最坏结果是领了另一张免费卡，不会误花金币（购买/出售 b=false 不走此兜底，核对标准不变）。",
       "find": "if(!Zr(K,k))return _(",
       "replace": "if(!Zr(K,k)&&!(b&&K&&(k=K)))return _("
+    },
+    {
+      "id": "strategy-detail-name-tolerance",
+      "why": "策略页选卡（如「缪尔赛思」）：点开卡片后核心在右侧详情栏 OCR 策略名核对（Ar 函数），原本用纯 includes 零容错——与购买路径的 Zr 完全两套标准。详情名 OCR 错一个形近字即 3 次重读全挂 →「策略详情名称未能对应目标卡片」跳过该卡 → 拉黑后列表滚到头 →「已到策略列表末尾，但尚有策略进度未核实」整局停止。改为 includes 不中再走 Zr 容差（≥3 字名 1 字差、≥6 字拉丁名 2 字差；61 个策略名中距离 ≤1 的名字对全是 ≤2 字名，Zr 对其零容差，无互配风险）。",
+      "find": "return b.find(M=>A(k).includes(A(M.name)))",
+      "replace": "return b.find(M=>A(k).includes(A(M.name))||Zr(A(k),A(M.name)))"
+    },
+    {
+      "id": "confirm-ready-temp-zone-v115",
+      "why": "v1.1.5 版同款：confirm-ready 判定补认「确认准备就绪吗？临时整备区…」弹窗的特征词（上游 v1.1.5 重排了混淆名，c→o、f→h，规则与 1.1.4 的互不命中，靠 miss 跳过共存）。",
+      "find": "o(/确认准备/)&&o(/剩余资金|未使用的|指令/)?h=\"confirm-ready\"",
+      "replace": "o(/确认准备/)&&(o(/剩余资金|未使用的|指令/)||o(/临时整备区|召唤物|自动销毁/))?h=\"confirm-ready\""
+    },
+    {
+      "id": "latin-tolerance-v115",
+      "why": "v1.1.5 的名字比对 xn 已自带「≥3 字名 1 字容差」（蕾缪安等 3 字名上游修了），但拉丁名仍只容 1 字差——小字号拉丁名（Miss.Christine、核心数据里没有的新预备干员 Mist 系 7-8 字母名）OCR 常错 2+ 字。给 ≥6 字拉丁/数字名放宽到容 2 字（v1.1.5 数据里拉丁名两两编辑距离远大于 2，无混淆）。",
+      "find": "if(O.length<3)return!1;for(let W=0;W+O.length<=M.length;W++){let ne=0;for(let V=0;V<O.length;V++)M[W+V]!==O[V]&&ne++;if(ne<=1)return!0}return!1}",
+      "replace": "if(O.length<3)return!1;const ya=/^[A-Za-z0-9]/.test(O)&&O.length>=6?2:1;for(let W=0;W+O.length<=M.length;W++){let ne=0;for(let V=0;V<O.length;V++)M[W+V]!==O[V]&&ne++;if(ne<=ya)return!0}return!1}"
+    },
+    {
+      "id": "free-claim-trust-detail-v115",
+      "why": "v1.1.5 版同款：免费领取（bt 第三参 v=true）卡片名与详情名两侧 OCR 对不上时，若大字号详情标题（q）读出非空文本就信详情继续领（y=q）——覆盖单字名「夕」与未知新干员；购买/出售 v=false 核对标准不变。",
+      "find": "if(!xn(q,y))return Ae(",
+      "replace": "if(!xn(q,y)&&!(v&&q&&(y=q)))return Ae("
+    },
+    {
+      "id": "strategy-detail-tolerance-v115",
+      "why": "v1.1.5 版同款：策略页详情核对（G 函数）纯 includes 零容错，改为不中再走 xn 容差——缪尔赛思等 4 字策略名 OCR 错 1 字不再跳过拉黑、整局卡死。",
+      "find": "return v.find(O=>M(y).includes(M(O.name)))",
+      "replace": "return v.find(O=>M(y).includes(M(O.name))||xn(M(y),M(O.name)))"
+    },
+    {
+      "id": "latin-tolerance-v117",
+      "why": "v1.1.7 同款：名字比对 Rn（上游已自带 ≥3 字 1 字容差）拉丁名仍只容 1 字差——小字号拉丁名（Miss.Christine、数据里没有的新预备干员 Mist 系 7-8 字母名）OCR 常错 2+ 字。≥6 字拉丁/数字名放宽到 2 字。",
+      "find": "if(P.length<3)return!1;for(let q=0;q+P.length<=O.length;q++){let ue=0;for(let Z=0;Z<P.length;Z++)O[q+Z]!==P[Z]&&ue++;if(ue<=1)return!0}return!1}",
+      "replace": "if(P.length<3)return!1;const ya=/^[A-Za-z0-9]/.test(P)&&P.length>=6?2:1;for(let q=0;q+P.length<=O.length;q++){let ue=0;for(let Z=0;Z<P.length;Z++)O[q+Z]!==P[Z]&&ue++;if(ue<=ya)return!0}return!1}"
+    },
+    {
+      "id": "free-claim-trust-detail-v117",
+      "why": "v1.1.7 同款：免费领取（Lt 第三参 y=true）卡片名与详情名两侧 OCR 对不上时，若大字号详情标题（H）读出非空文本就信详情继续领（x=H）；购买/出售核对不变。confirm-ready 上游 v1.1.7 已自带临时整备区特征词，无需补丁。",
+      "find": "if(!Rn(H,x))return je(",
+      "replace": "if(!Rn(H,x)&&!(y&&H&&(x=H)))return je("
+    },
+    {
+      "id": "strategy-detail-tolerance-v117",
+      "why": "v1.1.7 同款：策略页详情核对（ie 函数）纯 includes 零容差，改为不中再走 Rn 容差。",
+      "find": "return y.find(P=>O(x).includes(O(P.name)))",
+      "replace": "return y.find(P=>O(x).includes(O(P.name))||Rn(O(x),O(P.name)))"
     }
   ]
 }

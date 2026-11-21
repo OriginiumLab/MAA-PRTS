@@ -491,7 +491,9 @@ def api_maa_apply(_q, body):
     tid = maa.start_apply(items, profile=body.get('profile'),
                           mode=body.get('mode') or 'replace',
                           auto_start=body.get('autoStart', True),
-                          maa_dir=_maa_dir_for(body.get('file')))
+                          maa_dir=_maa_dir_for(body.get('file')),
+                          # 带上账号：写盘时按该账号练度做干员替换（#92）
+                          account=str(body.get('file') or '').strip() or None)
     return {'taskId': tid}
 
 
@@ -594,6 +596,12 @@ def api_garrison_status(q, _body):
 def api_garrison_download(_q, _body):
     """开始/继续核心包下载（幂等），返回当前下载状态"""
     return garrison.start_download()
+
+
+def api_garrison_opts(_q, body):
+    """保存用户改过的速刷选项（按账号持久化，只存与 MAA 默认不同的键）"""
+    body = body or {}
+    return garrison.save_opts(_account_for(body.get('file')), body.get('options') or {})
 
 
 def _garrison_options(q, body):
@@ -890,6 +898,7 @@ ROUTES = {
     # 卫戍协议·策略刻章速刷
     '/api/garrison/status': api_garrison_status,
     '/api/garrison/download/start': api_garrison_download,
+    '/api/garrison/opts': api_garrison_opts,
     '/api/garrison/test': api_garrison_test,
     '/api/garrison/start': api_garrison_start,
     '/api/garrison/resume': api_garrison_resume,
