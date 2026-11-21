@@ -216,6 +216,7 @@ WR=画中人        ZT=崔林特尔梅之金
 ```jsonc
 {
   "maaDir": "D:\\2.game\\MAA-ALL\\MAA-ARK\\MAA-v6.20.1-win-x64",
+  "maaEndDir": "",
   "maaDirs": ["D:\\2.game\\MAA-ALL\\MAA-ARK\\MAA-v6.20.1-win-x64"],
   "autoStartMaa": true,
   "autoUpdatePack": true,
@@ -228,6 +229,7 @@ WR=画中人        ZT=崔林特尔梅之金
 | 字段 | 说明 |
 |---|---|
 | `maaDir` | 全局默认 MAA 根目录（含 `MAA.exe` 与 `config/gui.new.json`）。写入路径时会自动规范化斜杠 |
+| `maaEndDir` | 明日方舟终末地那一栏的 MAAEND 根目录。设置里按游戏分了 tab，两套路径互不覆盖；MAAEND 的任务链还没接，这项先留着位 |
 | `maaDirs` | 用过的 MAA 根目录历史（添加账号时「已存过」列表的数据源） |
 | `autoStartMaa` | 写完作业后是否自动启动 MAA |
 | `autoUpdatePack` | 启动后是否自动下载新的游戏资源包（新关卡 / 新干员 / 新活动），默认开。关掉不影响使用，只是要等发新版才有新数据 |
@@ -241,6 +243,37 @@ WR=画中人        ZT=崔林特尔梅之金
 删掉它等于恢复默认：引导会重新出现，需要再填一次 MAA 目录。
 手改坏了 JSON 也不会丢数据：启动时会把坏文件改名成
 `settings.json.broken-<时间戳>` 保住原件，程序按默认设置继续运行。
+
+## schedule.json（定时任务）
+
+设置 → 定时任务整页存在这个文件里，跟 `settings.json` 分开：任务列表改得频繁，
+还要带运行记录，混进偏好设置里会让那份文件越来越难手改。
+
+```jsonc
+{
+  "version": 1,
+  "conflict": "stop",        // stop=停掉在跑的 / skip=跳过本次
+  "onChainFail": "continue", // continue=继续后续 / stop=停掉整条链
+  "tasks": [
+    {
+      "id": "s1a2b3c4",
+      "enabled": true,
+      "name": "早上挂长草",
+      "mode": "time",        // time=按时间，chain=接在上一条后面
+      "time": "08:00",
+      "weekdays": [1, 2, 3, 4, 5, 6, 7],   // 1=周一 … 7=周日
+      "program": "D:\\tools\\autostart-138.exe",
+      "args": "--autostart --instance 138",
+      "cwd": "",             // 空 = 程序所在目录
+      "timeout": 0,          // 秒，0=不限
+      "notify": true
+    }
+  ]
+}
+```
+
+删掉这个文件等于清空全部定时任务；程序运行中读的是内存缓存，改完要重启或
+在界面上再保存一次才生效。
 
 ## 账号文件（<昵称> <服务器>.json）
 

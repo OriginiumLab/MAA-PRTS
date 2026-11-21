@@ -197,6 +197,8 @@ async function boot() {
     const mod0 = new URLSearchParams(location.search).get('mod');
     if (mod0 === 'gacha' || mod0 === 'signin' || mod0 === 'chat') setModule(mod0);
     startPing();
+    setTimeout(scheduleWatch, 7000);
+    setInterval(scheduleWatch, 20000);
     // 资源包后台自动更新：晚几秒，别和首屏渲染抢网络
     setTimeout(packAutoSync, 2500);
     // 程序本体检查更晚一点：两条链路错开，别同时占网络
@@ -224,6 +226,19 @@ function startPing() {
   const ping = () => fetch('/api/ping', { method: 'POST' }).catch(() => {});
   ping();
   setInterval(ping, 20000);
+}
+
+/* 定时任务跑完的提示：设置页关着也能收到（后端线程照跑）。 */
+let _schedSeq = 0;
+async function scheduleWatch() {
+  try {
+    const d = await api('/api/schedule/status?since=' + _schedSeq);
+    if (typeof d.seq === 'number') _schedSeq = d.seq;
+    (d.events || []).forEach(ev => {
+      if (ev.kind !== 'finish' || !ev.notify) return;
+      toast(ev.text || `定时任务「${ev.name}」已结束`, ev.level === 'ok' ? 'ok' : 'err', 6000);
+    });
+  } catch (e) { /* 老服务端没有这个接口：安静跳过 */ }
 }
 
 /* ------------------------------------------------------------ 账号 */
@@ -2592,6 +2607,17 @@ async function pickFolder(inputEl) {
   else if (r && r.error) toast('选择失败：' + r.error, 'err');
 }
 
+async function pickFile(inputEl) {
+  const n = nativeApi();
+  if (!n || !n.choose_file) {
+    toast('当前不是桌面窗口，请手动粘贴程序路径', 'err');
+    return;
+  }
+  const r = await n.choose_file('选择要运行的程序', inputEl.value.trim());
+  if (r && r.path) inputEl.value = r.path;
+  else if (r && r.error) toast('选择失败：' + r.error, 'err');
+}
+
 /* ------------------------------------------------------------ 设置
    2026-11-18：一列到底改成「左侧 tab + 右侧内容」。
    原来账号 / MAA / 版本 / 助手 / 目录 / 黑名单全堆在一个 520px 的弹窗里，
@@ -2611,6 +2637,7 @@ const SET_ICONS = {
     + '<path d="M3 4.5v6.9c0 1.05 2.24 1.9 5 1.9s5-.85 5-1.9V4.5"/>'
     + '<path d="M3 8c0 1.05 2.24 1.9 5 1.9s5-.85 5-1.9"/>',
   blacklist: '<circle cx="8" cy="8" r="5.2"/><path d="M4.35 11.65 11.65 4.35"/>',
+  schedule: '<circle cx="8" cy="8" r="5.3"/><path d="M8 5.2V8l2.1 1.35"/>',
 };
 
 function setIcon(k) {
@@ -2626,11 +2653,14 @@ function fmtSync(t) {
 const SET_TABS = [
   ['accounts', '账号管理'],
   ['maa', 'MAA 路径'],
+  ['schedule', '定时任务'],
   ['update', '版本更新'],
   ['agent', '助手设置'],
   ['data', '数据与日志'],
   ['blacklist', '黑名单'],
 ];
+
+let _setSchedTimer = null;   // 设置 → 定时任务页的 5 秒轮询
 
 function openSettings() {
   const s = S.settings;
@@ -2648,7 +2678,7 @@ function openSettings() {
   const proxyHost = pm ? pm[1] : 'http://127.0.0.1';
   const proxyPort = pm ? pm[2] : '';
 
-  const acctRows = () => (S.accounts || []).map(a => {
+  const acctRows = game => (S.accounts || []).filter(a => gameOf(a) === game).map(a => {
     const st = a.stats || {};
     const ef = (a.game || 'arknights') === 'endfield';
     const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
@@ -2683,30 +2713,50 @@ function openSettings() {
         <div class="set-tip" data-tip></div>
       </div>
     </div>`;
-  }).join('') || '<div class="onb-hint">还没有账号。用左上角「添加账号」粘一个森空岛 token，或直接从 MAA 导入。</div>';
+  }).join('') || `<div class="onb-hint">${
+    game === 'endfield'
+      ? '这一栏还没有终末地账号。用森空岛 token 同步时，token 绑了终末地角色就会自动出现在这里。'
+      : '还没有账号。用左上角「添加账号」粘一个森空岛 token，或直接从 MAA 导入。'}</div>`;
 
-  const maaRows = () => (S.accounts || []).map(a => `
-    <div class="set-card set-maarow" data-file="${esc(a.file)}">
+  const maaRows = game => (S.accounts || []).filter(a => gameOf(a) === game).map(a => `
+    <div class="set-card set-maarow" data-file="${esc(a.file)}" data-game="${gameOf(a)}">
       <div class="set-maarow-head">
         <b>${esc(a.nickName)}</b>
-        <span class="set-muted">${esc(a.channelName || '官服')}</span>
+        <span class="${/bilibili/i.test(a.channelName || '') ? 'acct-ch bili' : 'set-muted'}">${
+          esc(a.channelName || '官服')}</span>
         ${a.maaProfile ? `<span class="set-chip">档案 ${esc(a.maaProfile)}</span>` : ''}
       </div>
-      <label class="field"><span>切号名（手机号后 4 位；agent 启动这个账号时写进 MAA「开始唤醒」的就是它）</span>
+      <label class="field"><span>切号名（${
+        game === 'endfield' ? 'MAAEND 账号列表里显示的名字；接入后生效'
+          : '手机号后 4 位；agent 启动这个账号时写进 MAA「开始唤醒」的就是它'}）</span>
         <input type="text" data-f="accountName" value="${esc(a.maaAccountName || '')}"
-               placeholder="后 4 位，如 5505" spellcheck="false" autocomplete="off"></label>
+               placeholder="${game === 'endfield' ? 'MAAEND 账号名' : '后 4 位，如 5505'}"
+               spellcheck="false" autocomplete="off"></label>
       <label class="field"><span>这个账号的 MAA 路径（留空 = 用上面的默认目录）</span>
         <div class="path-row">
-          <input type="text" data-f="dir" value="${esc(a.maaDir || '')}" placeholder="${esc(s.maaDir || '沿用默认目录')}">
+          <input type="text" data-f="dir" value="${esc(a.maaDir || '')}" placeholder="${esc((game === 'endfield' ? s.maaEndDir : s.maaDir) || '沿用默认目录')}">
           <button class="btn-plain mini" data-act="pick">浏览</button>
           <button class="btn-plain mini" data-act="probe">检测</button>
-          <button class="btn-plain mini" data-act="profiles">读档案</button>
+          ${game === 'endfield' ? '' : '<button class="btn-plain mini" data-act="profiles">读档案</button>'}
         </div></label>
       <div class="set-maarow-foot">
         <span class="onb-hint" data-state></span>
         <button class="btn-solid mini" data-act="save">保存</button>
       </div>
-    </div>`).join('') || '<div class="onb-hint">还没有账号。</div>';
+    </div>`).join('') || `<div class="onb-hint">${
+      game === 'endfield' ? '这一栏还没有终末地账号。' : '还没有账号。'}</div>`;
+
+  // 设置里的游戏分组：两页共用同一份选择，切一页另一页跟着切。数量由
+  // paintSetGame 在挂载后回填（删号后也要跟着变），模板里先留 0。
+  const gameTabs = () => `
+    <div class="game-switch set-gswitch" role="tablist" aria-label="游戏分组">
+      <button class="gswitch active" data-game="arknights" role="tab" aria-selected="true">
+        <span>明日方舟</span><b class="gcount" data-gcount="arknights">0</b>
+      </button>
+      <button class="gswitch" data-game="endfield" role="tab" aria-selected="false">
+        <span>明日方舟终末地</span><b class="gcount" data-gcount="endfield">0</b>
+      </button>
+    </div>`;
 
   // 条数要读活的 S.settings：子弹窗里增删后 saveSettings 会换掉整个对象，
   // 拿打开设置那一刻的引用（s）去数会一直停在旧值
@@ -2743,7 +2793,13 @@ function openSettings() {
                 （Windows DPAPI，仅本机当前用户可解），不会上传。默认只读，只有「验证」确认失效后才解锁修改。
                 删除账号会连练度快照一起删掉，不可恢复。</p>
             </div>
-            <div class="set-acct-list" id="set-acct-list">${acctRows()}</div>
+            ${gameTabs()}
+            <div class="gamepane active" data-gamepane="arknights">
+              <div class="set-acct-list" id="set-acct-list">${acctRows('arknights')}</div>
+            </div>
+            <div class="gamepane" data-gamepane="endfield">
+              <div class="set-acct-list" id="set-acct-list-ef">${acctRows('endfield')}</div>
+            </div>
           </div>
 
           <div class="set-pane" data-pane="maa">
@@ -2751,25 +2807,87 @@ function openSettings() {
               <h3>MAA 路径</h3>
               <p>每个账号可以绑自己的 MAA（包含 <code>MAA.exe</code> 的目录），没绑就用下面的默认目录。
                 <b>切号名</b>是 MAA「开始唤醒 → 账号切换」里要比对的那行：官服填手机号后 4 位（如 <code>5505</code>），
-                B 服填游戏内用户名。填错的代价是 MAA 在账号列表里死找、4 分钟超时后整轮挂机作废。</p>
+                <em class="bili-word">bilibili服</em>填游戏内用户名。填错的代价是 MAA 在账号列表里死找、4 分钟超时后整轮挂机作废。</p>
             </div>
-            <div class="set-card">
-              <label class="field"><span>默认 MAA 根目录（账号没单独绑定就用它）</span>
-                <div class="path-row">
-                  <input type="text" id="set-maa" value="${esc(s.maaDir || '')}">
-                  <button class="btn-plain mini" data-pick="set-maa">浏览</button>
-                  <button class="btn-plain mini" id="set-probe">检测</button>
-                  <button class="btn-plain mini" id="set-maa-save">保存</button>
-                </div></label>
-              <div class="onb-hint" id="set-maa-state">${
-                S.maa && S.maa.exeExists ? '✓ MAA.exe 已找到' : '✗ 尚未检测到 MAA.exe'}</div>
-              <label class="check-row" style="margin-top:12px">
-                <input type="checkbox" id="set-autostart" ${s.autoStartMaa ? 'checked' : ''}>
-                <span>写完作业后自动启动 MAA</span>
-              </label>
+            ${gameTabs()}
+            <div class="gamepane active" data-gamepane="arknights">
+              <div class="set-card">
+                <label class="field"><span>默认 MAA 根目录（账号没单独绑定就用它）</span>
+                  <div class="path-row">
+                    <input type="text" id="set-maa" value="${esc(s.maaDir || '')}">
+                    <button class="btn-plain mini" data-pick="set-maa">浏览</button>
+                    <button class="btn-plain mini" id="set-maa-probe">检测</button>
+                    <button class="btn-plain mini" id="set-maa-save">保存</button>
+                  </div></label>
+                <div class="onb-hint" id="set-maa-state">${
+                  S.maa && S.maa.exeExists ? '✓ MAA.exe 已找到' : '✗ 尚未检测到 MAA.exe'}</div>
+                <label class="check-row" style="margin-top:12px">
+                  <input type="checkbox" id="set-autostart" ${s.autoStartMaa ? 'checked' : ''}>
+                  <span>写完作业后自动启动 MAA</span>
+                </label>
+              </div>
+              <div class="set-sub-title">各账号的绑定</div>
+              <div class="set-maa-list" id="set-maa-list">${maaRows('arknights')}</div>
             </div>
-            <div class="set-sub-title">各账号的绑定</div>
-            <div class="set-maa-list" id="set-maa-list">${maaRows()}</div>
+            <div class="gamepane" data-gamepane="endfield">
+              <div class="set-card">
+                <label class="field"><span>默认 MAAEND 根目录（终末地账号没单独绑定就用它）</span>
+                  <div class="path-row">
+                    <input type="text" id="set-maa-end" value="${esc(s.maaEndDir || '')}">
+                    <button class="btn-plain mini" data-pick="set-maa-end">浏览</button>
+                    <button class="btn-plain mini" id="set-maa-end-probe">检测</button>
+                    <button class="btn-plain mini" id="set-maa-end-save">保存</button>
+                  </div></label>
+                <div class="onb-hint" id="set-maa-end-state">${s.maaEndDir
+                  ? '已填写，MAAEND 任务链接入后生效'
+                  : '还没填。这一栏先留着位，等 MAAEND 接入后启用'}</div>
+                <div class="set-tip" style="margin-top:8px">终末地走的是另一套程序（MAAEND），
+                  目录格式与 MAA 不同；现在能保存路径、能识别主程序，任务下发要等后续版本接入。</div>
+              </div>
+              <div class="set-sub-title">各账号的绑定</div>
+              <div class="set-maa-list" id="set-maa-end-list">${maaRows('endfield')}</div>
+            </div>
+          </div>
+
+          <div class="set-pane" data-pane="schedule">
+            <div class="set-head">
+              <h3>定时任务</h3>
+              <p>到点自动启动程序，支持<b>链式启动</b>（上一个程序退出后接着跑下一个）。三月七助手里的
+                <code>autostart-*.exe</code>、<code>OneDragon-Launcher.exe</code>、<code>cmd</code> 批处理
+                这类脚本可以原样搬过来：把「程序」和「参数」照抄即可。定时只在程序运行时生效；
+                要开机自启，请把本程序放进系统启动项。「通知」是在程序里弹提示，程序关着就收不到。</p>
+            </div>
+            <div class="sched-wrap">
+              <div class="sched-head">
+                <span>#</span><span>启用</span><span>名称</span><span>执行计划</span>
+                <span>程序</span><span>参数</span><span>通知</span>
+              </div>
+              <div id="sched-rows"></div>
+            </div>
+            <div class="sched-bar">
+              <button class="btn-plain mini" id="sched-add">添加</button>
+              <button class="btn-plain mini" id="sched-edit">编辑</button>
+              <button class="btn-plain mini" id="sched-up">上移</button>
+              <button class="btn-plain mini" id="sched-down">下移</button>
+              <button class="btn-plain mini" id="sched-del">删除</button>
+              <button class="btn-solid mini" id="sched-run">立即运行</button>
+              <button class="btn-plain mini" id="sched-stop">停止</button>
+            </div>
+            <div class="sched-bar">
+              <label class="sched-opt">冲突：
+                <select id="sched-conflict">
+                  <option value="stop">停止正在运行的任务</option>
+                  <option value="skip">跳过本次</option>
+                </select></label>
+              <label class="sched-opt">链式失败后：
+                <select id="sched-onfail">
+                  <option value="continue">继续后续任务</option>
+                  <option value="stop">停止后续任务</option>
+                </select></label>
+              <span class="spacer"></span>
+              <span class="sched-state" id="sched-state"></span>
+            </div>
+            <div class="sched-log" id="sched-log"></div>
           </div>
 
           <div class="set-pane" data-pane="update">
@@ -2907,20 +3025,59 @@ function openSettings() {
     </div>
   `, {
     cls: 'modal-set',
+    onClose() {
+      if (_setSchedTimer) { clearInterval(_setSchedTimer); _setSchedTimer = null; }
+    },
     onMount(el, close) {
       /* ---------------- 页签 ---------------- */
       const panes = $$('.set-pane', el);
       const tabs = $$('.set-tab', el);
+      let curTab = 'accounts';
+      let setGame = 'arknights';   // 账号管理 / MAA 路径两页共用同一份选择
+
+      const fillVisibleTokens = () => {
+        $$('.set-acct', el).forEach(card => {
+          const pane = card.closest('.gamepane');
+          if (!card.dataset.loaded && pane && pane.classList.contains('active')) fillToken(card);
+        });
+      };
+
+      const paintSetGame = g => {
+        if (g !== 'arknights' && g !== 'endfield') return;
+        setGame = g;
+        $$('.set-gswitch .gswitch', el).forEach(b => {
+          const on = b.dataset.game === g;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', on ? 'true' : 'false');
+          const c = $('[data-gcount="' + b.dataset.game + '"]', b);
+          if (c) c.textContent = (S.accounts || []).filter(a => gameOf(a) === b.dataset.game).length;
+        });
+        $$('.gamepane', el).forEach(p2 => {
+          p2.classList.toggle('active', p2.dataset.gamepane === g);
+        });
+        if (curTab === 'accounts') fillVisibleTokens();
+      };
+
       const show = id => {
+        curTab = id;
         tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === id));
         panes.forEach(p2 => p2.classList.toggle('active', p2.dataset.pane === id));
-        if (id === 'accounts') {
-          $$('.set-acct', el).forEach(card => { if (!card.dataset.loaded) fillToken(card); });
-        }
+        if (id === 'accounts') fillVisibleTokens();
         if (id === 'maa') suggestNames();
+        if (id === 'schedule') {
+          schedLoad();
+          if (!_setSchedTimer) _setSchedTimer = setInterval(() => schedLoad(true), 5000);
+        } else if (_setSchedTimer) {
+          clearInterval(_setSchedTimer);
+          _setSchedTimer = null;
+        }
         if (id === 'blacklist') paintBlCounts();
       };
       tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.tab)));
+      el.addEventListener('click', ev => {
+        const b = ev.target.closest('.set-gswitch .gswitch');
+        if (b) paintSetGame(b.dataset.game);
+      });
 
       // 页签上的小数字：账号数、黑名单总条数——不点进去也知道有没有东西
       const paintTabN = () => {
@@ -3030,7 +3187,7 @@ function openSettings() {
         fillToken(card);
       }
 
-      $('#set-acct-list', el).addEventListener('click', async ev => {
+      const onAcctClick = async ev => {
         const card = ev.target.closest('.set-acct');
         const btn = ev.target.closest('[data-act]');
         if (!card || !btn) return;
@@ -3094,52 +3251,83 @@ function openSettings() {
         }
         if (act === 'del') {
           deleteAccount(file, () => {
-            $('#set-acct-list', el).innerHTML = acctRows();
-            $$('.set-acct', el).forEach(c => fillToken(c));
-            // MAA 那页用的是另一份列表，删号后也得跟着少一行
-            $('#set-maa-list', el).innerHTML = maaRows();
+            // 删号后四份列表都得重画：账号两栏 + MAA 两栏
+            $('#set-acct-list', el).innerHTML = acctRows('arknights');
+            $('#set-acct-list-ef', el).innerHTML = acctRows('endfield');
+            $('#set-maa-list', el).innerHTML = maaRows('arknights');
+            $('#set-maa-end-list', el).innerHTML = maaRows('endfield');
+            paintSetGame(setGame);
             paintBlCounts();
             paintTabN();
           });
         }
+      };
+      ['set-acct-list', 'set-acct-list-ef'].forEach(id => {
+        const box = $('#' + id, el);
+        if (box) box.addEventListener('click', onAcctClick);
       });
 
-      /* ---------------- MAA 路径 ---------------- */
-      $('#set-probe', el).addEventListener('click', async () => {
-        const box = $('#set-maa-state', el);
-        const dir = $('#set-maa', el).value.trim();
-        if (!dir) { box.className = 'onb-hint bad'; box.textContent = '先填目录'; return; }
-        try {
-          const r = await api('/api/maa/probe?dir=' + encodeURIComponent(dir));
-          box.className = 'onb-hint ' + (r.exeExists && r.configExists ? 'ok' : 'bad');
-          box.textContent = r.exeExists
-            ? (r.configExists ? `✓ 找到 MAA.exe，配置 ${r.profiles.length} 个` : '✗ 缺 config/gui.new.json')
-            : '✗ 这个目录里没有 MAA.exe';
-        } catch (e2) {
-          box.className = 'onb-hint bad';
-          box.textContent = '检测失败：' + e2.message;
-        }
-      });
-      $('#set-maa-save', el).addEventListener('click', async () => {
-        const dir = $('#set-maa', el).value.trim();
-        const btn = $('#set-maa-save', el);
-        btn.disabled = true;
-        try {
-          const d = await saveSettings({ maaDir: dir });
-          S.settings = d.settings || S.settings;
-          renderMaaState();
-          fillBasketProfiles();
-          toast('默认 MAA 目录已保存');
-        } catch (e2) {
-          toast('保存失败：' + e2.message, 'err');
-        } finally { btn.disabled = false; }
-      });
+      /* ---------------- MAA 路径 ----------------
+         明日方舟用 MAA，终末地以后用 MAAEND：两套目录各存各的键
+         （maaDir / maaEndDir），切 tab 不会互相覆盖。 */
+      const bindMaaDefault = (prefix, key, kind) => {
+        const input = $('#' + prefix, el);
+        const prober = $('#' + prefix + '-probe', el);
+        const saver = $('#' + prefix + '-save', el);
+        const box = $('#' + prefix + '-state', el);
+        if (!input || !prober || !saver || !box) return;
+        prober.addEventListener('click', async () => {
+          const dir = input.value.trim();
+          if (!dir) { box.className = 'onb-hint bad'; box.textContent = '先填目录'; return; }
+          try {
+            const r = await api('/api/maa/probe?dir=' + encodeURIComponent(dir)
+              + '&kind=' + encodeURIComponent(kind));
+            if (!r.exeExists) {
+              box.className = 'onb-hint bad';
+              box.textContent = kind === 'endfield'
+                ? '✗ 这个目录里没有 MAAEND 的主程序（MaaEnd.exe / mxu.exe）'
+                : '✗ 这个目录里没有 MAA.exe';
+              return;
+            }
+            if (kind === 'endfield') {
+              box.className = 'onb-hint ok';
+              box.textContent = `✓ 找到 ${r.exeName || '主程序'}（任务链接入后生效）`;
+              return;
+            }
+            box.className = 'onb-hint ' + (r.configExists ? 'ok' : 'bad');
+            box.textContent = r.configExists
+              ? `✓ 找到 MAA.exe，配置 ${r.profiles.length} 个` : '✗ 缺 config/gui.new.json';
+          } catch (e2) {
+            box.className = 'onb-hint bad';
+            box.textContent = '检测失败：' + e2.message;
+          }
+        });
+        saver.addEventListener('click', async () => {
+          const dir = input.value.trim();
+          saver.disabled = true;
+          try {
+            const d = await saveSettings({ [key]: dir });
+            S.settings = d.settings || S.settings;
+            if (key === 'maaDir') { renderMaaState(); fillBasketProfiles(); }
+            if (dir) {
+              box.className = 'onb-hint ok';
+              box.textContent = kind === 'endfield'
+                ? '✓ 已保存，MAAEND 任务链接入后生效' : '✓ 已保存';
+            }
+            toast(kind === 'endfield' ? '默认 MAAEND 目录已保存' : '默认 MAA 目录已保存');
+          } catch (e2) {
+            toast('保存失败：' + e2.message, 'err');
+          } finally { saver.disabled = false; }
+        });
+      };
+      bindMaaDefault('set-maa', 'maaDir', 'arknights');
+      bindMaaDefault('set-maa-end', 'maaEndDir', 'endfield');
       $('#set-autostart', el).addEventListener('change', async ev => {
         try { await saveSettings({ autoStartMaa: ev.target.checked }); }
         catch (e2) { ev.target.checked = !ev.target.checked; toast('保存失败：' + e2.message, 'err'); }
       });
 
-      $('#set-maa-list', el).addEventListener('click', async ev => {
+      const onMaaRowClick = async ev => {
         const card = ev.target.closest('.set-maarow');
         const btn = ev.target.closest('[data-act]');
         if (!card || !btn) return;
@@ -3149,19 +3337,27 @@ function openSettings() {
         const state = $('[data-state]', card);
         if (btn.dataset.act === 'pick') { await pickFolder(input); return; }
         if (btn.dataset.act === 'probe' || btn.dataset.act === 'profiles') {
-          const dir = input.value.trim() || (S.settings.maaDir || '');
+          if (btn.dataset.act === 'profiles' && card.dataset.game === 'endfield') return;
+          const dir = input.value.trim()
+            || ((card.dataset.game === 'endfield' ? S.settings.maaEndDir : S.settings.maaDir) || '');
           if (!dir) { state.className = 'onb-hint bad'; state.textContent = '先填目录（或设置默认目录）'; return; }
           state.className = 'onb-hint';
           state.textContent = '检测中…';
           try {
-            const r = await api('/api/maa/probe?dir=' + encodeURIComponent(dir));
+            const kind = card.dataset.game === 'endfield' ? 'endfield' : 'arknights';
+            const r = await api('/api/maa/probe?dir=' + encodeURIComponent(dir)
+              + '&kind=' + encodeURIComponent(kind));
             if (!r.exeExists) {
               state.className = 'onb-hint bad';
-              state.textContent = '✗ 这个目录里没有 MAA.exe';
+              state.textContent = kind === 'endfield'
+                ? '✗ 这个目录里没有 MAAEND 的主程序（MaaEnd.exe / mxu.exe）'
+                : '✗ 这个目录里没有 MAA.exe';
               return;
             }
             state.className = 'onb-hint ok';
-            state.textContent = `✓ MAA.exe 在，配置 ${r.profiles.length} 个`;
+            state.textContent = kind === 'endfield'
+              ? `✓ 找到 ${r.exeName || '主程序'}（任务链接入后生效）`
+              : `✓ MAA.exe 在，配置 ${r.profiles.length} 个`;
             if (btn.dataset.act === 'profiles') {
               const pf = await api('/api/maa/profiles?file=' + encodeURIComponent(file));
               const rows = pf.profiles || [];
@@ -3210,6 +3406,10 @@ function openSettings() {
             btn.textContent = '保存';
           }
         }
+      };
+      ['set-maa-list', 'set-maa-end-list'].forEach(id => {
+        const box = $('#' + id, el);
+        if (box) box.addEventListener('click', onMaaRowClick);
       });
 
       /* ---------------- MAA 绑定：没填切号名时给个提示 ----------------
@@ -3218,6 +3418,8 @@ function openSettings() {
          记着的时候提一句，让用户自己点「读档案」确认。 */
       async function suggestNames() {
         for (const card of $$('.set-maarow', el)) {
+          // 终末地的档案在 MAAEND 里，格式不同；问 MAA 只会给出方舟那边的名字
+          if (card.dataset.game === 'endfield') continue;
           if (card.dataset.sug || $('[data-state]', card).textContent) continue;
           if ($('[data-f="accountName"]', card).value.trim()) continue;
           card.dataset.sug = '1';
@@ -3235,6 +3437,292 @@ function openSettings() {
           } catch (e2) { /* 没装 MAA / 配置读不到：不打扰 */ }
         }
       }
+
+      /* ---------------- 定时任务 ----------------
+         参照三月七助手那套：时间触发 / 链式启动、冲突策略、链式失败策略。
+         数据在后端 config/schedule.json，这里只负责展示与增删改；真正拉起
+         程序的线程在后端，所以关掉设置页也照跑。 */
+      const WD = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+      const schedOf = () => S.schedule || { tasks: [], conflict: 'stop', onChainFail: 'continue' };
+      const baseName = p => {
+        const t = String(p || '').replace(/[\\/]+$/, '');
+        return t.split(/[\\/]/).pop() || t;
+      };
+      const weekText = wd => {
+        const a = (wd || []).slice().sort((x, y) => x - y);
+        if (a.length === 7) return '每天';
+        if (!a.length) return '未选择';
+        return a.map(n => WD[n - 1] || n).join('、');
+      };
+      const takeText = sec => {
+        const n = Math.max(0, parseInt(sec, 10) || 0);
+        return n >= 60 ? `${Math.floor(n / 60)} 分 ${n % 60} 秒` : `${n} 秒`;
+      };
+      let schedSel = -1;
+
+      const paintSched = () => {
+        const d = schedOf();
+        const rows = d.tasks || [];
+        const box = $('#sched-rows', el);
+        if (!box) return;
+        if (schedSel >= rows.length) schedSel = rows.length - 1;
+        box.innerHTML = rows.length ? rows.map((t, i) => {
+          const plan = t.mode === 'chain'
+            ? '<span class="sched-chain">链式启动</span>'
+            : `${esc(t.time || '')} <em>${esc(weekText(t.weekdays))}</em>`;
+          const live = d.running && d.running.id === t.id;
+          return `<div class="sched-row${i === schedSel ? ' sel' : ''}${
+            t.mode === 'chain' ? ' is-chain' : ''}${t.enabled ? '' : ' off'}" data-i="${i}">
+            <span class="sched-num">${i + 1}</span>
+            <span class="sched-en"><input type="checkbox" data-sched-en="${i}"${
+              t.enabled ? ' checked' : ''}></span>
+            <span class="sched-name" title="${esc(t.name)}">${t.mode === 'chain' ? '→ ' : ''}${
+              esc(t.name)}${live ? '<em class="sched-live">运行中</em>' : ''}</span>
+            <span class="sched-plan">${plan}</span>
+            <span class="sched-prog" title="${esc(t.program || '')}">${
+              t.program ? esc(baseName(t.program)) : '<i class="sched-warn">未设置</i>'}</span>
+            <span class="sched-args" title="${esc(t.args || '')}">${esc(t.args || '—')}</span>
+            <span class="sched-nt">${t.notify ? '是' : '否'}</span>
+          </div>`;
+        }).join('')
+          : '<div class="sched-empty">还没有定时任务。点「添加」建一条——到点启动一个程序，或者接在上一条后面链式启动。</div>';
+
+        const cSel = $('#sched-conflict', el);
+        const fSel = $('#sched-onfail', el);
+        if (cSel) cSel.value = d.conflict || 'stop';
+        if (fSel) fSel.value = d.onChainFail || 'continue';
+
+        const st = $('#sched-state', el);
+        if (st) {
+          if (d.running) {
+            st.textContent = `正在运行：${d.running.name}（${takeText(d.running.seconds)}）`;
+          } else {
+            const next = rows.filter(t => t.enabled && t.mode === 'time' && t.nextRunTs)
+              .sort((a, b) => a.nextRunTs - b.nextRunTs)[0];
+            st.textContent = next ? `下次：${next.nextRun} · ${next.name}` : '当前没有待执行的任务';
+          }
+        }
+
+        const log = $('#sched-log', el);
+        if (log) {
+          const near = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+          const lines = (d.log || []).slice(-40);
+          log.innerHTML = lines.length ? lines.map(ev =>
+            `<div class="sched-logline ${esc(ev.level || 'info')}"><span>${esc(ev.time || '')}</span>${
+              esc(ev.text || '')}</div>`).join('')
+            : '<div class="sched-logline"><span></span>还没有运行记录。</div>';
+          if (near) log.scrollTop = log.scrollHeight;
+        }
+      };
+
+      async function schedLoad(quiet) {
+        try {
+          const d = await api('/api/schedule/status');
+          S.schedule = d;
+          _schedSeq = d.seq || _schedSeq;   // 设置里看过的，全局轮询不再弹一遍
+          paintSched();
+        } catch (e2) {
+          if (quiet) return;
+          const log = $('#sched-log', el);
+          if (log) log.textContent = '读取失败：' + e2.message;
+        }
+      }
+
+      async function schedSave(patch) {
+        const d = schedOf();
+        const body = Object.assign({
+          tasks: d.tasks || [], conflict: d.conflict, onChainFail: d.onChainFail,
+        }, patch || {});
+        await api('/api/schedule/save', body);
+        await schedLoad(true);
+      }
+
+      const schedPick = () => {
+        const rows = schedOf().tasks || [];
+        if (schedSel < 0 || !rows[schedSel]) { toast('先在列表里点一条任务', 'warn'); return null; }
+        return schedSel;
+      };
+
+      function openSchedTask(task, idx) {
+        const isNew = !task;
+        const t = Object.assign({
+          name: '', enabled: true, mode: 'time', time: '08:00',
+          weekdays: [1, 2, 3, 4, 5, 6, 7], program: '', args: '', cwd: '',
+          timeout: 0, notify: true,
+        }, task || {});
+        const picked = new Set((t.weekdays || []).map(Number));
+        const m = modal(`
+          <h3>${isNew ? '添加定时任务' : '编辑定时任务'}</h3>
+          <div class="sub">程序退出视为本次结束；退出码非 0 算失败。「链式启动」接在上一条后面，
+            上一条跑完（或按「链式失败后」的策略）才轮到它。</div>
+          <label class="field"><span>名称</span>
+            <input type="text" id="st-name" maxlength="40" value="${esc(t.name)}" placeholder="例如：早上挂长草"></label>
+          <label class="check-row"><input type="checkbox" id="st-enabled"${t.enabled ? ' checked' : ''}>
+            <span>启用</span></label>
+          <label class="field"><span>触发方式</span>
+            <select id="st-mode">
+              <option value="time"${t.mode === 'time' ? ' selected' : ''}>按时间（每周指定几天）</option>
+              <option value="chain"${t.mode === 'chain' ? ' selected' : ''}>链式启动（上一个结束后）</option>
+            </select></label>
+          <div id="st-time-box">
+            <label class="field"><span>时间（24 小时制）</span>
+              <input type="text" id="st-time" maxlength="5" value="${esc(t.time)}" placeholder="08:00"></label>
+            <div class="field"><span>星期</span>
+              <div class="wd-row" id="st-weekdays">${WD.map((n, i) => `
+                <button type="button" class="wd-btn${picked.has(i + 1) ? ' on' : ''}"
+                        data-wd="${i + 1}">${n}</button>`).join('')}</div></div>
+          </div>
+          <label class="field"><span>程序（exe / bat / cmd）</span>
+            <div class="path-row">
+              <input type="text" id="st-program" value="${esc(t.program)}" placeholder="D:\path\autostart-138.exe">
+              <button class="btn-plain mini" id="st-pick">浏览</button>
+            </div></label>
+          <label class="field"><span>参数</span>
+            <input type="text" id="st-args" value="${esc(t.args)}" placeholder="--autostart --instance 138"></label>
+          <label class="field"><span>起始目录（留空 = 程序所在目录）</span>
+            <div class="path-row">
+              <input type="text" id="st-cwd" value="${esc(t.cwd)}">
+              <button class="btn-plain mini" id="st-pick-dir">浏览</button>
+            </div></label>
+          <div class="st-row2">
+            <label class="field"><span>超时（秒，0 = 不限）</span>
+              <input type="text" id="st-timeout" value="${esc(String(t.timeout || 0))}"></label>
+            <label class="check-row"><input type="checkbox" id="st-notify"${t.notify ? ' checked' : ''}>
+              <span>完成后提示我</span></label>
+          </div>
+          <div class="onb-hint" id="st-state"></div>
+          <div class="modal-foot">
+            <button class="btn-plain" data-close>取消</button>
+            <button class="btn-solid" id="st-save">保存</button>
+          </div>
+        `, {
+          onMount(box, close) {
+            const state = $('#st-state', box);
+            const modeSel = $('#st-mode', box);
+            const timeBox = $('#st-time-box', box);
+            const syncMode = () => { timeBox.style.display = modeSel.value === 'chain' ? 'none' : ''; };
+            modeSel.addEventListener('change', syncMode);
+            syncMode();
+            $('#st-weekdays', box).addEventListener('click', ev2 => {
+              const b = ev2.target.closest('.wd-btn');
+              if (!b) return;
+              const n = Number(b.dataset.wd);
+              if (picked.has(n)) picked.delete(n); else picked.add(n);
+              b.classList.toggle('on', picked.has(n));
+            });
+            $('#st-pick', box).addEventListener('click', () => pickFile($('#st-program', box)));
+            $('#st-pick-dir', box).addEventListener('click', () => pickFolder($('#st-cwd', box)));
+            $('#st-save', box).addEventListener('click', async () => {
+              const name = $('#st-name', box).value.trim();
+              const mode = modeSel.value === 'chain' ? 'chain' : 'time';
+              const time = $('#st-time', box).value.trim();
+              const program = $('#st-program', box).value.trim();
+              const args = $('#st-args', box).value.trim();
+              const cwd = $('#st-cwd', box).value.trim();
+              const timeout = Math.max(0, parseInt($('#st-timeout', box).value, 10) || 0);
+              if (!name) { state.className = 'onb-hint bad'; state.textContent = '先起个名字'; return; }
+              if (!program) { state.className = 'onb-hint bad'; state.textContent = '先选要运行的程序'; return; }
+              if (mode === 'time' && !/^\d{1,2}:\d{2}$/.test(time)) {
+                state.className = 'onb-hint bad'; state.textContent = '时间写成 HH:MM，例如 08:00'; return;
+              }
+              if (mode === 'time' && !picked.size) {
+                state.className = 'onb-hint bad'; state.textContent = '至少选一天'; return;
+              }
+              const item = {
+                id: t.id || '', enabled: $('#st-enabled', box).checked, name, mode, time,
+                weekdays: [...picked].sort((a, b) => a - b), program, args, cwd, timeout,
+                notify: $('#st-notify', box).checked,
+              };
+              const tasks = (schedOf().tasks || []).slice();
+              if (isNew) tasks.push(item); else tasks[idx] = item;
+              const btn = $('#st-save', box);
+              btn.disabled = true;
+              btn.textContent = '保存中…';
+              try {
+                await schedSave({ tasks });
+                close();
+                toast(isNew ? '已添加定时任务' : '已保存');
+              } catch (e2) {
+                state.className = 'onb-hint bad';
+                state.textContent = '保存失败：' + e2.message;
+                btn.disabled = false;
+                btn.textContent = '保存';
+              }
+            });
+          },
+        });
+        return m;
+      }
+
+      $('#sched-add', el).addEventListener('click', () => openSchedTask(null, -1));
+      $('#sched-edit', el).addEventListener('click', () => {
+        const i = schedPick();
+        if (i === null) return;
+        openSchedTask((schedOf().tasks || [])[i], i);
+      });
+      $('#sched-del', el).addEventListener('click', () => {
+        const i = schedPick();
+        if (i === null) return;
+        const rows = (schedOf().tasks || []).slice();
+        const gone = rows[i];
+        rows.splice(i, 1);
+        schedSel = Math.min(i, rows.length - 1);
+        schedSave({ tasks: rows }).then(() => toast('已删除「' + (gone.name || '任务') + '」'))
+          .catch(e2 => toast('删除失败：' + e2.message, 'err'));
+      });
+      const schedMove = step => () => {
+        const i = schedPick();
+        if (i === null) return;
+        const j = i + step;
+        const rows = (schedOf().tasks || []).slice();
+        if (j < 0 || j >= rows.length) return;
+        const tmp = rows[i]; rows[i] = rows[j]; rows[j] = tmp;
+        schedSel = j;
+        schedSave({ tasks: rows }).catch(e2 => toast('移动失败：' + e2.message, 'err'));
+      };
+      $('#sched-up', el).addEventListener('click', schedMove(-1));
+      $('#sched-down', el).addEventListener('click', schedMove(1));
+      $('#sched-run', el).addEventListener('click', async () => {
+        const i = schedPick();
+        if (i === null) return;
+        const t = (schedOf().tasks || [])[i];
+        try {
+          S.schedule = await api('/api/schedule/run', { id: t.id });
+          paintSched();
+          toast('已开始运行「' + (t.name || '任务') + '」');
+        } catch (e2) { toast('启动失败：' + e2.message, 'err', 6000); }
+      });
+      $('#sched-stop', el).addEventListener('click', async () => {
+        try {
+          S.schedule = await api('/api/schedule/stop', {});
+          paintSched();
+        } catch (e2) { toast('停止失败：' + e2.message, 'err'); }
+      });
+      $('#sched-conflict', el).addEventListener('change', ev => {
+        schedSave({ conflict: ev.target.value }).catch(e2 => toast('保存失败：' + e2.message, 'err'));
+      });
+      $('#sched-onfail', el).addEventListener('change', ev => {
+        schedSave({ onChainFail: ev.target.value }).catch(e2 => toast('保存失败：' + e2.message, 'err'));
+      });
+      $('#sched-rows', el).addEventListener('click', ev => {
+        if (ev.target.closest('[data-sched-en]')) return;   // 勾选框自己处理
+        const row = ev.target.closest('.sched-row');
+        if (!row) return;
+        schedSel = Number(row.dataset.i);
+        paintSched();
+      });
+      $('#sched-rows', el).addEventListener('change', ev => {
+        const cb = ev.target.closest('[data-sched-en]');
+        if (!cb) return;
+        const i = Number(cb.dataset.schedEn);
+        const rows = (schedOf().tasks || []).slice();
+        if (!rows[i]) return;
+        rows[i] = Object.assign({}, rows[i], { enabled: cb.checked });
+        schedSave({ tasks: rows }).catch(e2 => {
+          cb.checked = !cb.checked;
+          toast('保存失败：' + e2.message, 'err');
+        });
+      });
 
       /* ---------------- 版本更新 ---------------- */
       $('#set-pack-check', el).addEventListener('click', async () => {
@@ -3400,9 +3888,10 @@ function openSettings() {
         else openBlacklist(kind, paintBlCounts);
       });
 
-      // 默认页就是账号管理：打开先把 token 读出来（读的是本机密文，很快）。
-      // 之前只在切页时触发，结果打开设置看到一排「读取中…」永远不动。
-      $$('.set-acct', el).forEach(c => fillToken(c));
+      // 默认页就是账号管理：打开先把当前分组的 token 读出来（本机密文，
+      // 很快）。另一组等切过去再读，免得一开设置就打一串请求。
+      paintSetGame(setGame);
+      paintTabN();
     },
   });
 }

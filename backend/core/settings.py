@@ -181,6 +181,10 @@ def ensure_dirs():
 
 DEFAULTS = {
     'maaDir': '',
+    # 明日方舟终末地那一栏用的 MAAEND 根目录（设置里按游戏分 tab，互不覆盖）。
+    # 目前只做到「能配路径」，MAAEND 的任务链还没接——先留位，免得以后
+    # 加进来时还要动一次配置格式。
+    'maaEndDir': '',
     'maaDirs': [],          # 用过的 MAA 根目录历史（添加账号时「已存过」列表的数据源）
     'autoStartMaa': True,
     'autoUpdatePack': True,  # 启动后自动拉取新的游戏资源包（关卡/干员/活动）
@@ -400,6 +404,8 @@ def save(patch: dict) -> dict:
             if k not in DEFAULTS:
                 continue
             if k == 'maaDir':
+                v = _norm_dir(v)
+            elif k == 'maaEndDir':
                 v = _norm_dir(v)
             elif k == 'proxy':
                 v = _norm_proxy(v)

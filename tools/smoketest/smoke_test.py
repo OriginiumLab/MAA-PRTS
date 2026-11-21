@@ -4932,6 +4932,93 @@ def check_garrison(tmp):
         shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
 
 
+def check_scheduler(tmp):
+    """定时任务（设置 → 定时任务）：清洗 / 下次运行 / 链式串接 / 参数解析
+
+    只测纯逻辑，不起线程、不真跑程序：冒烟进程里挂一个常驻调度线程会在
+    后面的用例中间随机拉起进程，难查。真正执行由用户在界面上验。
+    """
+    import datetime
+    from core import scheduler
+
+    _reset_config(tmp)
+    scheduler._cache = None
+    scheduler._fired.clear()
+
+    # 1) 保存清洗：时间补零、星期去重排序、坏值回落、未知字段丢掉
+    cfg = scheduler.save({'conflict': 'skip', 'onChainFail': 'stop', 'tasks': [
+        {'name': ' 早上 ', 'mode': 'time', 'time': '8:5',
+         'weekdays': [7, 3, 3, 9, 'x', True, 1], 'program': 'C:/x/a.exe',
+         'args': '  --a 1  ', 'timeout': -5, 'notify': 1, 'evil': 'x'},
+        {'name': '', 'mode': 'weird'},
+        {'name': '链', 'mode': 'chain', 'program': 'b.exe'},
+    ]})
+    assert cfg['conflict'] == 'skip' and cfg['onChainFail'] == 'stop'
+    t0, t1, t2 = cfg['tasks']
+    assert t0['time'] == '08:05', t0['time']
+    assert t0['weekdays'] == [1, 3, 7], t0['weekdays']
+    assert t0['args'] == '--a 1' and t0['timeout'] == 0 and t0['notify'] is True
+    assert 'evil' not in t0
+    assert t1['name'] == '未命名任务' and t1['mode'] == 'time'
+    assert t2['mode'] == 'chain' and t2['enabled'] is True
+    assert len({t['id'] for t in cfg['tasks']}) == 3
+
+    # 2) 落盘读回（清缓存＝模拟重启）
+    scheduler._cache = None
+    again = scheduler.load()
+    assert [t['name'] for t in again['tasks']] == ['早上', '未命名任务', '链']
+    assert os.path.isfile(scheduler._path())
+
+    # 3) 时间点只认当前分钟，不回看上一分钟（关着的时候错过的点不补跑）
+    mon = datetime.datetime(2026, 11, 23, 8, 5, 20)      # 周一
+    assert scheduler._due_slot(t0, mon.timestamp()) == '2026-11-23 08:05'
+    assert scheduler._due_slot(t0, mon.replace(minute=6).timestamp()) == ''
+    tue = mon.replace(day=24)                            # 周二不在 [1,3,7]
+    assert scheduler._due_slot(t0, tue.timestamp()) == ''
+    assert scheduler.next_run_ts(t0, mon.replace(minute=4).timestamp()) == \
+        int(mon.replace(second=0, microsecond=0).timestamp())
+    nxt = scheduler.next_run_ts(t0, mon.replace(minute=6).timestamp())
+    assert datetime.datetime.fromtimestamp(nxt).strftime('%Y-%m-%d %H:%M') == \
+        '2026-11-25 08:05', datetime.datetime.fromtimestamp(nxt)
+
+    # 4) 链式串接：中间夹一条 time 任务就断链
+    assert scheduler._chain_after(t0, cfg['tasks']) == []
+
+    cfg2 = scheduler.save({'tasks': [
+        {'name': 'A', 'mode': 'time', 'time': '07:00', 'program': 'a.exe'},
+        {'name': 'B', 'mode': 'chain', 'program': 'b.exe'},
+        {'name': 'C', 'mode': 'chain', 'program': 'c.exe', 'enabled': False},
+        {'name': 'D', 'mode': 'chain', 'program': 'd.exe'},
+        {'name': 'E', 'mode': 'time', 'time': '09:00', 'program': 'e.exe'},
+    ]})
+    names = [t['name'] for t in scheduler._chain_after(cfg2['tasks'][0], cfg2['tasks'])]
+    assert names == ['B', 'D'], names       # 停用的 C 跳过，D 还在链上
+
+    # 5) 参数解析：引号里的空格不能拆开
+    assert scheduler._split_args('--a "b c"') == ['--a', 'b c']
+    assert scheduler._split_args('') == []
+
+    # 6) 程序存在性 / 批处理走 cmd
+    try:
+        scheduler._argv({'program': '', 'args': ''})
+        assert False, '没填程序不该通过'
+    except ValueError:
+        pass
+    bat = os.path.join(tmp, 'demo.bat')
+    with open(bat, 'w', encoding='utf-8') as f:
+        f.write('@echo off\n')
+    argv = scheduler._argv({'program': bat, 'args': '--x 1'})
+    assert argv[1:3] == ['/d', '/c'], argv
+    assert argv[3].endswith('demo.bat --x 1'), argv
+
+    # 7) status 形状：界面依赖 nextRun / running / log
+    st = scheduler.status()
+    assert st['ok'] and st['running'] is None
+    assert st['conflict'] in scheduler.CONFLICTS
+    assert all('nextRun' in t and 'index' in t for t in st['tasks'])
+    assert isinstance(st['log'], list) and isinstance(st['seq'], int)
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -4999,6 +5086,7 @@ def main():
         r.check('B46 牛杂小工具（小游戏/活动商店/黑名单位置/卡教程提示）', lambda: check_maa_tool(tmp))
         r.check('B47 卫戍协议（核心检测/版本目录扫描/状态兜底/MAA 连接默认值/选项清洗/核心补丁）', lambda: check_garrison(tmp))
         r.check('B48 干员替换（塞1←黍1：匹配/写入/干员组/不触发边界）', check_copilot_substitution)
+        r.check('B49 定时任务（清洗/下次运行/链式串接/参数解析）', lambda: check_scheduler(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

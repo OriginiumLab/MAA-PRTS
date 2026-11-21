@@ -2537,3 +2537,97 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   .set-tab { font-size: 11.5px; }
   .set-panes { padding: 16px 14px 4px; }
 }
+
+/* ============================================================ 设置：游戏分组
+   明日方舟 / 明日方舟终末地。样式复用侧栏那套 .game-switch，只限制宽度，
+   免得分组条在 700px 的设置页里拉成一整行。 */
+.set-gswitch { max-width: 380px; margin: 0 0 16px; }
+.gamepane { display: none; }
+.gamepane.active { display: block; }
+/* MAA 路径页里的「bilibili服」用粉色点出来：B 服的切号名规则跟官服不一样，
+   填错在 MAA 里会死找账号，值得显眼一点 */
+.bili-word { font-style: normal; color: #ff9dd1; font-weight: 700; }
+.set-maarow-head .acct-ch { font-weight: 700; }
+
+/* ============================================================ 设置：定时任务
+   表格是 CSS grid（不是 table）：列宽能跟着弹窗宽度走，窄屏时程序名/
+   参数自己省略，不会把「通知」列挤出去。 */
+.sched-wrap {
+  border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.012);
+}
+.sched-head, .sched-row {
+  display: grid;
+  grid-template-columns: 26px 38px minmax(92px, 1.1fr) minmax(104px, 1fr) minmax(90px, 1.05fr) minmax(64px, 0.9fr) 38px;
+  gap: 8px; align-items: center; padding: 9px 12px;
+}
+.sched-head {
+  font-size: 10.5px; letter-spacing: .4px; color: var(--text-3);
+  background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid var(--line);
+}
+.sched-row { font-size: 11.8px; color: var(--text-2); border-top: 1px solid var(--line); }
+.sched-row:first-child { border-top: none; }
+.sched-row:hover { background: rgba(255, 255, 255, 0.035); }
+.sched-row.sel { background: rgba(94, 234, 212, 0.07); box-shadow: inset 2px 0 0 var(--mint); }
+.sched-row.off { opacity: .5; }
+.sched-row.is-chain .sched-name { color: var(--text-3); }
+.sched-num { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.sched-en input { accent-color: var(--mint); width: 14px; height: 14px; }
+.sched-name {
+  color: var(--text); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sched-live {
+  font-style: normal; font-size: 9.5px; font-weight: 700;
+  color: #071410; background: var(--mint); border-radius: 5px;
+  padding: 1px 5px; margin-left: 6px;
+}
+.sched-plan {
+  font-family: var(--mono); font-size: 10.8px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sched-plan em { font-style: normal; color: var(--text-3); }
+.sched-chain { color: var(--indigo); }
+.sched-prog, .sched-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-prog { color: var(--text-2); }
+.sched-args { font-family: var(--mono); font-size: 10.6px; color: var(--text-3); }
+.sched-warn { font-style: normal; color: var(--amber); }
+.sched-nt { color: var(--text-3); font-size: 11px; }
+.sched-empty {
+  padding: 26px 16px; text-align: center;
+  font-size: 11.8px; line-height: 1.8; color: var(--text-3);
+}
+.sched-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.sched-bar .spacer { flex: 1 1 auto; }
+.sched-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.sched-opt select {
+  height: 30px; padding: 0 8px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: rgba(10, 13, 20, .9);
+  color: var(--text-2); font-size: 11.5px;
+}
+.sched-state { font-size: 11.5px; color: var(--text-3); }
+.sched-log {
+  margin-top: 14px; max-height: 132px; overflow-y: auto;
+  border: 1px dashed var(--line); border-radius: 12px; padding: 8px 10px;
+  font-family: var(--mono); font-size: 10.8px; line-height: 1.75; color: var(--text-3);
+}
+.sched-logline { display: flex; gap: 8px; }
+.sched-logline span { flex: 0 0 auto; opacity: .8; }
+.sched-logline.ok { color: var(--mint); }
+.sched-logline.err { color: var(--rose); }
+.sched-logline.warn { color: var(--amber); }
+.sched-logline.ok span, .sched-logline.err span, .sched-logline.warn span { color: inherit; opacity: .6; }
+
+/* 定时任务编辑弹窗：超时 + 通知并排 */
+.st-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.st-row2 .field { margin-bottom: 12px; }
+.wd-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.wd-btn {
+  height: 28px; padding: 0 9px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: rgba(255, 255, 255, 0.03);
+  font-size: 11.5px; color: var(--text-3);
+}
+.wd-btn.on {
+  border-color: rgba(94, 234, 212, .5); color: #071410; font-weight: 700;
+  background: linear-gradient(140deg, var(--mint), #4fd7c8);
+}

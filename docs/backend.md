@@ -1278,3 +1278,39 @@ MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速�
 
 **推论**：以后核心升到 v1.2.0、v2.0.0 都不用改代码；只有把包挪到非
 `medal-farm-v*` 的目录结构时才需要动 `core_dir()`。
+
+## 定时任务（`scheduler.py`，2026-11-22）
+
+设置里的「定时任务」页：到点启动外部程序，支持链式启动。语义照着三月七助手
+（`app/schedule_dialog.py` + `app/common/schedule.py`）搬，只保留我们真正需要搬
+脚本的那部分——他自己写的 `autostart-*.exe`、`OneDragon-Launcher.exe`、cmd
+批处理都能原样填进来。
+
+| 概念 | 实现 |
+|---|---|
+| 触发 | `mode=time`：`weekdays`（1=周一…7=周日）+ `time`（HH:MM）；`mode=chain`：接在上一条后面 |
+| 动作 | 启动一个程序（exe / bat / cmd）。bat/cmd 走 `cmd /d /c "<整条命令行>"`，路径带空格也不会拆错 |
+| 冲突 | 同一时刻只跑一个：`conflict=stop` 停掉在跑的，`skip` 跳过本次 |
+| 链式失败 | `onChainFail=continue` 继续下一个，`stop` 停掉整条链 |
+
+几个踩过的点：
+
+- **只认当前分钟，不补跑**。程序关着时错过的计划点直接跳过——开机瞬间把前几天
+  的任务一起补跑，比漏一次更糟。
+- **链式只排下一个**。每条任务跑完只找它后面最近的一条 chain 任务；一次性把
+  整条链全排进队列的话，同一个任务会被前后两条各排一次（实测跑了两遍）。
+- **停用的 chain 跳过但不截断**：A → B（停用）→ C 会跑 A、C。
+- **杀进程要杀树**。bat 是 cmd 的子进程，只 terminate cmd 会留下孤儿；Windows
+  上统一 `taskkill /F /T /PID`。
+- **参数按 `CommandLineToArgvW` 拆**（跟 CreateProcess 同一套规则）。`shlex`
+  在 Windows 上会把引号留在参数里，`--x "a b"` 会变成 `'"a b"'`。
+- **数据/日志**：`config/schedule.json`（原子写）；`debug/schedule.log` +
+  内存环形缓冲。设置页 5 秒轮一次 `/api/schedule/status`，跑完的提示靠
+  `events`（带 seq，同一个事件不会弹两遍）。
+
+接口：`/api/schedule/status`（`?since=<seq>` 拿增量事件）、`/api/schedule/save`
+（整表）、`/api/schedule/run`、`/api/schedule/stop`。以后让 agent 帮用户写
+定时，直接调这四个就行，不需要另开一套。
+
+线程在 `main()` 里起（`scheduler.start()`：tick + worker 两个守护线程），
+起不来只记一行警告，不影响主流程。
