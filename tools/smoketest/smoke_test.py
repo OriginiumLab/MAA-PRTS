@@ -4725,7 +4725,7 @@ def check_garrison(tmp):
     assert cands and cands[-1]['version'] == garrisondl.FALLBACK['version'], cands
     assert garrisondl.FALLBACK['sha256'] and garrisondl.FALLBACK['bytes'] > 0
     try:
-        garrisondl._download('https://static.max-c.com/heybox/desktop/nonexistent.hbext',
+        garrisondl._download('http://127.0.0.1:1/nonexistent.hbext',
                              os.path.join(tmp, 'x.hbext'), attempts=1, timeout=10)
         raise AssertionError('坏 URL 居然下载成功了')
     except RuntimeError as e:
@@ -4876,11 +4876,11 @@ def check_garrison(tmp):
         # 有可升目标（1.1.5，URL 不可达）→ 升级链走完报错；不落盘、旧版保留
         garrisondl.candidates = lambda: [
             {'version': '1.1.5',
-             'url': 'https://static.max-c.com/heybox/desktop/nonexistent-1.1.5.hbext',
+             'url': 'http://127.0.0.1:1/nonexistent-1.1.5.hbext',
              'sha256': None, 'bytes': None, 'files': None, 'source': '小黑盒扩展记录'}]
         snap = garrisondl.start()
         assert snap['stage'] != 'done', snap
-        for _ in range(60):
+        for _ in range(150):   # 3 次重试 ×(1.5+3)s 退避，留足余量
             if garrisondl.state()['stage'] == 'error':
                 break
             time.sleep(0.3)
