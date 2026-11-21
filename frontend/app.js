@@ -4042,7 +4042,8 @@ function paintGarInputs() {
   if (!o) return;
   const set = (id, v) => { const el = $(id); if (el && v !== undefined && v !== null) el.value = String(v); };
   set('#gar-device', o.device);
-  set('#gar-mode', o.mode);
+  set('#gar-mode', 'quick');   // 上游 v1.1.7 起仅支持极速
+  set('#gar-goal', o.goal);
   set('#gar-adb', o.adbAddress);
   set('#gar-wins', o.medalWins);
   set('#gar-speed', o.speed);
@@ -4053,7 +4054,7 @@ function paintGarInputs() {
 function collectGarOpts() {
   const v = id => $(id) ? $(id).value : '';
   const o = {
-    device: v('#gar-device'), mode: v('#gar-mode'), adbAddress: v('#gar-adb').trim(),
+    device: v('#gar-device'), mode: v('#gar-mode'), goal: v('#gar-goal'), adbAddress: v('#gar-adb').trim(),
     medalWins: Number(v('#gar-wins')) || 3, speed: Number(v('#gar-speed')) || 1.5,
     pcUiScale: Number(v('#gar-scale')) || 90, screenshotMethod: v('#gar-shot'),
   };

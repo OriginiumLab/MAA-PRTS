@@ -40,6 +40,18 @@ PKG_DIR_RE = re.compile(r'^medal-farm-v(\d+(?:\.\d+)*)$')
 # 记录里的新版不在适配表时，装「表内最新」的直链版本而不是一味落到最老。
 FALLBACKS = [
     {
+        'version': '1.1.7',
+        'url': ('https://static.max-c.com/heybox/desktop/extension/'
+                'ai-desktop.arknights-medal-farm/version/1.1.7/'
+                '6bc385116129d13b2e66679d100551950c6b03c793a92cfe1bc9f53f6db3166b-'
+                '20261120T150609837Z/ai-desktop.arknights-medal-farm-1.1.7.hbext'),
+        'sha256': '6bc385116129d13b2e66679d100551950c6b03c793a92cfe1bc9f53f6db3166b',
+        'bytes': 61089122,
+        'files': None,
+        'source': '官方直链（回退）',
+    },
+
+    {
         'version': '1.1.5',
         'url': ('https://static.max-c.com/heybox/desktop/extension/'
                 'ai-desktop.arknights-medal-farm/version/1.1.5/'

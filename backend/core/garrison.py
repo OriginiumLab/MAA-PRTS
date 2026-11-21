@@ -42,6 +42,10 @@ HOST_JS = os.path.join(settings.RES, 'resources', 'garrison', 'host.mjs')
 PATCH_FILE = os.path.join(settings.RES, 'resources', 'garrison', 'patches.json')
 
 DEVICES = ('mumu', 'ldplayer', 'pc')
+# 速刷目标（核心 goal 注册表，v1.1.7 起）：medal=策略徽章（默认）；
+# task-N=实验性叠层目标（先锋服实测口径：task-1..5 为 100 层、task-6/7 为 50 层）。
+# 与 resources/garrison/host.mjs 的 GOALS 保持一致。
+GOALS = ('medal', 'task-1', 'task-2', 'task-3', 'task-4', 'task-5', 'task-6', 'task-7')
 SHOT_METHODS = ('auto', 'fast', 'adb')
 BUSY = ('running', 'starting', 'stopping')
 
@@ -195,7 +199,7 @@ def _maa_dir_for(file: str) -> str:
 def _maa_defaults(file: str):
     """从账号绑定 MAA 的连接配置里抄出来的裸默认值（不含用户偏好 overlay）"""
     opts = {
-        'device': 'mumu', 'mode': 'quick', 'speed': 1.5, 'medalWins': 3,
+        'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'speed': 1.5, 'medalWins': 3,
         'adbAddress': '127.0.0.1:16384', 'adbPath': '',
         'screenshotMethod': 'auto', 'pcUiScale': 90,
     }
@@ -224,7 +228,7 @@ def _maa_defaults(file: str):
 
 
 # 可持久化的速刷选项键（账号 json 里的 garrisonOpts 只认这些）
-OPT_KEYS = ('device', 'mode', 'adbAddress', 'adbPath', 'medalWins', 'speed',
+OPT_KEYS = ('device', 'mode', 'goal', 'adbAddress', 'adbPath', 'medalWins', 'speed',
             'screenshotMethod', 'pcUiScale')
 
 
@@ -287,6 +291,7 @@ def sanitize(body: dict) -> dict:
     return {
         'device': device,
         'mode': body.get('mode') if body.get('mode') in ('quick', 'standard') else 'quick',
+        'goal': body.get('goal') if body.get('goal') in GOALS else 'medal',
         'medalWins': 6 if str(body.get('medalWins')) == '6' else 3,
         'speed': speed,
         'adbAddress': str(body.get('adbAddress') or dft['adbAddress']).strip() or dft['adbAddress'],
@@ -528,12 +533,22 @@ def stop(file: str) -> dict:
     if not _alive(h):
         raise ValueError('当前没有速刷任务在跑')
     r = _call(h, 'POST', '/api/stop', {}, timeout=15)   # type: ignore[arg-type]
-    # 任务被停止 = 检查更新的触发器：等这个号停稳，若没有任何账号还在
-    # 跑，就后台看一眼本机记录有没有新版（全部停着升级最安全——不会有
-    # 宿主正用旧核心打对局）
+    _schedule_update_check()
+    return r
+
+
+def _schedule_update_check():
+    """速刷任务被停止后安排一次更新检查（后台、全闲才动手）。
+
+    只在有宿主存在时才起线程：stop 失败（没有宿主）不应触发检查，
+    否则会在不该动手的时刻（比如宿主都关了）意外开始升级。
+    """
+    with _lock:
+        has_hosts = bool(_HOSTS)
+    if not has_hosts:
+        return
     threading.Thread(target=_check_update_when_idle, daemon=True,
                      name='garrison-upd-check').start()
-    return r
 
 
 def _check_update_when_idle(timeout=45.0):

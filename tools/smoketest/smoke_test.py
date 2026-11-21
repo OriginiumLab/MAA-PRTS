@@ -4666,7 +4666,7 @@ def check_garrison(tmp):
 
     _write_maa('MuMuEmulator12', '127.0.0.1:16416', r'C:\MuMu\adb.exe')
     o, src = garrison.defaults('g-acc.json')
-    assert o == {'device': 'mumu', 'mode': 'quick', 'speed': 1.5, 'medalWins': 3,
+    assert o == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'speed': 1.5, 'medalWins': 3,
                  'adbAddress': '127.0.0.1:16416', 'adbPath': r'C:\MuMu\adb.exe',
                  'screenshotMethod': 'fast', 'pcUiScale': 90}, o
     assert src['kind'] == 'MuMuEmulator12' and src['profile'] == 'P1', src
@@ -4686,10 +4686,16 @@ def check_garrison(tmp):
     bad = garrison.sanitize({'device': 'hack', 'mode': 'zzz', 'medalWins': '6',
                              'speed': '99', 'screenshotMethod': 'x',
                              'adbAddress': '  ', 'pcUiScale': '120'})
-    assert bad == {'device': 'mumu', 'mode': 'quick', 'medalWins': 6,
+    assert bad == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal',
+                   'medalWins': 6,
                    'speed': 5.0, 'adbAddress': '127.0.0.1:16384',
                    'adbPath': '', 'screenshotMethod': 'auto',
                    'pcUiScale': 90}, bad
+    # goal 白名单：非法值回 medal，合法叠层目标透传
+    ok_goal = garrison.sanitize({'goal': 'task-3', 'device': 'mumu'})
+    assert ok_goal['goal'] == 'task-3', ok_goal
+    bad_goal = garrison.sanitize({'goal': 'hack'})
+    assert bad_goal['goal'] == 'medal', bad_goal
 
     # 5) 空环境 status：缺核心 → ready=False + needsDownload + 下载状态机初值；
     #    路由也挂上了
@@ -4765,8 +4771,15 @@ def check_garrison(tmp):
         d = os.path.join(pkg, 'medal-farm-v%s' % v, 'core')
         os.makedirs(d, exist_ok=True)
         open(os.path.join(d, 'service.mjs'), 'w').close()
-    snap = garrisondl.start()
-    assert snap['stage'] == 'done', snap
+    _real_cands8 = garrisondl.candidates
+    garrisondl.candidates = lambda: [
+        {'version': '1.1.4', 'url': 'x', 'sha256': None, 'bytes': None,
+         'files': None, 'source': 'test'}]
+    try:
+        snap = garrisondl.start()
+        assert snap['stage'] == 'done', snap
+    finally:
+        garrisondl.candidates = _real_cands8
     # 版本号不能写死：下载器按小黑盒记录装的是上游最新版（v1.1.5），探测必须
     # 扫 medal-farm-v* 取最高版本——旧版只认 v1.1.4，装好新版却报「没核心」，
     # 前端于「已下载 + 仍要下载」之间无限重试，一直停在「核心就绪，正在启动…」
@@ -4839,8 +4852,15 @@ def check_garrison(tmp):
     real_cands = garrisondl.candidates
     real_records = garrisondl.record_candidates
     try:
+        # 隔离重置：前面各节可能留下了 _DL 状态/_RUNNING 标志
+        with garrisondl._LOCK:
+            garrisondl._RUNNING[0] = False
+            garrisondl._DL.update(stage='idle', done=0, total=0, files=0,
+                                  filesTotal=0, source='', version='', error='',
+                                  startedAt=None, endedAt=None)
         adapted = garrisondl._adapted_versions()
-        assert adapted and '1.1.4' in adapted and '1.1.5' in adapted, adapted
+        assert adapted and '1.1.4' in adapted and '1.1.5' in adapted
+        assert '1.1.7' in adapted, adapted
         assert garrisondl._is_adapted('1.1.5') and not garrisondl._is_adapted('1.1.6')
 
         # 已最新（候选=已装）→ start() 短路 done，不起线程
@@ -4875,9 +4895,9 @@ def check_garrison(tmp):
         garrisondl.record_candidates = lambda: [
             {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
              'files': None, 'source': '小黑盒扩展记录'}]
-        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.5', '表外新版应回退表内最新'
-        assert garrisondl._pick_candidate('')['version'] == '1.1.5'
-        assert garrisondl._pick_candidate('1.1.5') is None
+        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.7', '表外新版应回退表内最新'
+        assert garrisondl._pick_candidate('')['version'] == '1.1.7'
+        assert garrisondl._pick_candidate('1.1.7') is None
         # check_update：候选只剩表外新版（连直链一起屏蔽）→ 不起线程零流量；
         # （真实链路里记录 1.1.6 + 已装 1.1.4 会经直链升 1.1.5——上面
         #   _pick_candidate 断言已覆盖该选版，这里不再真下载）

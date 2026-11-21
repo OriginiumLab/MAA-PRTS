@@ -2,7 +2,8 @@
   "note": "对第三方核心 service.mjs 的最小文本补丁。核心是 GPL-3.0-or-later 的报混淆包，不进仓库、由 garrisondl.py 按版本下载；adaptedVersions 硬编码已适配的核心版号——更新器只升到表内版本（表外新版等适配）；这里只存纯文本替换规则，启动前幂等应用（首次改动前留 service.mjs.orig 备份）。规则脱靶（核心升级换了写法）只记日志跳过，不影响启动。",
   "adaptedVersions": [
     "1.1.4",
-    "1.1.5"
+    "1.1.5",
+    "1.1.7"
   ],
   "patches": [
     {
@@ -52,6 +53,24 @@
       "why": "v1.1.5 版同款：策略页详情核对（G 函数）纯 includes 零容错，改为不中再走 xn 容差——缪尔赛思等 4 字策略名 OCR 错 1 字不再跳过拉黑、整局卡死。",
       "find": "return v.find(O=>M(y).includes(M(O.name)))",
       "replace": "return v.find(O=>M(y).includes(M(O.name))||xn(M(y),M(O.name)))"
+    },
+    {
+      "id": "latin-tolerance-v117",
+      "why": "v1.1.7 同款：名字比对 Rn（上游已自带 ≥3 字 1 字容差）拉丁名仍只容 1 字差——小字号拉丁名（Miss.Christine、数据里没有的新预备干员 Mist 系 7-8 字母名）OCR 常错 2+ 字。≥6 字拉丁/数字名放宽到 2 字。",
+      "find": "if(P.length<3)return!1;for(let q=0;q+P.length<=O.length;q++){let ue=0;for(let Z=0;Z<P.length;Z++)O[q+Z]!==P[Z]&&ue++;if(ue<=1)return!0}return!1}",
+      "replace": "if(P.length<3)return!1;const ya=/^[A-Za-z0-9]/.test(P)&&P.length>=6?2:1;for(let q=0;q+P.length<=O.length;q++){let ue=0;for(let Z=0;Z<P.length;Z++)O[q+Z]!==P[Z]&&ue++;if(ue<=ya)return!0}return!1}"
+    },
+    {
+      "id": "free-claim-trust-detail-v117",
+      "why": "v1.1.7 同款：免费领取（Lt 第三参 y=true）卡片名与详情名两侧 OCR 对不上时，若大字号详情标题（H）读出非空文本就信详情继续领（x=H）；购买/出售核对不变。confirm-ready 上游 v1.1.7 已自带临时整备区特征词，无需补丁。",
+      "find": "if(!Rn(H,x))return je(",
+      "replace": "if(!Rn(H,x)&&!(y&&H&&(x=H)))return je("
+    },
+    {
+      "id": "strategy-detail-tolerance-v117",
+      "why": "v1.1.7 同款：策略页详情核对（ie 函数）纯 includes 零容差，改为不中再走 Rn 容差。",
+      "find": "return y.find(P=>O(x).includes(O(P.name)))",
+      "replace": "return y.find(P=>O(x).includes(O(P.name))||Rn(O(x),O(P.name)))"
     }
   ]
 }
