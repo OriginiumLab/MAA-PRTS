@@ -24,12 +24,43 @@ profile 处理——反正没选档案时也不会去读配置。
 """
 from __future__ import annotations
 
-from . import accounts, acctname, maa
+from . import accounts, acctname, maa, settings
 
 
 def _maa_of(snap) -> dict:
     m = (snap or {}).get('maa')
     return m if isinstance(m, dict) else {}
+
+
+def _snap(file, snap=None):
+    if snap is not None:
+        return snap
+    try:
+        return accounts.get_account(file) or {}
+    except Exception:
+        return {}
+
+
+def dir_of(file='', snap=None) -> str:
+    """这个账号用哪个 MAA 目录：账号自己绑的 → 全局默认
+
+    2026-11-22 用户口径：每个账号都可以绑自己的 MAA 路径（设置 → MAA 路径
+    按账号填），不同 MAA 往往连的是不同模拟器。所以「跑这个号」的时候
+    必须按账号取目录，不能一律用全局那个——否则多开时全挤到同一台模拟器上，
+    表现就是「说好挂五个号，结果只有一个号在动」。
+    """
+    d = str(_maa_of(_snap(file, snap)).get('dir') or '').strip()
+    if d:
+        return d
+    try:
+        return str(settings.load().get('maaDir') or '').strip()
+    except Exception:
+        return ''
+
+
+def profile_of(file='', snap=None) -> str:
+    """这个账号绑的 MAA 配置档案名（没绑给空串）"""
+    return str(_maa_of(_snap(file, snap)).get('profile') or '').strip()
 
 
 def channel_of(snap) -> str:

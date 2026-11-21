@@ -3328,14 +3328,14 @@ def check_envcheck(_tmp):
              'name': '', 'source': ''}
 
     # 1) 读不到 MAA 配置（还没引导过）：放行，别把任务堵死
-    with mock.patch.object(envcheck, 'read_config', lambda: empty):
+    with mock.patch.object(envcheck, 'read_config', lambda *a, **k: empty):
         logs = []
         ok, why = envcheck.ensure(log=logs.append)
         assert ok and not logs, ('没配置时应静默放行', logs)
 
     # 2) 已经连上：零日志（「不显示出来」就是这条）
     with mock.patch.multiple(
-            envcheck, read_config=lambda: cfg,
+            envcheck, read_config=lambda *a, **k: cfg,
             adb_now=lambda cfg=None: (True, 'emulator-5554', 'adb 正常')):
         logs = []
         ok, why = envcheck.ensure(log=logs.append)
@@ -3345,7 +3345,7 @@ def check_envcheck(_tmp):
     # 3) 用户关了自动启动：只提示，绝不发启动命令
     started = []
     with mock.patch.multiple(
-            envcheck, read_config=lambda: cfg,
+            envcheck, read_config=lambda *a, **k: cfg,
             adb_now=lambda cfg=None: (False, '', '没有在线设备'),
             instance_up=lambda cfg: False,
             launch=lambda c: started.append(c) or (True, 'x')):
@@ -3363,7 +3363,7 @@ def check_envcheck(_tmp):
         return (len(seq) > 1, 'emulator-5554', 'adb 正常（emulator-5554）')
     logs = []
     with mock.patch.multiple(
-            envcheck, read_config=lambda: cfg, adb_now=fake_adb,
+            envcheck, read_config=lambda *a, **k: cfg, adb_now=fake_adb,
             instance_up=lambda cfg: False,
             launch=lambda c: (True, 'ldconsole.exe launch --index 0')):
         with mock.patch.object(envcheck, 'settings',
@@ -3375,7 +3375,7 @@ def check_envcheck(_tmp):
 
     # 5) 启动器找不到 / 类型不认识：说清原因，别静默往下走
     with mock.patch.multiple(
-            envcheck, read_config=lambda: dict(cfg, emu_dir='D:\\nope\\'),
+            envcheck, read_config=lambda *a, **k: dict(cfg, emu_dir='D:\\nope\\'),
             adb_now=lambda cfg=None: (False, '', '没有在线设备'),
             instance_up=lambda cfg: False):
         with mock.patch.object(envcheck, 'settings',
@@ -3383,7 +3383,7 @@ def check_envcheck(_tmp):
             ok, why = envcheck.ensure(log=lambda *_: None)
         assert not ok and '目录不存在' in why, why
     with mock.patch.multiple(
-            envcheck, read_config=lambda: dict(cfg, kind='Weird'),
+            envcheck, read_config=lambda *a, **k: dict(cfg, kind='Weird'),
             adb_now=lambda cfg=None: (False, '', '没有在线设备'),
             instance_up=lambda cfg: False):
         with mock.patch.object(envcheck, 'settings',
@@ -3393,7 +3393,7 @@ def check_envcheck(_tmp):
 
     # 6) 进程在、adb 连不上（模拟器还在开机 / adb 端口被占）：等一小会再给话术
     with mock.patch.multiple(
-            envcheck, read_config=lambda: cfg,
+            envcheck, read_config=lambda *a, **k: cfg,
             adb_now=lambda cfg=None: (False, 'emulator-5554', '设备 offline'),
             instance_up=lambda cfg: True):
         ok, why = envcheck.ensure(log=lambda *_: None, wait=1)
@@ -3412,7 +3412,7 @@ def check_envcheck(_tmp):
     skills.SKILLS['wakeup'] = (entry[0], lambda *a, **k: boom.append(1))
     try:
         with mock.patch.object(skills.envcheck, 'ensure',
-                               lambda log=None: (False, '模拟器没起来')):
+                               lambda *a, **k: (False, '模拟器没起来')):
             tid = skills.run_skill('wakeup', {})
             t = None
             for _ in range(300):
@@ -4132,28 +4132,31 @@ def check_agent_tool_chain(tmp):
 
 
 def check_battle_retry(tmp):
-    """B43：逐关战报 + 换作业重挂 + 分段扫图（用户 2026-11-19 的四条需求）
+    """B43：换作业重挂 + 分段扫图 + 「不猜逐关成败」（2026-11-22 改口径）
 
-    ① 一关打完日志有「✔ X 战斗成功」，刷材料重复结算不刷屏
+    ① 不再把 StageDrops 当「这关成功」：MaaCore 在 Copilot 里根本不发这个
+      回调，算出来的「成功 0 关」是假消息，`_mark_clear` 现在什么也不记
     ② 作业翻车时日志明确「✘ X 翻车：原因」，能看出是哪一关
-    ③ 失败后换下一份作业重挂这一关，**已成功的关不重排**
+    ③ 失败后换下一份作业，**从卡住的那关往后重挂**（前面的关不重打）
     ④ skill_sweep 的分段顺序：普通关 → EX 普通 → EX 突袭 → S 关
     """
     _reset_config(tmp)
     from core import copilot, maaplan, resources, skills
 
-    # ① 逐关成功
+    # ① 逐关成败不统计：掉落回调进来也不要写「战斗成功」、不记 results
     st = {'stage': 'SV-EX-1', 'cleared': {}, 'results': [], 'cur_cid': 41623}
     logs = []
     maaplan._mark_clear({'stats': [{'itemName': '固源岩', 'addQuantity': 2}]},
                         logs.append, st)
-    assert len(st['results']) == 1, st
-    r0 = st['results'][0]
-    assert r0['stage'] == 'SV-EX-1' and r0['ok'] is True and r0['cid'] == 41623, r0
-    assert any('✔ SV-EX-1 战斗成功' in x and '固源岩' in x for x in logs), logs
-    # 同一关再结算一次（刷材料）：只喊一次「战斗成功」
-    maaplan._mark_clear({'stats': []}, logs.append, st)
-    assert sum(1 for x in logs if '战斗成功' in x) == 1, logs
+    assert st['results'] == [], st
+    assert not any('成功' in x for x in logs), logs
+    maaplan._on_core_event({'kind': 'extra', 'what': 'StageDrops',
+                            'data': {'stats': [{'itemName': '固源岩',
+                                                'addQuantity': 2}]}},
+                           logs.append, None, st)
+    assert any('掉落' in x for x in logs), logs
+    assert not any('战斗成功' in x for x in logs), logs
+    assert st['results'] == [], st
 
     # ② 翻车要说清是哪一关
     st2 = {'stage': 'SV-EX-2', 'cleared': {}, 'results': []}
@@ -4202,10 +4205,9 @@ def check_battle_retry(tmp):
     skills._default_maa_dir = lambda: tmp
     try:
         eng = Eng()
-        state = {'stage': 'SV-EX-2', 'cleared': {'SV-EX-1': True},
-                 'results': [{'stage': 'SV-EX-1', 'ok': True, 'why': '',
-                              'at': 0, 'cid': 101},
-                             {'stage': 'SV-EX-2', 'ok': False, 'why': 'x',
+        # 只记了「卡在 SV-EX-2」这一条失败（没有逐关成功记录）
+        state = {'stage': 'SV-EX-2', 'cleared': {},
+                 'results': [{'stage': 'SV-EX-2', 'ok': False, 'why': 'x',
                               'at': 0, 'cid': 102}],
                  'tried': {'SV-EX-1@raid': 101, 'SV-EX-2@raid': 102},
                  'by_file': {}, 'cid_of': {}, 'last_log': 0}
@@ -4227,7 +4229,7 @@ def check_battle_retry(tmp):
         assert swapped and swapped[0]['to'] == 202, swapped
         assert mark is not None, '重试过就要给收尾一个 chains 分界'
         assert any('换作业重挂：SV-EX-2' in x for x in logs3), logs3
-        assert not any('SV-EX-1' in x for x in logs3), '已成功的关不该重挂'
+        assert not any('SV-EX-1' in x for x in logs3), '卡住之前的关不该重挂'
     finally:
         copilot.fetch_prepared, skills._default_maa_dir = old
 
@@ -4567,11 +4569,25 @@ def check_maa_tool(tmp):
         eventnav._to_map, eventnav._tap = orig_map, orig_tap
         eventnav.time.sleep = orig_sleep
 
-    # ③ 名字 → 键
+    # ③ 名字 → 键（2026-11-22：两个活动的小游戏是两条不同任务，泛称要配 prefix）
     assert maatools.resolve('战时新闻委员会')[0] == 'wartime_press'
-    assert maatools.resolve('小游戏')[0] == 'wartime_press'
+    assert maatools.resolve('喀兰贸易技术研发部')[0] == 'os_rd'
+    assert maatools.resolve('小游戏', prefix='OS')[0] == 'os_rd'
+    assert maatools.resolve('小游戏', prefix='TL')[0] == 'wartime_press'
     assert maatools.resolve('活动商店')[0] == 'event_shop'
     assert maatools.resolve('shop')[0] == 'event_shop'
+    # 「小游戏」不带活动 → 说不清是哪一个，必须让用户/助手补 prefix
+    try:
+        maatools.resolve('小游戏')
+    except ValueError as e:
+        assert '小游戏' in str(e) or '哪一个' in str(e), e
+    else:
+        raise AssertionError('泛称不带 prefix 该报错')
+    # 两条 Custom 任务名不能写混（写错了 MAA 会当成不存在）
+    assert maatools.TOOLS['os_rd']['task']['task_names'] == ['MiniGame@OS@Begin']
+    assert maatools.TOOLS['wartime_press']['task']['task_names'] == \
+        ['MiniGame@WartimePressCommittee@Begin']
+    assert maatools.TOOLS['os_rd']['prefix'] == 'OS'
     try:
         maatools.resolve('抽卡')
     except ValueError:
@@ -5212,6 +5228,130 @@ def check_event_os(tmp):
     assert rows.get('act55side', {}).get('reprint') is False, 'TL 不该被标成复刻'
 
 
+def check_multi_emu_batch(tmp):
+    """B52：多 MAA / 多模拟器编排 + 领奖 skill + 「默认用当前选中的号」
+
+    用户 2026-11-22 的口径：
+    ① 每个账号用自己绑的 MAA 目录（没绑才退回全局默认）；
+    ② 同一台模拟器上的号排队切号，不同模拟器并行多开；
+    ③ 用户没点名账号时，默认用他在左侧点开的那个（settings.lastAccount）；
+    ④ 「领活动奖励」是个独立 skill（claim），不经过 MaaCore。
+    """
+    _reset_config(tmp)
+    from unittest import mock  # noqa: F401
+    from core import acctbind, accounts, maaplan, settings, skills, tasks
+
+    def mk(name, nick, maa_dir='', profile=''):
+        accounts.save_account(name + '.json', {
+            'account': {'uid': name, 'nickName': nick,
+                        'channelName': '官服', 'game': 'arknights'},
+            'maa': {'dir': maa_dir, 'profile': profile}})
+        return name + '.json'
+
+    a = mk('emu1a', '号一', r'D://MAA-A')
+    b = mk('emu1b', '号二', r'D://MAA-A')
+    c = mk('emu2', '号三', r'D://MAA-B')
+    plain = mk('plain', '号四')
+
+    # ① 账号绑的 MAA 优先，没绑退回全局默认（落盘时路径会归一成 /，比 normpath）
+    def same(x, y):
+        return os.path.normpath(x or '').lower() == os.path.normpath(y or '').lower()
+
+    settings.save({'maaDir': r'D://DEFAULT'})
+    assert same(acctbind.dir_of(a), r'D://MAA-A'), acctbind.dir_of(a)
+    assert same(acctbind.dir_of(plain), r'D://DEFAULT'), acctbind.dir_of(plain)
+    # 切号名解析跟着这个账号自己的档案走（档案不存在 → 空串，不抛）
+    assert acctbind.profile_of(c) == ''
+
+    # ③ 默认账号 = 用户在左侧点开的那个
+    settings.save({'lastAccount': b})
+    assert skills._account_file('') == b, skills._account_file('')
+    settings.save({'lastAccount': '不存在.json'})
+    assert skills._account_file('') in {a, b, c, plain}
+    settings.save({'maaDir': r'D://DEFAULT', 'lastAccount': ''})
+
+    # ② 分组：同 (MAA 目录 + adb 地址) 合并，不同拆开
+    addr = {os.path.normpath(r'D://MAA-A').lower(): '127.0.0.1:5555',
+            os.path.normpath(r'D://MAA-B').lower(): '127.0.0.1:5557'}
+    old_conn = maaplan._connection
+
+    def fake_conn(d, p=None):
+        return {'adb_path': 'adb',
+                'address': addr.get(os.path.normpath(d or '').lower(),
+                                    '127.0.0.1:5555'),
+                'config': 'General', 'touch': 'MiniTouch', 'maa_dir': d}
+
+    maaplan._connection = fake_conn
+    try:
+        rows = [{'file': a, 'name': '号一', 'maaDir': r'D://MAA-A'},
+                {'file': b, 'name': '号二', 'maaDir': r'D://MAA-A'},
+                {'file': c, 'name': '号三', 'maaDir': r'D://MAA-B'}]
+        groups = maaplan.plan_groups(rows, {'maaDir': r'D://MAA-A'})
+        assert len(groups) == 2, groups
+        assert sorted(len(g['rows']) for _, g in groups) == [1, 2], groups
+
+        # ② run_batch：同组串行（号一 → 号二），两组都跑到
+        seq = []
+
+        def fake(tag):
+            def fn(params, log, tid=None):
+                seq.append((params.get('account'), tag))
+                return {'ok': True}
+            return fn
+
+        old_skills = dict(skills.SKILLS)
+        old_ensure = skills.envcheck.ensure
+        skills.SKILLS['wakeup'] = ('唤醒', fake('wakeup'))
+        skills.SKILLS['claim'] = ('领奖', fake('claim'))
+        skills.envcheck.ensure = lambda *x, **k: (True, 'ok')
+        t = None
+        try:
+            tid = skills.run_batch([a, b, c], [{'skill': 'wakeup'},
+                                               {'skill': 'claim'}])
+            for _ in range(500):
+                t = tasks.get(tid)
+                if t and t['status'] != 'running':
+                    break
+                time.sleep(0.02)
+        finally:
+            skills.SKILLS.clear()
+            skills.SKILLS.update(old_skills)
+            skills.envcheck.ensure = old_ensure
+        assert t and t['status'] == 'done', (t or {}).get('error')
+        for f in (a, b, c):
+            got = [tag for (who, tag) in seq if who == f]
+            assert got == ['wakeup', 'claim'], (f, got)
+        # 同一台模拟器上必须串行：号二的唤醒在号一领完奖之后
+        assert seq.index((a, 'claim')) < seq.index((b, 'wakeup')), seq
+        res = t.get('result') or {}
+        assert res.get('groups') == 2 and res.get('accounts') == 3, res
+        # 日志里要带账号前缀，多开时能分清是谁
+        assert any(x.startswith('[号一]') for x in t.get('logs') or []), \
+            t.get('logs')[:5]
+
+        # 步骤清洗：中文别名认，乱七八糟的当场报错
+        assert [n for n, _ in skills._norm_steps([{'skill': '扫图'},
+                                                  {'skill': 'claim'}])] == \
+            ['sweep', 'claim']
+        try:
+            skills._norm_steps([{'skill': '飞'}])
+        except ValueError as e:
+            assert '飞' in str(e), e
+        else:
+            raise AssertionError('不认识的 skill 该报错')
+    finally:
+        maaplan._connection = old_conn
+
+    # ④ 领奖 skill 注册了，并且归到「需要模拟器」那一组
+    assert 'claim' in skills.SKILLS and callable(skills.SKILLS['claim'][1])
+    assert 'claim' in skills._NEEDS_GAME
+    # 助手侧：工具 + 处理器都挂上了
+    from core import agent
+    names = [x['function']['name'] for x in agent.TOOLS]
+    assert 'skill_claim' in names and 'run_steps' in names, names
+    assert 'skill_claim' in agent._HANDLERS and 'run_steps' in agent._WRITE_HANDLERS
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5279,6 +5419,8 @@ def main():
         r.check('B49 定时任务（清洗/下次运行/链式串接/参数解析）', lambda: check_scheduler(tmp))
         r.check('B50 切号名绑定（配置文件优先/手填优先/助手存尾号）', lambda: check_account_bind(tmp))
         r.check('B51 复刻活动 OS + TL 收尾（只留商店/复刻标记/最新活动指向 OS）', lambda: check_event_os(tmp))
+        r.check('B52 多 MAA 多模拟器编排 + 领奖 skill + 默认用当前账号',
+                lambda: check_multi_emu_batch(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

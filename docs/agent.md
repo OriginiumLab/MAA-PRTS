@@ -60,11 +60,13 @@ Copilot 参数按用户在 MAA「自动战斗」页常勾的三项给：`formati
 导航失败且这一关有卡片模板时直接抛错——交给 MAA 只会白滑 30 秒。
 实测 SV-1：登录后 24 秒内 MAA 就 OCR 到 `SV-1` 并点「开始行动」，一局 2 分半跑完。
 
-## 工具集（白名单，共 14 个）
+## 工具集（白名单，共 26 个）
+
+**配置类**（改 MAA 档案 / 跑 GUI 那套任务队列）：
 
 | 工具 | 做什么 | 风险 |
 |---|---|---|
-| `list_accounts` | 左侧账号 + 进度摘要 + MAA 档案绑定 | 只读 |
+| `list_accounts` | 左侧账号 + 进度摘要 + MAA 档案绑定 + 当前选中那个 | 只读 |
 | `list_activities` | 最近开启的活动（正式名/代号前缀/关数） | 只读 |
 | `search_stages` | 关键词 → 真实关卡（代号/内部 id/难度/是否剧情关） | 只读 |
 | `find_ops` | 这些关有哪些作业，按该账号练度分档 | 只读 |
@@ -77,7 +79,24 @@ Copilot 参数按用户在 MAA「自动战斗」页常勾的三项给：`formati
 | **`build_run`** | **主力**：配任务 + 写作业 + 直连跑起来 | **写**，需确认 |
 | `apply_plan` | 把 plan_multi_account 的方案跑起来 | **写**，需确认 |
 | `add_stages` | 单账号挂一组关卡（`build_run` 的快捷方式） | **写**，需确认 |
+| `set_account_name` | 存切号名（用户报的手机号尾号） | 写（不碰 MAA） |
 | `stop_run` | 停掉正在跑的 MAA | **写**，需确认 |
+
+**skill 类**（逐个能力直连驱动，见 `skills.py`；`SKILLS` 里每个都有一项）：
+
+| 工具 | 做什么 | 风险 |
+|---|---|---|
+| `skill_wakeup` | 唤醒到主界面（带 `accountName` 就切号） | 免确认 |
+| `skill_navigate` | 导航到活动 / 分区（含 EX、S、MO） | 免确认 |
+| `skill_signin` | 森空岛签到 | 免确认 |
+| `skill_claim` | 领活动奖励（进奖励页点「一键领取」） | 免确认 |
+| `skill_fight` | 自动战斗一组关（编队/借人/吃药） | **写**，需确认 |
+| `skill_skip_story` | 过 ST 剧情关 | **写**，需确认 |
+| `skill_weekly` | 一个活动从头打到尾 | **写**，需确认 |
+| `skill_train` | 干员培养（精英化/技能/专精） | **写**，需确认 |
+| `skill_sweep` | 扫图：普通 → EX → 突袭 → S | **写**，需确认 |
+| `skill_tool` | 牛杂小工具（战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店） | **写**，需确认 |
+| `run_steps` | 一个账号按顺序跑一串 skill（多账号自动分组） | **写**，需确认 |
 
 **永不给**：文件系统、shell、任意 HTTP。
 
@@ -196,7 +215,73 @@ list_accounts → plan_multi_account → 缺名字就问 → 用户确认 → ap
 
 `plan_multi_account` 每个账号搜**一次**作业站（关键词会展开成整段关卡，`TL-` → 11 关），再按该账号自己练度挑能打的那份。
 
-**串行**：一个模拟器同时只能登一个号，所以 A 跑完 → 切档案 → B。`multiacct.run()` 用 `watch` 判完成，一个账号结束就切下一个。
+**串行**：一个模拟器同时只能登一个号，所以 A 跑完 → 切档案 → B。`multiacct.run()`
+用 `watch` 判完成，一个账号结束就切下一个。
+
+**每个账号可以有自己的 MAA**：`account['maa']['dir']` 指定这台账号归哪份 MAA
+目录管，`account['maa']['profile']` 指定用哪份档案；留空就回落全局
+`settings.maaDir` + MAA 当前的 `Current`。读这两个字段只有一个入口——
+`acctbind.dir_of(file)` / `acctbind.profile_of(file)`，别在别处再写一份。
+
+## 多 MAA / 多模拟器：`run_steps`（2026-11-22）
+
+用户的原话：「如果两个账号属于不同的模拟器，则直接多开控制两个账号；如果 5 个
+账号都是一个 MAA 和一个模拟器控制的，就切号 → 挂普通 → 挂突袭 → 挂 S → 领奖励
+→ 搬商店 → 再切下一个号，循环到所有号跑完。Agent 调用技能要灵活一点。」
+
+所以**没有**写死「活动一条龙」这个流程，只给一个能自由拼的工具：
+
+```json
+{"accounts": ["小卡.json", "灰bao.json"],
+ "steps": ["wakeup", "navigate", "fight SV-EX-1~7", "claim", "tool 活动商店"]}
+```
+
+- `steps` 每项一个 skill 名，空格后面跟参数（`fight SV-EX-1~7`、
+  `navigate OS`、`tool 活动商店`、`wait 60`）。想加/减/换顺序就直接改这个列表。
+- 不传 `accounts` = 左侧当前选中的那个账号（`settings.lastAccount`）。
+- **分组在 `maaplan.plan_groups()`**：键是
+  `(normcase(abspath(maa_dir)), adb address)`。键相同的账号**串行**（同一台
+  模拟器不能两条 adb 同时戳，表现是「点了没反应」），键不同的**并行走**——
+  这就是「多开」。
+- 每个账号的所有 step 在同一个后台任务里跑，日志以 `[昵称]` 开头，
+  右侧面板能分清是谁。
+- 切号不是单独一步：`wakeup` 带 `accountName` 就在 StartUp 里换号。所以
+  「同一模拟器 5 个号」的写法是给每个账号各排一份 steps，每份的第一步都是
+  带自己切号名的 `wakeup`。
+
+`run_steps` 是写操作，确认卡会列「几号 / 几台模拟器 / 每步做什么」，用户点头
+才动模拟器。
+
+## 用户当前点开的那个账号（2026-11-22）
+
+左侧列表选中的账号存在 `settings.lastAccount`。`list_accounts` 返回里有顶层
+`current`，每行也有 `current: true`，提示词写死了两条：
+
+1. 用户没说哪个号 → 以 `current` 为准，**先问「就这个号吧？」**，别默认全账号跑；
+2. `skill_*` / `build_run` 的 `account` 留空时，后端 `skills._account_file('')`
+   本来也落到 `lastAccount`，所以问完直接调就行。
+
+另外 `list_accounts` 每行带 `maaDir` 和 `emulator`（这台 MAA 档案里配的
+adb 路径 + 实例号）：`emulator` 相同 = 只能排队，不同 = 可以多开。
+
+## 逐关成败不要报数（2026-11-22）
+
+用户报「每次挂完都显示一关都没挂」。查下来是 `_mark_clear()` 只认
+`StageDrops` 回调，而 Copilot 任务**根本不发**这个回调（本机 asst.log 里 255 条
+`SubTaskExtraInfo` 全是 `CopilotAction` / `BattleFormation` / `ExceededLimit`，
+0 条 `StageDrops`），所以成功数恒为 0。
+
+按用户口径「判断不出来就别统计」，逐关成功数**整个删掉**了。现在只报三种
+拿得准的事实：
+
+| 信号 | 说成 |
+|---|---|
+| `CopilotListLoadTaskFileSuccess` | 「跑过的关：SV-EX-1、SV-EX-2…」 |
+| `TaskChainError` | 「✘ SV-EX-3 翻车：原因」 |
+| `AllTasksCompleted` / `TaskChainStopped` | 「本轮任务链正常结束」/ 停在哪个节点 |
+
+提示词硬规矩里有一条：**绝不能说「一关都没挂」「成功 0 关」**，也不能编
+「打了 5 关成功 4 关」。用户要的是「跑了哪些关、卡在哪、为什么」。
 
 ## 命令行（M5）
 
@@ -253,9 +338,9 @@ CLI 直接 import 后端模块，**不依赖 HTTP 服务在跑**。
 
 ## 还没做
 
-- 养成（`OperProgress`）：要先实测 MAA 6.20 认不认这个任务类型
 - 活动关精确到「哪一关没打」：森空岛只给 zone 级计数，且 `totalStage` 含剧情/突袭，口径对不上
-- 并行多 MAA：需要多个 MAA 目录 + 多个模拟器，`multiacct.plan()` 会检测但默认串行
+- 逐关战斗成败：MaaCore 在 Copilot 任务里不发 `StageDrops`，「成功几关」拿不到（2026-11-22 已按用户要求去掉该统计，只报跑过的关 + 失败原因）
+- `run_steps` 的步骤目前只能是 `SKILLS` 里已有的名字，还没有「同一个号内并发」——同一台模拟器本来也只能串行，暂时够用
 
 ## skill 联调测试（2026-11-17）
 

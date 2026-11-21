@@ -424,7 +424,9 @@ MAA 运行时会周期性回写配置文件，所以必须先关进程再改，�
 2026-11-17 把挂关流程拆成六个可独立调度的 skill，由 `run_skill(name, params)`
 统一跑成后台任务（`tasks.create`），返回 taskId 给前端 / 助手轮询 `/api/task`。
 API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET /api/skill/list`。
-2026-11-18 增加第七个 `train`（培养干员）。
+2026-11-18 增加第七个 `train`（培养干员）；2026-11-19 加 `sweep` / `tool`；
+2026-11-22 加 `claim`（领活动奖励），并新增 `run_batch()` 把任意几项串成一条龙
+（见「多 MAA / 多模拟器 + 一条龙」）。
 
 | skill | 能力 | 实现依托 |
 |---|---|---|
@@ -435,14 +437,18 @@ API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET
 | `signin` | 森空岛签到（单号 / 全部） | `signin.run` |
 | `weekly` | 周目编排：ST 关自动过剧情、连续战斗关合并成 fight 批次、EX 收尾；**任何一步失败立即停**并在日志写明卡在哪关 | 本文件 `_cycle_rows` + `_cycle_sort_key` |
 | `train` | 培养干员：精英化 / 技能基础等级 / 专精，可一次排多个；材料不足**暂停**并落盘剩下的计划 | `maaplan.run_core` 的 `OperProgress` 任务 |
+| `sweep` | 扫图：普通 → EX 普通 → EX 突袭 → S 关，段间自动重新导航 | 本文件 `_sweep_segments` |
+| `tool` | MAA 牛杂小工具（小游戏 / 活动商店） | `maatools` + `eventnav.run_tool` |
+| `claim` | 领活动奖励：进奖励页点「一键领取」（纯 adb，不连 MaaCore） | `eventnav.claim_reward` |
 
 排序规则（`_cycle_sort_key`）：`ST-N → 主线 1..N → EX`，正好是 MN 这类周目的
 推图顺序；关卡清单来自 `resources._stages(True)`（含 story=True 的 208 条剧情关，
 resolve 的默认视图查不到它们）。
 
-助手侧（`agent.py`）注册了对应工具：`skill_wakeup / skill_navigate / skill_signin`
-免确认直接跑；`skill_fight / skill_skip_story / skill_weekly / skill_train` 走 `_guard` 确认卡
-（确认标记 `_confirmed` 放进 pending args，重入直接跑不再二次确认）。
+助手侧（`agent.py`）注册了对应工具：`skill_wakeup / skill_navigate /
+skill_signin / skill_claim` 免确认直接跑；`skill_fight / skill_skip_story /
+skill_weekly / skill_train / skill_sweep / skill_tool / run_steps` 走 `_guard`
+确认卡（确认标记 `_confirmed` 放进 pending args，重入直接跑不再二次确认）。
 MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与助手都能看到卡在哪。
 
 ## 用户实测三连修（2026-11-18 晚）
@@ -537,21 +543,33 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
 
 ## 逐关战报 + 失败换作业重挂 + 分段扫图（2026-11-19）
 
+> **2026-11-22 修订：①「成功几关」这一项已经删掉。** MaaCore 在 Copilot 任务里
+> **不发 `StageDrops`**（本机 asst.log 里 255 条 `SubTaskExtraInfo` 全是
+> `CopilotAction` / `BattleFormation` / `CopilotListLoadTaskFileSuccess` /
+> `ExceededLimit`，`StageDrops` 0 条），所以 `_mark_clear()` 永远不触发、
+> `ok_list` 恒为空，界面就一直是「一关都没挂」。按用户口径「判断不出来就别统计」，
+> 现在 `_mark_clear()` 是个空实现（保留函数名 + docstring 说明原因），
+> `run_core` 不再返回 `stages_ok`，改为 `stageReport: 'trail'` +
+> `stage_trail`（`CopilotListLoadTaskFileSuccess` 记的「跑过哪些关」）。
+> 下面 ① 的原文留着当历史，别照着它去「修」成功数。
+> 失败那一半仍然有效：`_tally()` 只在有 `TaskChainError` 时记失败。
+
 用户提了四条，一次做完：
 
 1. 作业翻车要能看见**是哪一关**翻的
-2. 挂完一关就显示「一关战斗成功」
+2. 挂完一关就显示「一关战斗成功」（**已废，见上**）
 3. 某关失败就换作业集里**别的作业**重挂这一关，已成功的关不重排
 4. skill 联动：挂完普通 → 导航到突袭 → 挂突袭 → 导航到 S → 挂 S
 
 **① 逐关结果（`run_core` 的 `state['results']`）**
 
-- `StageDrops` 到达 = 这关打完了 → `_mark_clear()` 记成功并打
-  `✔ SV-EX-1 战斗成功（掉落…）`。刷材料（Fight）同一关反复结算只喊一次。
+- ~~`StageDrops` 到达 = 这关打完了 → `_mark_clear()` 记成功~~（Copilot 不发，
+  见上面的修订）
 - `chain_failed` 且链是 Copilot → `_mark_fail()` 打
   `✘ SV-EX-1 翻车：原因`。`maacore._translate` 的 chain_failed 事件为此补了
   `why` 字段（以前只有一句「失败：自动战斗」）。
-- `_tally()` 按关卡聚合：同一关先失败后成功算成功。
+- `CopilotListLoadTaskFileSuccess` → `state['trail']` 追加关卡名，收尾打
+  「跑过的关：…」。「打过哪些关」用它，别用掉落。
 
 **② 换作业重挂（`_retry_failed`）**
 
@@ -559,7 +577,12 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
   练度不足」排），`_prepare_ops` 返回 `(copilotList, retry)`，
   `retry = {'pool': {'SV-EX-1@raid': [41623, 41624, 46114]}, 'maxRounds': 3}`，
   由 `spec['retry']` 交给 `run_core`。
-- 一轮跑完只挑**没成功**的关；每关换候选池里**还没试过**的下一份，同一个
+- 一轮跑完从**失败的那一关**开始往后重排（`start_idx` 由 `state['stage']` 定位：
+  跑到 X 才翻车，说明 X 之前都过去了）。以前靠 `cleared` 排除已成功的关，但
+  那个集合永远为空（`StageDrops` 不来），会把前面打完的关全重打一遍白烧理智——
+  2026-11-22 改的。`start_idx` **必须在进循环前算好**：每轮重排后
+  `state['stage']` 会被清空，第二轮再算就回到第 0 关了。
+- 每关换候选池里**还没试过**的下一份，同一个
   Engine 直接 `append` 新的 Copilot 任务再 `start`——不重新 open / connect /
   导航，省掉每轮十几秒。`attempted` 记着试过哪些，#102→#202→#102 这种
   来回打转不会发生。
@@ -595,6 +618,71 @@ EX-1 之后又往后补了一关凑数，白烧一整轮理智。预检会把前
   分区，MAA 的 Copilot 只认当前分区上的关卡名（见 `_run_fight_batch` 的注释）。
 - 段内 `_select_ops(strict=True)`：普通段不拿突袭作业顶，反之亦然。
 - 每段一次 `run_core`（带 retry 池），段与段之间靠导航衔接。
+
+## 多 MAA / 多模拟器 + 一条龙（`plan_groups` / `run_batch`，2026-11-22）
+
+用户的原话：「每个账号都有自己的 maa 路径和配置文件，agent 要能读多个配置文件下的
+adb 路径；不同就多开并行；同一台就切号 → 普通 → 突袭 → S → 领奖 → 商店 → 下一个号」。
+
+**① 每个账号自己的 MAA 目录 / 档案**
+
+账号 json 的 `maa` 段现在有两个字段（都放在 `account['maa']` 里，别往别处加）：
+
+| 字段 | 含义 | 空的时候 |
+|---|---|---|
+| `dir` | 这个号归哪份 MAA 目录管 | 回落 `settings.maaDir` |
+| `profile` | 用哪份配置档案（`moren` / `136`…） | 回落 MAA `gui.new.json` 的 `Current` |
+
+解析只有一处：`acctbind.dir_of(file)` / `acctbind.profile_of(file)`。
+`skills._maa_dir_of(file)` / `_conn_of(file, d)` 都走它，所以唤醒、导航、
+战斗、培养、扫图、牛杂**每一项**都会连到「这个号自己那台模拟器」上，不再一律
+用全局那台。`envcheck.ensure(..., maa_dir=, profile=)` 也跟着改，判断模拟器开没
+开、要不要替用户启动，看的都是这个号的那份配置。
+
+**② 分组：同模拟器串行，不同模拟器并行**
+
+```python
+# maaplan.plan_groups(rows, spec_base)
+key = (os.path.normcase(os.path.abspath(d or '.')), str(conn.get('address') or ''))
+```
+
+- `d` 是这个账号的 MAA 目录，`address` 是那份档案里 adb 指向的模拟器地址
+  （雷电 `emulator-5554` / MuMu `127.0.0.1:16384` 之类）；
+- 同一个键 = 同一份 MAA + 同一台模拟器 → **组内串行**（两条 adb 同时戳同一台
+  会表现成「点了没反应」）；
+- 不同键 → 每组一个线程**并行**，这就是「多开」。
+
+`run_plan` 只在单组时保持原来的同步行为，多组才开线程，日志按组汇总。
+
+**③ `skills.run_batch(accounts, steps)`：一条龙**
+
+不写死流程，`steps` 是字符串列表，每项「skill 名 + 空格参数」：
+
+```python
+['wakeup 5505', 'navigate OS', "fight OS-EX-1~7", 'claim', 'tool 活动商店']
+```
+
+- `_norm_steps()` 把每项拆成 `(name, params)`：`fight` 后面那串当关卡/关键词，
+  `tool` 后面当工具名，`wait 60` 当等待；别名（`领奖` / `商店` / `导航` /
+  小游戏名）都认。
+- 每个账号把整串 steps 依次跑完；一个账号挂了不影响别的账号（各自 try/except），
+  最后汇总 `{ok, done: [...], failed: [...]}`。
+- 日志前缀 `[昵称]`（昵称取 `snap['account']['nickName']`，不是文件名——
+  第一版写错了，日志里全是 `.json`）。
+- 外层由 `tasks.create('批量任务（N 个账号 / M 台模拟器）')` 挂成一条任务，
+  前端右侧进度栏只有一个进度条。
+
+**④ 领奖 skill（`skill_claim`）**
+
+`eventnav.claim_reward(touch, prefix)` 早就有（进奖励页点「一键领取」），但只能
+手动点。现在包成 `SKILLS['claim']`：
+
+```python
+skill_claim({'account': ..., 'stage': 'OS', 'wakeup': False})
+```
+
+纯 adb 操作（不连 MaaCore），所以它不在 `_WRITE_HANDLERS` 里——和 `wakeup` /
+`navigate` 一样免确认。奖励页的「一键领取」按钮已领完也还在，点了没反应不算失败。
 
 ## 当期活动导航（`eventnav.py`，2026-11-19 / 2026-11-22 改）
 
@@ -688,6 +776,8 @@ EX-1 之后又往后补了一关凑数，白烧一整轮理智。预检会把前
 静态，`_moved` 硬判会误报，真正认页面的是后面的 MaaCore 任务。
 活动奖励页要自己领：`eventnav.claim_reward(touch, 'OS')` 进奖励页后点「一键
 领取」（`claim` 那格模板），已经领完时按钮还在，点了没反应也不报错。
+2026-11-22 起这层包成了 skill：`skills.skill_claim` / 助手工具 `skill_claim`
+（见上面「④ 领奖 skill」）。
 
 ## MAA 小工具（牛杂，`maatools.py`，2026-11-19）
 
@@ -695,13 +785,20 @@ MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列�
 认：它们都是 `Custom` 任务。对着 asst.log 试出来的两种参数：
 
 ```python
-# 战时新闻委员会（活动小游戏）
+# 战时新闻委员会（TL 的活动小游戏）
 {"task_names": ["MiniGame@WartimePressCommittee@Begin"]}
+
+# 喀兰贸易技术研发部（OS 的活动小游戏，2026-11-22 加）
+{"task_names": ["MiniGame@OS@Begin"]}
 
 # 活动商店
 {"task_names": ["SS@Store@Begin"],
  "params": {"event_shop": {"blacklist": ["数据增补条", "数据增补", "龙门币", "家具零件"]}}}
 ```
+
+> 任务名是从 MaaCore 二进制里 grep 出来的（`MiniGame@OS@Begin` /
+> `MiniGame@WartimePressCommittee@Begin` 都在），不是猜的。以后再加小游戏，
+> 先 `grep -a 'MiniGame@' MaaCore.dll` 找名字，再进 `maatools.TOOLS`。
 
 黑名单的三个坑（都实测过，别改）：
 
@@ -724,9 +821,20 @@ MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列�
 个节点。`run_custom` 每 10 秒看一次「多久没新事件」，超过 120 秒就把
 `spec['tutorial']` 那句话打进日志 —— 用户才知道要手动过一遍教程再挂。
 
-**入口**：`skill_tool({'name': 'wartime_press'|'event_shop', 'account': ...,
-'blacklist': [...]})`，助手工具同名。导航和 MAA 都跑在同一个后台任务里，
-`tid` 透传给 `run_custom`，日志落在同一条任务上。
+**入口**：`skill_tool({'name': 'wartime_press'|'os_rd'|'event_shop',
+'account': ..., 'blacklist': [...]})`，助手工具同名。导航和 MAA 都跑在同一个
+后台任务里，`tid` 透传给 `run_custom`，日志落在同一条任务上。
+
+**`prefix` 与「小游戏」这个泛称**（2026-11-22 加）：每一项可以带
+`'prefix': 'OS'` 表示「它只在 OS 的活动地图上」。于是有两个用法：
+
+- `name='喀兰贸易技术研发部'` / `'os小游戏'` → 直接选中 `os_rd`，导航用
+  `ent['prefix']` 去 OS 的地图，不会跑到当期活动上瞎找；
+- `name='小游戏'`（`_GENERIC` 里的泛称）→ 按 `prefix` 在那个活动下挑；不传
+  `prefix` 而小游戏不止一个时**报错并列出候选**（「「小游戏」里有好几个小游戏，
+  要哪一个：…」），不做默认猜测。
+
+`describe()` 也把 `prefix` 带出去，前端 / 助手能看出这一项属于哪期活动。
 
 
 ## 培养干员 skill（`train`，2026-11-18）

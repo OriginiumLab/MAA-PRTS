@@ -41,8 +41,9 @@ DEFAULT_BLACKLIST = ['数据增补条', '数据增补', '龙门币', '家具零�
 TOOLS = {
     'wartime_press': {
         'name': '战时新闻委员会',
-        'alias': ('战时新闻委员会', '新闻委员会', '战时新闻', '小游戏',
+        'alias': ('战时新闻委员会', '新闻委员会', '战时新闻',
                   'wartime_press', 'press', 'wartime'),
+        'prefix': 'TL',                     # 哪个活动地图上的入口（同键不同活动要分开）
         'nav': 'minigame',                  # eventnav ENTRIES[...]['tools'] 的键
         'task': {'task_names': ['MiniGame@WartimePressCommittee@Begin']},
         'timeout': 1800,
@@ -50,10 +51,27 @@ TOOLS = {
                      '对话和选项，会一直停在同一个节点上重试。如果日志卡住'
                      '不动，先手动把教程过一遍，再让我挂一次。'),
     },
+    'os_rd': {
+        # 用户 2026-11-22 要求：OS 活动里的「喀兰贸易技术研发部」也要能交给
+        # 牛杂跑。MaaCore 里这两个小游戏是两个独立任务，别混用：
+        #   TL（战时新闻委员会）= MiniGame@WartimePressCommittee@Begin
+        #   OS（喀兰贸易技术研发部）= MiniGame@OS@Begin
+        # 名字带 OS 前缀是为了在「小游戏」这种模糊说法下能按活动选对。
+        'name': '喀兰贸易技术研发部',
+        'alias': ('喀兰贸易技术研发部', '喀兰贸易', '技术研发部', '研发部',
+                  'os小游戏', 'os研发部', 'karlan', 'os_rd'),
+        'prefix': 'OS',
+        'nav': 'minigame',
+        'task': {'task_names': ['MiniGame@OS@Begin']},
+        'timeout': 1800,
+        'tutorial': ('喀兰贸易技术研发部第一次进要手点新手引导（选项和对话），'
+                     'MAA 不会替你选。日志停在同一个节点不动时，先在模拟器里'
+                     '手动过一遍引导，再让我挂一次。'),
+    },
     'event_shop': {
         'name': '活动商店',
         'alias': ('活动商店', '活动兑换', '商店', 'event_shop', 'shop', 'store'),
-        'nav': 'shop',
+        'nav': 'shop',                      # 每个活动地图上都有，不绑前缀
         'task': {'task_names': ['SS@Store@Begin']},
         'timeout': 1800,
         'note': '到商店页面再交给 MAA；黑名单里的商品不会买，无限池也不会碰。',
@@ -63,14 +81,22 @@ TOOLS = {
 #: 需要先导航到活动地图的键（nav 字段），eventnav 那边要有同名入口
 NAV_KEYS = ('minigame', 'shop')
 
+#: 泛称（不带活动名时按 prefix 挑；挑不出来就让用户说是哪个活动的）
+_GENERIC = ('小游戏', '活动小游戏', 'minigame')
+
 
 def _norm(s):
     return ''.join(str(s or '').split()).lower()
 
 
-def resolve(name):
-    """用户说的名字 → ``(键, 配置)``；认不出抛 ValueError（把可选值列出来）"""
+def resolve(name, prefix=None):
+    """用户说的名字 → ``(键, 配置)``；认不出抛 ValueError（把可选值列出来）
+
+    ``prefix`` 是活动代号（OS / TL）：只给「小游戏」这种泛称时，按活动挑对应
+    那一个——两个活动的小游戏在 MAA 里是两条不同任务，选错了点进去也是白跑。
+    """
     key = _norm(name)
+    pre = str(prefix or '').strip().upper()
     if key:
         if key in TOOLS:
             return key, TOOLS[key]
@@ -79,6 +105,21 @@ def resolve(name):
                 return k, ent
             if key == _norm(ent.get('name')):
                 return k, ent
+        # 泛称：同一类入口在不同活动里是不同任务，按 prefix 挑
+        if key in {_norm(x) for x in _GENERIC}:
+            cands = [kv for kv in TOOLS.items()
+                     if str((kv[1] or {}).get('prefix') or '').upper() == pre] \
+                if pre else []
+            if len(cands) == 1:
+                return cands[0]
+            if len(cands) > 1:
+                raise ValueError('「%s」里有好几个小游戏，要哪一个：%s'
+                                 % (pre, '、'.join(v['name'] for _, v in cands)))
+            if pre:
+                raise ValueError('「%s」没有登记小游戏（只有：%s）'
+                                 % (pre, '、'.join(v['name'] for _, v in TOOLS.items()
+                                                   if (v or {}).get('prefix') == pre)
+                                    or '无'))
     raise ValueError('没有这个小工具：%s（可选：%s）'
                      % (name, '、'.join('%s=%s' % (k, v['name'])
                                        for k, v in TOOLS.items())))
@@ -106,6 +147,7 @@ def describe():
     rows = []
     for k, ent in TOOLS.items():
         rows.append({'key': k, 'name': ent.get('name'),
+                     'prefix': ent.get('prefix') or '',
                      'alias': list(ent.get('alias') or ()),
                      'tutorial': bool(ent.get('tutorial')),
                      'blacklist': (list(DEFAULT_BLACKLIST)
