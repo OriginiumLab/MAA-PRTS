@@ -71,6 +71,12 @@
       "why": "v1.1.7 同款：策略页详情核对（ie 函数）纯 includes 零容差，改为不中再走 Rn 容差。",
       "find": "return y.find(P=>O(x).includes(O(P.name)))",
       "replace": "return y.find(P=>O(x).includes(O(P.name))||Rn(O(x),O(P.name)))"
+    },
+{
+      "id": "reward-zero-inline-v117",
+      "why": "奖励候选卡兜底识别（合成精锐后「请选择奖励」三选一）。v1.1.7 把奖励面板判定统一改成 _o 的价格扫描：要固定价格位读到 ≥2 个数字 0 才算 reward。实测该界面上三张候选卡不显示数字价格，OCR 读不到 0 → reward=false；同时绿色「请选择奖励」横幅正好盖住右上角「准备就绪」→ ready=false，外层守卫 if(!it&&Pr.reward||!Pr.ready) 抛「尚未确认普通购买界面」→ 整备重来 → 死循环（合成后领奖励卡住）。这里按 v1.1.5 的老办法补一条兜底：对每张商店卡的名字区（left=x+40v, top=1080-328v, 130v×72v）OCR，读到 0/O 标记的卡即为奖励候选（≥2 张且不少于非候选数），交给原有领取分支（pt(card.x,name,true)），点击/名字核对/确认仍走核原本逻辑。只补识别，不改任何点击行为。",
+      "find": "async function qt(B,x,y=!1){const O=await $u(B.png,B.pc,B.pcUiScale??ne.pcUiScale),P=Lo(x,O,{allowSingleZero:y,pc:B.pc,pcUiScale:B.pcUiScale??ne.pcUiScale});return{scan:O,reward:O.reward,cards:P}}",
+      "replace": "async function qt(B,x,y=!1){const O=await $u(B.png,B.pc,B.pcUiScale??ne.pcUiScale),P=Lo(x,O,{allowSingleZero:y,pc:B.pc,pcUiScale:B.pcUiScale??ne.pcUiScale});if(!O.reward)try{const v=B.pc?(B.pcUiScale??90)/100:1,M=Math.round(1080-328*v),W=Math.round(130*v),H=Math.round(72*v),rg=x.filter(c=>!!c.name).map(c=>({card:c,region:{left:Math.round(c.x+40*v),top:M,width:W,height:H}})).filter(r=>r.region.left>=0&&r.region.top>=0&&r.region.left+r.region.width<=1920&&r.region.top+r.region.height<=1080);if(rg.length){const tt=await Oa(B.png,rg.map(r=>r.region)),hit=rg.filter((r,i)=>(tt[i]||[]).some(u=>/^[0OoＯ〇]$/.test(u.text.trim())&&u.score>=.6)).map(r=>r.card);if(hit.length>=2&&hit.length>=rg.length-hit.length){console.error(\"[reward-inline] 按卡名区 0 标记识别到奖励候选：\"+hit.map(c=>c.name).join(\",\"));return{scan:O,reward:!0,cards:hit}}}}catch(Qx){}return{scan:O,reward:O.reward,cards:P}}"
     }
   ]
 }
