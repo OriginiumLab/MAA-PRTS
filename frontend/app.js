@@ -4249,6 +4249,7 @@ async function renderGarrison(force) {
       return;
     }
     _garDlStuck = 0;
+    _garUpdActive = paintGarUpdateBar(d);   // 后台升级新版时先亮横幅
     if (!d.nodeOk || !d.ready) { showGarEmpty(d); return; }
     hideGarEmpty();
     paintGarInputs();
@@ -4283,10 +4284,44 @@ async function garTick() {
       return;
     }
     _garDlStuck = 0;
+    // 保持最新：已装核心但后台在升级 → 横幅；升级完成 → 一次性提示重启生效
+    const updActive = paintGarUpdateBar(d);
+    if (_garUpdActive && !updActive && (d.download || {}).stage === 'done') {
+      toast(`核心已更新到 v${(d.download || {}).version || ''}，重启程序后生效`, 'ok', 6000);
+    }
+    _garUpdActive = updActive;
     if (wasDownloading) { renderGarrison(true); return; }   // 刚下载完：重建整面板
     if (!d.ready) return;
     paintGarState(d);
   } catch (e) { /* 断线别刷屏：下一轮再试 */ }
+}
+
+/* 保持最新的横幅：coreOk 但下载状态机在跑（升级新版）时显示进度；
+   升级被兼容门禁挡下（error）也亮一条，让用户知道为什么停在旧版 */
+let _garUpdActive = false;
+function paintGarUpdateBar(d) {
+  const bar = $('#gar-update-bar');
+  if (!bar) return false;
+  const dl = d.download || {};
+  const active = d.coreOk && ['connecting', 'downloading', 'verifying'].includes(dl.stage);
+  if (active) {
+    let text = `核心更新中 v${dl.version || ''}`;
+    if (dl.stage === 'downloading') {
+      text += ` · 下载 ${dl.total ? (100 * dl.done / dl.total).toFixed(0) : '?'}%（${dl.done >> 20}/${(dl.total || dl.done) >> 20} MB）`;
+    } else if (dl.stage === 'verifying') {
+      text += ` · 校验 ${dl.files}/${dl.filesTotal || '…'}`;
+    } else {
+      text += `（${dl.source || ''}）`;
+    }
+    bar.textContent = text;
+    bar.hidden = false;
+  } else if (d.coreOk && dl.stage === 'error' && dl.error) {
+    bar.textContent = `核心更新未完成：${dl.error.split('\n')[0]}`;
+    bar.hidden = false;
+  } else {
+    bar.hidden = true;
+  }
+  return active;
 }
 
 async function garAction(kind) {

@@ -400,6 +400,14 @@ def main():
     # 先完成初始化再起 HTTP：窗口期打进来的 /api/app/install 会因 quit hook
     # 未装而「前端收到已拉起安装、进程永远不退」（#61）
     settings.ensure_dirs()          # config/ 与 debug/ 在启动时才建（import 不建）
+    # 卫戍协议核心「保持最新」：启动时看一眼本机小黑盒记录，有新版就后台
+    # 升级（幂等；下载校验失败不动已装版本）
+    try:
+        from core import garrisondl as _gdl
+        threading.Thread(target=_gdl.check_update, daemon=True,
+                         name='garrison-upd-check').start()
+    except Exception:
+        pass
     # 程序自更新：装完后由 api 层调 install()，需要让整个进程退出，
     # 而 api 不能 import main，所以反过来把退出函数注册进去
     appupdate.set_quit_hook(lambda reason: _quit(0, reason))

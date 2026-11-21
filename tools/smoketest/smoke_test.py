@@ -4833,6 +4833,84 @@ def check_garrison(tmp):
     assert set(r['saved']) == {'speed', 'medalWins'}, r['saved']
     assert '/api/garrison/opts' in api.ROUTES
 
+    # 10) 保持最新：_pick_candidate 选「适配表内且比已装新」的目标——
+    #     记录只有表外新版（1.1.6）时回退表内最新（1.1.5）；start 短路/升级
+    #     路径；表外版本零字节下载（monkeypatch candidates 做全链隔离）
+    real_cands = garrisondl.candidates
+    real_records = garrisondl.record_candidates
+    try:
+        adapted = garrisondl._adapted_versions()
+        assert adapted and '1.1.4' in adapted and '1.1.5' in adapted, adapted
+        assert garrisondl._is_adapted('1.1.5') and not garrisondl._is_adapted('1.1.6')
+
+        # 已最新（候选=已装）→ start() 短路 done，不起线程
+        old_svc = os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core')
+        os.makedirs(old_svc)
+        open(os.path.join(old_svc, 'service.mjs'), 'w').close()
+        garrisondl.candidates = lambda: [
+            {'version': '1.1.4', 'url': 'x', 'sha256': None, 'bytes': None,
+             'files': None, 'source': '小黑盒扩展记录'}]
+        snap = garrisondl.start()
+        assert snap['stage'] == 'done', snap
+
+        # 有可升目标（1.1.5，URL 不可达）→ 升级链走完报错；不落盘、旧版保留
+        garrisondl.candidates = lambda: [
+            {'version': '1.1.5',
+             'url': 'https://static.max-c.com/heybox/desktop/nonexistent-1.1.5.hbext',
+             'sha256': None, 'bytes': None, 'files': None, 'source': '小黑盒扩展记录'}]
+        snap = garrisondl.start()
+        assert snap['stage'] != 'done', snap
+        for _ in range(60):
+            if garrisondl.state()['stage'] == 'error':
+                break
+            time.sleep(0.3)
+        st = garrisondl.state()
+        assert st['stage'] == 'error' and '1.1.5' in (st['error'] or ''), st
+        assert not os.path.exists(os.path.join(garrisondl.garrison_dir(),
+                                               'medal-farm-v1.1.5')), '失败版本不能落盘'
+        assert os.path.isfile(os.path.join(old_svc, 'service.mjs')), '旧版必须原样保留'
+
+        # _pick_candidate（真实直链链）：记录只有表外 1.1.6 → 选表内最新 1.1.5
+        garrisondl.candidates = real_cands
+        garrisondl.record_candidates = lambda: [
+            {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
+             'files': None, 'source': '小黑盒扩展记录'}]
+        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.5', '表外新版应回退表内最新'
+        assert garrisondl._pick_candidate('')['version'] == '1.1.5'
+        assert garrisondl._pick_candidate('1.1.5') is None
+        # check_update：候选只剩表外新版（连直链一起屏蔽）→ 不起线程零流量；
+        # （真实链路里记录 1.1.6 + 已装 1.1.4 会经直链升 1.1.5——上面
+        #   _pick_candidate 断言已覆盖该选版，这里不再真下载）
+        garrisondl.candidates = lambda: [
+            {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
+             'files': None, 'source': '小黑盒扩展记录'}]
+        with garrisondl._LOCK:
+            garrisondl._DL['stage'] = 'done'
+        garrisondl.check_update()
+        time.sleep(1.5)
+        assert not garrisondl._RUNNING[0], '表外版本不应起下载线程'
+
+        # 全新安装且候选只剩表外版本（连直链一起屏蔽）：零字节下载直接报无源
+        shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
+        with garrisondl._LOCK:
+            garrisondl._DL.update(stage='idle', done=0, total=0)
+        garrisondl.candidates = lambda: [
+            {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
+             'files': None, 'source': '小黑盒扩展记录'}]
+        garrisondl.start()
+        for _ in range(20):
+            if garrisondl.state()['stage'] == 'error':
+                break
+            time.sleep(0.3)
+        st = garrisondl.state()
+        assert st['stage'] == 'error' and '1.1.6' not in (st['error'] or ''), st
+        assert st['error'].startswith('所有下载源都失败了'), st['error'][:30]
+        assert st['done'] == 0, '表外版本一个字节都不该下载'
+    finally:
+        garrisondl.candidates = real_cands
+        garrisondl.record_candidates = real_records
+        shutil.rmtree(garrisondl.garrison_dir(), ignore_errors=True)
+
 
 # ---------------------------------------------------------------- 入口
 

@@ -855,6 +855,16 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 }
 .gar-prog-text { margin-top: 7px; font-size: 11px; color: var(--text-3); }
 
+/* 保持最新：后台升级新版核心时的横幅（不打断当前面板） */
+.gar-update-bar {
+  margin: 0 2px 10px; padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 185, 85, 0.35);
+  background: rgba(245, 185, 85, 0.08);
+  color: var(--amber); font-size: 12px;
+}
+.gar-update-bar[hidden] { display: none; }
+
 .gar-form { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .gar-form .field-row { flex: 0 0 auto; }
 .gar-form input[type=text] {

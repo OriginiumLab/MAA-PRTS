@@ -466,6 +466,8 @@ def status(file: str) -> dict:
 
     核心缺失时带 ``needsDownload`` + 下载进度（garrisondl 的状态机），
     前端据此自动开始下载并显示进度条；下载是全局一份（不分账号）。
+    核心升级（保持最新）不在轮询里做：由「程序启动」和「速刷任务全部
+    停止后」（stop()）两个事件触发 garrisondl.check_update()。
     """
     node = node_exe()
     core = core_dir()
@@ -525,7 +527,39 @@ def stop(file: str) -> dict:
     h = host_of(file)
     if not _alive(h):
         raise ValueError('当前没有速刷任务在跑')
-    return _call(h, 'POST', '/api/stop', {}, timeout=15)   # type: ignore[arg-type]
+    r = _call(h, 'POST', '/api/stop', {}, timeout=15)   # type: ignore[arg-type]
+    # 任务被停止 = 检查更新的触发器：等这个号停稳，若没有任何账号还在
+    # 跑，就后台看一眼本机记录有没有新版（全部停着升级最安全——不会有
+    # 宿主正用旧核心打对局）
+    threading.Thread(target=_check_update_when_idle, daemon=True,
+                     name='garrison-upd-check').start()
+    return r
+
+
+def _check_update_when_idle(timeout=45.0):
+    """等全部速刷任务停稳（stopping→stopped），都闲下来了就查一次更新。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _lock:
+            hosts = list(_HOSTS.items())
+        busy_any = False
+        for _f, h in hosts:
+            if not _alive(h):
+                continue
+            try:
+                if (_state_of(h).get('state') or {}).get('status') in BUSY:
+                    busy_any = True
+                    break
+            except Exception:
+                busy_any = True   # 拿不到状态先当它在跑，别在忙时动手
+                break
+        if not busy_any:
+            try:
+                garrisondl.check_update()
+            except Exception:
+                pass
+            return
+        time.sleep(2.0)
 
 
 def stop_all(timeout=6.0):
