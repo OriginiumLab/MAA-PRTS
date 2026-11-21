@@ -157,10 +157,17 @@ def api_account_maa(_q, body):
         patch['dir'] = settings._norm_dir(patch.get('dir') or '')
         if patch['dir']:
             settings.remember_maa_dir(patch['dir'])
+    if 'profile' in patch:
+        # 配置文件（MAA 的 Configuration）：只记名字，**不读写用户的档案内容**。
+        # 切号名优先按这份档案里「开始唤醒」的 AccountName 来（acctbind.resolve）。
+        patch['profile'] = str(patch.get('profile') or '').strip()[:60]
+    if 'accountNameFrom' in patch:
+        v = str(patch.get('accountNameFrom') or '').strip().lower()
+        patch['accountNameFrom'] = v if v in ('manual', 'profile') else ''
     if 'accountName' in patch:
         # 切号名统一走 acctname：用户给「5505」「181 5505」「181****5505」
-        # 都能吃下，官服填了昵称则当场拦下——这一格填错的代价是 MAA 在
-        # 账号列表里死找、4 分钟超时后整轮挂机废掉。
+        # 「157****3635」都能吃下，官服填了昵称则当场拦下——这一格填错的
+        # 代价是 MAA 在账号列表里死找、4 分钟超时后整轮挂机废掉。
         # 留空是合法状态（还没填 / 想清掉），不能当成「填错」拦下。
         from . import acctname
         raw = (patch.get('accountName') or '').strip()
@@ -171,6 +178,9 @@ def api_account_maa(_q, body):
             if why:
                 raise ValueError('切号名不对：%s' % why)
             patch['accountName'] = name
+            # 没明说来源的一律按手填：老调用方（CLI/脚本）给的值不能被
+            # 绑定的配置文件悄悄盖回去
+            patch.setdefault('accountNameFrom', 'manual')
         else:
             patch['accountName'] = ''
     return {'maa': accounts.save_maa_meta(body['file'], patch)}

@@ -83,11 +83,13 @@ mock 掉，验证闸门口径——
   中文；裸名与带 `<Chain>@` 前缀的都要能命中；`BattleQuickFormationRole-*`
   统一归「编队·按职业筛选」；插件类名节点静默。这条专门防「照源码猜
   pipeline 名、跟真实日志对不上、战斗一整段没日志」的回归
-- **切号名唯一来源 = 账号绑定**（2026-11-18 晚定版）：`maa.accountName` 读得
-  到就返回；没绑定给空串，且把 `maa._load_cfg` mock 成「一调用就炸」——
-  **全程不许读用户的 MAA 配置档案**（agent 模式跑临时配置=StartUp 任务参数，
-  不碰用户的 gui.new.json）。**绝不用昵称顶**（官服切号认手机号）。防「读错
-  字段切号名永远空、唤醒 2 秒完成、号没切」和「从档案猜尾号猜错号」两类回归
+- **切号名来源**（2026-11-22 改）：没绑配置文件时 `maa.accountName` 读到就返回、
+  没有给空串，并把 `maa._load_cfg` mock 成「一调用就炸」——**这种情况全程不许
+  读用户的 MAA 配置档案**；绑了配置文件（用户点名的那份）才读它 StartUp 的
+  `AccountName`，此时把 `maa._save_cfg` mock 成「一调用就炸」——**只读不写**。
+  `accountNameFrom=manual` 的值优先，档案里的旧号码不许盖回去。**绝不用昵称
+  顶**（官服切号认手机号）。防「读错字段切号名永远空、唤醒 2 秒完成、号没切」
+  和「手改的值被档案覆盖」两类回归
 - **StartUp 直连参数口径**：MaaCore 的 `StartUpTask::set_params` 只认
   `account_name` / `client_type` / `start_game_enabled` 三个键（给了非空
   `account_name` 就切号），`core_tasks` 不得发 `account_switch_enabled` 这类
@@ -212,6 +214,24 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
   就是 maatools 拼的那份；黑名单支持逗号串（`'龙门币,固源岩'`）
 - **卡教程**：`run_custom` 返回 `stuck` 时，`skill_tool` 的结果里要带
   `hint` 并在日志里出现「教程」二字（用户口径：告诉他手动过一遍再挂）
+
+### B50 切号名绑定（2026-11-22）
+
+设置里每个账号多了「配置文件 + 切号名」两栏，助手也多了 `set_account_name`。
+这块错一个字的代价是 MAA 在账号列表里死找 4 分钟，所以全部打桩钉死：
+
+- 归一：`5505` 原样、`1573635` / `157 3635` / `157****3635` 都出 `157****3635`
+- `set_account_name`：给昵称能认到文件、写进 `maa.accountName` 且标
+  `accountNameFrom=manual`；官服填昵称要报错；两个账号又没点名时返回
+  `need_info=account`（让模型先问用户，别乱写）
+- 配置文件优先：造一份 `gui.new.json`（`moren` 的 StartUp 写 `181****5505`），
+  账号绑上它 → `acctbind.resolve` 出 `('181****5505','profile')`；
+  `_tool_list_accounts` 和 `multiacct.candidates` 里也必须是这个生效值
+  （否则模型看到空值又去问一遍）
+- 手填优先：同一账号改成 `accountNameFrom=manual` + `5505` → 出 `5505`
+- 读不到档案（目录被删/档案没建）→ 回落手填值，不抛
+- 只读不写：`maa._save_cfg` mock 成「一调用就炸」，解析全程不许写用户的
+  `gui.new.json`
 
 ## 什么时候跑
 

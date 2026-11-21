@@ -77,28 +77,22 @@ def _account_file(name):
 def _account_name_tail(file):
     """账号的切号名（MAA StartUp 切号用的那个）
 
-    **唯一来源：账号自己绑定的 ``maa.accountName``**（设置 → MAA 路径里填的
-    手机尾号，或对话里用户报给助手后回存的）。给空串就退回 adb 重启那条路，
+    规则只有一份，在 ``acctbind.resolve``：**选了配置文件就读那份档案里的
+    AccountName**（用户在 MAA 里已经配过切号，不该再手抄），没选 / 手填过
+    就用账号自己存的 ``maa.accountName``。给空串就退回 adb 重启那条路，
     调用方负责提示去设置页填。
 
-    用户口径（2026-11-18）：agent 模式跑的是**临时配置**——StartUp 任务参数
-    只有「开始唤醒 + 手机号」，MaaCore 按参数自己换号，**不读也不改用户的
-    MAA 配置档案**。以前这里会退回读 MAA 当前档案的 ``AccountName`` / 档案名
-    （moren / 136 / 157…）来猜，两个问题：一是违背上面的口径（agent 不该碰
-    用户的 MAA 配置）；二是猜错代价大——程序里两个游戏账号对 MAA 里五个尾号
-    档案，档案名和 AccountName 根本说不清谁是谁，错配了 MAA 在账号列表里
-    死找 4 分钟超时。谁要用哪个尾号，只有账号绑定这一个可信来源。
+    用户口径（2026-11-18 起，2026-11-22 放宽）：agent 模式跑的是**临时配置**
+    ——StartUp 任务参数只有「开始唤醒 + 切号名」，MaaCore 按参数自己换号，
+    **不读也不改用户的 MAA 配置档案**；读档案只发生在「用户指定了这个账号
+    用哪份档案」的时候，而且只读一个字段。
 
     **昵称绝不能拿来顶**：官服切号认的是手机号，拿昵称 MAA 在账号列表里
     翻不到，acctname.check 会当场拒。
     """
-    try:
-        snap = accounts.get_account(file)
-    except Exception:
-        snap = {}
-    maa = snap.get('maa') if isinstance(snap, dict) else None
-    maa = maa if isinstance(maa, dict) else {}
-    return (maa.get('accountName') or '').strip()
+    from . import acctbind
+    nm, _src = acctbind.resolve(file)
+    return nm
 
 
 def _client_of(file):
@@ -186,16 +180,37 @@ def norm_stage(raw, log=None):
 
 # ---------------------------------------------------------------- wakeup
 
+def _remember_tail(file, raw):
+    """用户在对话里报了尾号 → 存进账号设置（下次不用再问）
+
+    只写本程序自己的账号 json（``maa.accountName`` + ``accountNameFrom=manual``），
+    MAA 那边一个字段都不动。存不进去（文件被占/没权限）不挡主流程。
+    """
+    if not str(raw or '').strip():
+        return ''
+    try:
+        from . import acctbind
+        nm, _why = acctbind.bind(file, raw, _client_of(file))
+        return nm
+    except Exception:
+        return ''
+
+
 def skill_wakeup(params, log, tid=None):
     """skill 1：唤醒游戏到主界面
 
     accountName / tail 有值时走 MAA StartUp（能按切号名换账号，官服填手机号
-    后 4 位如 5505）；没给就用 adb 直连重启（快，且登录页/START 页/弹窗都能
-    自己处理——stagenav.restart_app）。
+    后 4 位如 5505，也可以给前 3 位 + 后 4 位如 157****3635）；没给就用 adb
+    直连重启（快，且登录页/START 页/弹窗都能自己处理——stagenav.restart_app）。
     """
     file = _account_file(params.get('account') or '')
-    tail = (params.get('accountName') or params.get('tail')
-            or _account_name_tail(file)).strip()
+    given = (params.get('accountName') or params.get('tail') or '').strip()
+    if given:
+        # 用户亲口报的尾号顺手存进设置：下次挂机 / 换 skill 都不用再问
+        saved = _remember_tail(file, given)
+        if saved:
+            log('切号名 %s 已记到这个账号（设置 → MAA 路径）' % saved)
+    tail = (given or _account_name_tail(file)).strip()
     if tail:
         # 临时配置：StartUp 任务参数只有「开始唤醒 + 切号名」，MaaCore 按参数
         # 自己换号——不读也不改用户的 MAA 配置档案
@@ -214,7 +229,7 @@ def skill_wakeup(params, log, tid=None):
     log('adb：%s' % detail)
     if not alive:
         raise RuntimeError(detail)
-    log('这个账号没绑定切号名（设置 → MAA 路径里填手机尾号，'
+    log('这个账号没绑定切号名（设置 → MAA 路径里填手机号后 4 位，'
         '或对话里直接告诉我），只能重启当前账号的游戏')
     if stagenav.at_home(t) and not stagenav.on_login_page(t) \
             and not stagenav.in_story_page(t) and not stagenav.in_story_dialog(t):
@@ -1133,8 +1148,10 @@ def skill_train(params, log, tid=None):
         if not params.get('account') and saved.get('account'):
             params = dict(params, account=saved['account'])
     file = _account_file(params.get('account') or '')
-    tail = (params.get('accountName') or params.get('tail')
-            or _account_name_tail(file) or '').strip()
+    given = (params.get('accountName') or params.get('tail') or '').strip()
+    if given:
+        _remember_tail(file, given)   # 用户报了尾号就存进设置，别下次再问
+    tail = (given or _account_name_tail(file) or '').strip()
     switch = params.get('switchAccount')
     if switch is None:
         switch = bool(tail)          # 只有显式给了切号名才切号
@@ -1165,7 +1182,7 @@ def skill_train(params, log, tid=None):
         log('先开始唤醒，切到 %s' % tail)
     else:
         log('先开始唤醒（不切号%s）' % ('；要切号去设置 → MAA 路径里给账号'
-            '填手机尾号' if not tail else ''))
+            '填手机号后 4 位' if not tail else ''))
 
     spec = {
         'tasks': (['startup', 'operprogress'] if wakeup else ['operprogress']),

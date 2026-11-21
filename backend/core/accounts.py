@@ -76,6 +76,9 @@ def list_accounts():
             # 存下来就不用每次挂机都问一遍——这是唯一必须问用户的字段，
             # 猜错的表现是切号死循环（MAA 找不到账号名，重试到超时）。
             'maaAccountName': _dict(snap.get('maa')).get('accountName') or '',
+            # 切号名的来源：manual=用户手填过（以他为准）/ profile=跟着配置文件走
+            # （读那份档案 StartUp 的 AccountName）。规则在 acctbind.py。
+            'maaAccountNameFrom': _dict(snap.get('maa')).get('accountNameFrom') or '',
             'maaDir': _dict(snap.get('maa')).get('dir') or '',
             'syncedAt': _dict(snap.get('sync')).get('syncedAt'),
             # 关卡进度摘要（主线还差几关、活动几个区、剿灭几张没满）；

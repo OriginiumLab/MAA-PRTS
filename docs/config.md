@@ -284,7 +284,10 @@ schemaVersion 2 快照（`backend/core/updater.py` 的 `build_snapshot`）加一
 {
   "schemaVersion": 2,
   "account": { "uid": "…", "nickName": "…", "channelName": "官服", /* … */ },
-  "maa":  { "dir": "D:\\…", "profile": "", "note": "" },  // 该账号绑定的 MAA 目录
+  "maa":  { "dir": "D:\\…",            // 该账号绑定的 MAA 目录（空=用全局默认）
+            "profile": "moren",         // 该账号用的 MAA 配置档案名（切号名从它读）
+            "accountName": "181****5505", // 切号名（MAA StartUp 的 AccountName）
+            "accountNameFrom": "profile" }, // profile=跟着档案走 / manual=用户手填
   "skd":  { "alias": "大号",                               // 备注（添加时填的）
             "addedAt": "2026-11-05T07:40:00",              // 添加时间
             "data": "AQAAANCMnd8BFdERjHoAwE…" },           // base64(DPAPI(token))
@@ -297,6 +300,11 @@ schemaVersion 2 快照（`backend/core/updater.py` 的 `build_snapshot`）加一
 `maa.dir` 与 `skd` 同处一个账号文件：一个账号用哪个 MAA、拿哪个 token，
 删文件即整体清除。从 MAA 导入干员识别结果（界面的「从 MAA 导入干员信息」）
 也是改这份文件——只覆盖 `chars/stats/missing/sync`，其余原样保留。
+
+`maa.profile` 只是**记名字**：选了档案，`acctbind.resolve()` 会去那份档案的
+`TaskQueue[0]`（StartUp）读 `AccountName` 当切号名，**不写回** MAA 的
+`gui.new.json`。`accountNameFrom=manual` 表示用户手填过，这时以账号里的
+`accountName` 为准，档案里的旧值不会盖回来。
 
 ### 终末地账号
 

@@ -32,7 +32,7 @@ import traceback
 import urllib.request
 import uuid
 
-from . import (accounts, asstlog, copilot, maa, multiacct, progress,
+from . import (accounts, acctbind, asstlog, copilot, maa, multiacct, progress,
                resources, settings, skills, tasks, vault, watch)
 
 MAX_TURNS = 12
@@ -353,13 +353,24 @@ TOOLS = [
                          'description': '抄作业时是否自动编队，默认 true'},
            'names': {'type': 'object',
                      'description': '{账号文件名: 切号名}。官服填手机号后 4 位'
-                                    '（如 5505），B 服填游戏内用户名。'
+                                    '（如 5505），前 3 位 + 后 4 位也行'
+                                    '（如 157****3635）；B 服填游戏内用户名。'
                                     '缺的时候要问用户，**原样传**，别自己拼格式'},
            'limitStages': {'type': 'integer', 'description': '最多挂几关，默认 8'},
            'profile': {'type': 'string',
                        'description': '档案名后缀，比如「活动-时间啊向前」。不给就自动起名'},
            'start': {'type': 'boolean', 'description': '写完是否立刻启动，默认 true'}},
           []),
+    _tool('set_account_name',
+          '**配置账号登录尾号**：用户说出某个账号的手机号尾号（后 4 位，或'
+          '「前 3 位 + 后 4 位」如 157****3635）时，把它存进那个账号的设置'
+          '（设置 → MAA 路径 → 切号名），下次挂机、切号都不用再问。'
+          '只改本程序自己的账号配置，**不会动 MAA 的任何字段**。'
+          '用户只是顺口报了个尾号、还没说要挂什么时也可以先存下来。',
+          {'account': _ACC,
+           'accountName': {'type': 'string',
+                           'description': '用户给的尾号/切号名，**原样传**，别自己拼格式'}},
+          ['accountName']),
     _tool('list_profiles',
           '看 MAA 里现在有哪些配置档案、当前用的是哪个、各自挂了几个作业。'
           '用户问「现在跑的是哪个号」时用它。'),
@@ -374,7 +385,8 @@ TOOLS = [
     # ---- 挂关 skill 化（2026-11-17）：唤醒 / 导航 / 剧情 / 战斗 / 签到 / 周目 ----
     _tool('skill_wakeup',
           '唤醒游戏到主界面（游戏没开/停在登录页/START 页时用）。'
-          '可选 accountName 按切号名换账号（官服=手机号后 4 位，如 5505）。'
+          '可选 accountName 按切号名换账号（官服=手机号后 4 位，如 5505；'
+          '也可以给前 3 位 + 后 4 位，如 157****3635）。'
           '返回 taskId，后台跑。',
           {'account': _ACC,
            'accountName': {'type': 'string',
@@ -490,7 +502,7 @@ TOOLS = [
                        'description': '简写模式的专精目标，如 [0,3,0]'},
            'account': _ACC,
            'accountName': {'type': 'string',
-                           'description': '切号名（官服=手机号后 4 位）。'
+                           'description': '切号名（官服=手机号后 4 位，或前 3 位 + 后 4 位）。'
                                           '账号已绑定尾号（list_accounts 的 '
                                           'accountName 非空）时不用传，程序会自己用'},
            'switchAccount': {'type': 'boolean',
@@ -519,7 +531,7 @@ TOOLS = [
                       'description': '默认 true（先唤醒到主界面）；游戏已经开着'
                                      '并停在关卡列表时传 false'},
            'accountName': {'type': 'string',
-                           'description': '切号名（官服=手机号后 4 位）'}},
+                           'description': '切号名（官服=手机号后 4 位，或前 3 位 + 后 4 位）'}},
           ['stage']),
     _tool('skill_tool',
           '**MAA 小工具（牛杂）**：跑 MAA「小工具 → 牛杂」里的功能。会自动导航到'
@@ -593,6 +605,14 @@ def _tool_list_accounts(args):
     for c in accounts.list_accounts():
         if (c.get('game') or 'arknights') != 'arknights':
             continue
+        # 绑了配置文件的账号：列表里的切号名要用生效值（档案里的那个），
+        # 否则用户在设置里选过档案、模型还是看到空值，照样重复问一遍
+        acc_name = c.get('maaAccountName') or ''
+        if c.get('maaProfile'):
+            try:
+                acc_name, _src = acctbind.resolve(c['file'])
+            except Exception:
+                pass
         p = c.get('progress') or {}
         out.append({
             # 账号列表给的是 nickName / alias / channelName，没有 name / channel
@@ -606,7 +626,7 @@ def _tool_list_accounts(args):
             # 已绑定的切号名（手机尾号）必须给出来：用户 2026-11-18 报
             # 「设置里配过尾号，助手每次还问」——列表里带出来，模型就不用
             # 再开口问；只有这里是空的才轮到问用户。
-            'accountName': c.get('maaAccountName') or '',
+            'accountName': acc_name,
             # 字段名对齐 progress.summary()：mainRemaining / activityLeft /
             # activityStages 才是真名（曾经写成 mainLeft / activityZones，
             # 结果每个账号都返回 null，模型只能挨个再问一遍 account_progress）
@@ -618,9 +638,56 @@ def _tool_list_accounts(args):
             'activityStages': p.get('activityStages'),
         })
     return {'accounts': out, 'count': len(out),
-            'hint': 'accountName 就是已绑定的切号名（手机尾号）：**非空的直接按它跑，'
-                    '不要再问用户**；只有为空的账号才问「手机号后 4 位」'
-                    '（B 服问游戏内用户名）'}
+            'hint': 'accountName 就是已绑定的切号名（手机号后 4 位 / 前 3 位 + 后 4 位）'
+                    '：**非空的直接按它跑，不要再问用户**；只有为空的账号才问'
+                    '「手机号后 4 位」（B 服问游戏内用户名）。用户报了尾号就顺手用'
+                    ' set_account_name 存下来，下次不用再问'}
+
+
+def _tool_set_account_name(args):
+    """配置账号登录尾号：把用户报的尾号存进对应账号的切号名
+
+    只写本程序自己的账号 json（``maa.accountName`` + ``accountNameFrom=manual``），
+    MAA 的配置文件一个字段都不动。存下来之后 list_accounts 就能看到，
+    下次挂机 / 切号不用再问。
+    """
+    raw = str(args.get('accountName') or args.get('tail') or '').strip()
+    if not raw:
+        return {'error': '没给尾号（后 4 位，或前 3 位 + 后 4 位）'}
+    rows = [c for c in accounts.list_accounts()
+            if (c.get('game') or 'arknights') == 'arknights']
+    if not rows:
+        return {'error': '左侧还没有明日方舟账号'}
+    want = str(args.get('account') or '').strip()
+    file = ''
+    if want:
+        for c in rows:
+            names = (c['file'], c.get('nickName') or '', c.get('alias') or '')
+            if want in names or want in (c.get('nickName') or ''):
+                file = c['file']
+                break
+        if not file:
+            return {'error': '找不到账号：%s' % want,
+                    'accounts': [{'file': c['file'], 'name': c.get('nickName')}
+                                 for c in rows],
+                    'hint': '按 list_accounts 的 file 或昵称再传一次'}
+    elif len(rows) == 1:
+        file = rows[0]['file']
+    else:
+        return {'need_info': 'account',
+                'accounts': [{'file': c['file'], 'name': c.get('nickName')}
+                             for c in rows],
+                'note': '有多个账号，问用户这个尾号是哪个号的（按昵称确认）'}
+
+    nm, why = acctbind.bind(file, raw)
+    if not nm:
+        return {'error': why, 'hint': '官服要手机号（后 4 位，或前 3 位 + 后 4 位）；'
+                                      'B 服填游戏内用户名'}
+    row = next((c for c in rows if c['file'] == file), {})
+    return {'ok': True, 'account': file, 'name': row.get('nickName') or file,
+            'accountName': nm,
+            'note': '已存进「设置 → MAA 路径 → %s 的切号名」，下次挂机直接用；'
+                    '没改 MAA 里任何配置' % (row.get('nickName') or file)}
 
 
 def _tool_list_activities(args):
@@ -953,15 +1020,14 @@ def _check_account_name(nm, channel):
 def _roster(want_files, names, maa_dir):
     """把「哪些账号 + 各自的切号名」理出来
 
-    切号名的来源，只有两个可信的：
+    切号名的来源（规则只有一份，在 ``acctbind.resolve``）：
     1. 用户这次显式给的 ``names``（还会回写账号文件，下次不用再问）
-    2. 账号文件里存过的 ``maa.accountName``（上次给的 / 设置页填的）
+    2. 账号绑的配置文件里「开始唤醒」的 AccountName（2026-11-22 用户要求：
+       他在 MAA 里配过一次，就别再让他抄一遍）
+    3. 账号文件里存过的 ``maa.accountName``（手填的 / 上次对话里报的）
 
-    **不从用户的 MAA 配置档案里猜**（2026-11-18 用户口径：agent 模式不碰
-    用户的 MAA 配置）：以前会拿 ``maa.profile`` 档案里的 AccountName、甚至
-    拿昵称去比对档案名来凑切号名——程序里两个游戏账号对 MAA 里五个尾号
-    档案，档案名和 AccountName 根本说不清谁是谁，错配的代价是官服传错号
-    MAA 在账号列表里死找 4 分钟超时，整轮挂机死在「登录」。宁可多问一句。
+    **只读用户的 MAA 配置，绝不写回**；也绝不拿昵称去凑切号名——官服认的是
+    手机号，传昵称 MAA 在账号列表里死找 4 分钟超时，整轮挂机死在「登录」。
     """
     cands = multiacct.candidates()
     if want_files:
@@ -974,9 +1040,9 @@ def _roster(want_files, names, maa_dir):
     for c in cands:
         raw = (names.get(c['file']) or names.get(c['name']) or '')
         raw = str(raw).strip() if raw else ''
-        # check() 自己会归一化（181 5505 / 181＊5505 / 5505 都能吃下），
-        # 这里别再提前 norm 一遍——曾经两层各自处理，第二层收到的已经是
-        # 半成品，星号数量被改坏后又被严格正则判成非法。
+        # check() 自己会归一化（181 5505 / 181＊5505 / 5505 / 157****3635
+        # 都能吃下），这里别再提前 norm 一遍——曾经两层各自处理，第二层收到
+        # 的已经是半成品，星号数量被改坏后又被严格正则判成非法。
         nm, why = _check_account_name(raw, c.get('channel'))
         source = 'user'
         if not nm:
@@ -990,8 +1056,9 @@ def _roster(want_files, names, maa_dir):
                     pass
         if not nm:
             official = _is_official(c.get('channel'))
-            ask = ('手机号后 4 位是多少？给这四位就行（如 5505）——'
-                   'MAA 切号用的就是它，基本不会撞号'
+            ask = ('手机号后 4 位是多少？给这四位就行（如 5505），'
+                   '前 3 位 + 后 4 位也行（如 157****3635）——'
+                   'MAA 切号用的就是它'
                    if official else '在 MAA 里切号用的名字是什么？（B 服填游戏内用户名）')
             missing.append({
                 'file': c['file'], 'name': c['name'],
@@ -1005,7 +1072,9 @@ def _roster(want_files, names, maa_dir):
             continue
         if source == 'user':
             try:
-                accounts.save_maa_meta(c['file'], {'accountName': nm})
+                # 手填的值必须打上 manual：不然绑了配置文件的账号下次又被
+                # 档案里的旧号码盖回去，用户改了等于没改
+                acctbind.bind(c['file'], nm, c.get('channel'))
             except Exception:
                 pass
         rows.append({'file': c['file'], 'name': c['name'],
@@ -1389,6 +1458,7 @@ def _tool_skill_tool(args, session=None):
 
 _HANDLERS = {
     'list_accounts': _tool_list_accounts,
+    'set_account_name': _tool_set_account_name,
     'list_activities': _tool_list_activities,
     'search_stages': _tool_search_stages,
     'find_ops': _tool_find_ops,
@@ -1529,16 +1599,21 @@ startup recruit infrast fight copilot mall award reclamation roguelike
 ## 常见对话怎么做
 
 **「帮我把所有账号挂上 TL-5」**
-1. list_accounts —— **先看 accountName（已绑定的手机尾号）**：非空的账号
+1. list_accounts —— **先看 accountName（已绑定的切号名）**：非空的账号
    直接沿用，**绝对不要再问一遍**（用户 2026-11-18 报过这个：设置里配过
    尾号，助手还在问）
 2. build_run（accounts=[]、mode=copy、keyword=TL-5）
-3. 返回 need_info 时：**一次性把所有缺的账号列出来问**。官服只问
-   「手机号后 4 位」（如 5505），B 服问游戏内用户名。
-   **不要让用户去拼 `181****5505`**——格式是程序的事。用户给全号、
-   带横线、星号多少、只给尾号，一律原样放进 names，程序会归一化。
+3. 返回 need_info 时：**一次性把所有缺的账号列出来问**。官服问
+   「手机号后 4 位」（如 5505）——用户给「前 3 位 + 后 4 位」
+   （157****3635）、全号、带横线都行；B 服问游戏内用户名。
+   **不要让用户必须拼 `181****5505`**——格式是程序的事，给什么都能吃。
    拿到后带 names 再调一次
 4. 返回 need_confirm 时，把确认卡片上的内容用自己的话复述要点
+
+**「这个号尾号是 5505」/「官服号尾号 157****3635」**
+set_account_name（account 尽量给上，按昵称或 file 认）。存进设置之后
+list_accounts 的 accountName 就有值了，后面挂机不用再问。
+只改我们自己的账号配置，MAA 里一个字都不动。
 
 **「清一下日常」/「帮我收菜」**
 build_run（mode=daily，不用 keyword）。这就是一键长草。
@@ -1645,9 +1720,11 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
 - skill_fight / skill_skip_story / skill_weekly / skill_train 同样要先确认再跑
   （工具会自动摆确认卡）
 - 多账号缺切号名时，明确说「这个信息森空岛拿不到，得你告诉我」；
-  官服只要**手机号后 4 位**（如 5505），不要要求用户拼星号。
+  官服问**手机号后 4 位**（如 5505）就行，用户主动给「前 3 位 + 后 4 位」
+  （157****3635）也照收，不要要求他数星号。
   **问之前先看 list_accounts 的 accountName**：非空就是已经绑好的，
-  直接用，别重复问（用户设置里配过的东西，助手再问一遍很烦）
+  直接用，别重复问（用户设置里配过的东西，助手再问一遍很烦）。
+  用户报出尾号后调 set_account_name 存进设置，下次不用再问。
 - 多账号是**串行**的（一个模拟器同时只能登一个号），一个跑完自动切下一个
 - **模拟器不用你操心**：每个 skill 开跑前会自动确认模拟器在不在、没开就替用户
   启动（路径从 MAA 配置里读）。任务报「环境没准备好」时，把日志那句话原样转给

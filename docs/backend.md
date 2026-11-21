@@ -35,7 +35,8 @@
 | `core/asstlog.py` | MAA 日志观测：`debug/asst.log` 的回调 JSON + `debug/gui.log` 的 `Start/Completed Task Chain` → 结构化事件流；增量读、轮转识别、状态推导（idle/running/stalled/failed/done）、`failures()` 还原「跑过哪几关、哪几关没跑完」 |
 | `core/maalog.py` | 直连跑机时的 MAA 日志桥：`maalog.Tap` 从 `asst.log` **末尾**开始增量读（`Tail.seek_end()`，不重放历史），只把 `[ERR]/[WRN]` 里能解释问题的行翻成人话（认不出关卡名 / 干员不存在 / 参数不合法），噪行丢弃、同句 20 秒去重。回调 JSON 行不读——那部分由 `maacore` 回调负责，避免同一件事写两遍 |
 | `core/watch.py` | 自愈层：后台线程盯 `asstlog` 的状态，判停滞就关 MAA → 从当前关续写作业列表 → 重启。同一关连续 3 次救不回来就停手报给用户 |
-| `core/acctname.py` | 切号名（MAA `AccountName`）的归一化与校验，**唯一一份规则**。MAA 是拿它和登录界面那行 OCR 做子串匹配，所以 `5505` / `136` / `23****45` / `181****5505` 都合法；用户给全号、带横线、全角数字、星号数量不对都归一成 `前3****后4`。官服只拦「填了昵称」（拿昵称切号会死循环几十次然后失败），B 服不拦 |
+| `core/acctname.py` | 切号名（MAA `AccountName`）的归一化与校验，**唯一一份规则**。MAA 是拿它和登录界面那行 OCR 做子串匹配，所以 `5505` / `136` / `23****45` / `157****3635` / `181****5505` 都合法；用户给全号、带横线、全角数字、星号数量不对都归一成 `前3****后4`，只给「前 3 + 后 4」（`1573635` / `157 3635`）也收。官服只拦「填了昵称」（拿昵称切号会死循环几十次然后失败），B 服不拦 |
+| `core/acctbind.py` | 「这个账号跑 StartUp 写哪个切号名」的唯一解析入口：账号绑了配置文件（`maa.profile`）且没手改过 → 读那份档案 StartUp 的 `AccountName`（`maa.profile_account_name()`，**只读**）；否则用账号存的 `maa.accountName`；都没有才返回空让调用方去问用户。手改过的值标 `accountNameFrom=manual`，不会被档案里的旧号码盖回去 |
 | `core/multiacct.py` | 多账号编排：MAA「一个配置档案 = 一个账号」，按各账号练度各挑作业，串行切换执行。档案一律新建 `PRTS-` 前缀的那份，用户自己的档案一个字段都不动。切号名统一走 `acctname.check()`；`maaProfile` 是档案名不是切号名，别混用 |
 | `core/maaplan.py` | 把「用户想怎么挂」翻成可执行的东西，两条路线：① `build_queue`/`ensure_profile` 写 GUI 的 `TaskQueue` + `RunDirectly`（能看界面，但**不能抄作业**：MAA 的 `InitializeItems` 不认 CopilotTask，会抛 NotImplementedException 让整个任务列表空白）；② `core_tasks`/`run_core` 生成 MaaCore 的任务序列直接驱动（能抄作业、能跑 Custom 小活动、自己按开始）。`run_core` 跑抄作业固定四段：**登录（StartUp）→ `AsstStop` 把 MAA 停住 → 用 `stagenav` 点到关卡地图 → 再 append Copilot + `AsstStart`**。停这一步不能省：不停的话 MaaCore 还在按自己的逻辑截屏/滑动，和我们的 adb 点击抢界面。导航失败且这一关有卡片模板（老故事集）时**直接报错**，不把作业交给 MAA——它只会横向滑主线，白跑 30 秒再失败（2026-11-17 SV 实测：停住后 24 秒内 MAA 就在地图上 OCR 到 SV-1、点开始行动、自动编队开打） |
 | `core/maacore.py` | MaaCore 直连：`AsstCreateEx` → `AsstLoadResource` → `AsstConnect` → `AsstAppendTask` → `AsstStart`，回调翻成事件流。三个坑写在文件头：`AsstCreateEx` 的 restype 必须是 `c_void_p`（否则 64 位句柄截断成 32 位，每次 append 都 access violation）、Copilot 的 `filename` 必须绝对路径、`copilot_list` 的键是 `filename` 不是 `file_name`（写错会让进程 C++ 异常崩溃） |
@@ -84,7 +85,7 @@ main()
 | POST | `/api/settings` | 保存设置（白名单 `maaDir` / `profile` / `autoStartMaa` / `lastAccount`） |
 | GET | `/api/accounts` | 账号列表（含每个账号的统计摘要） |
 | GET | `/api/account?file=` | 单个账号完整配置：account / stats / missing / chars |
-| POST | `/api/account/maa` | 把 `maa.profile` 等用户字段写回账号 JSON（同步不覆盖的那几个）。`dir` 会归一化并并入「用过的 MAA」历史；`accountName`（切号名）统一走 `acctname.check()`——`5505` / `181 5505` / `181****5505` 都收成 `181****5505`，官服填昵称当场 400，**留空合法**（还没填 / 想清掉） |
+| POST | `/api/account/maa` | 把 `maa.profile` 等用户字段写回账号 JSON（同步不覆盖的那几个）。`dir` 会归一化并并入「用过的 MAA」历史；`profile` 是 MAA 的配置档案名（只记名字，**不读写档案内容**）；`accountName`（切号名）统一走 `acctname.check()`——`5505` / `181 5505` / `157****3635` 都收成规范写法，官服填昵称当场 400，**留空合法**（还没填 / 想清掉）。`accountNameFrom`：`manual`=手填（以用户为准）/ `profile`=跟着配置文件走；不传时按 `manual` |
 | POST | `/api/account/token` | 设置 → 账号管理用：返回 `{has, broken, token, mask}`。`token` 是明文（只在本地窗口里展示，不落日志、不进 bootstrap），`mask` 只留尾 4 位；`broken=true` 表示密文本机解不开（换电脑 / 换 Windows 用户），与「没存过」分开 |
 | POST | `/api/account/token/check` | 拿 grant 接口验一次 token 还能不能用（最长约 12 秒）。只有明确失效才回 `ok:false`，网络问题走异常——界面据此决定要不要解锁「修改」 |
 | POST | `/api/account/token/set` | 换 token：先 `Skland(token)` 登录 + 取绑定，确认 token 绑的 uid 就是这个账号，才把密文写回 `skd` 段（练度 / 进度 / MAA 绑定一个字段都不动）。uid 对不上直接报错，防止粘错号把凭证静默换掉 |
@@ -454,18 +455,19 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
    永远拿不到，StartUp 不带 `account_name`：游戏已在主界面时这条链 2 秒就
    「完成」，什么都没做，用户看到的就是「没唤醒就开始导航/培养」。
    **昵称绝不能顶**：官服切号认手机号，拿昵称 MAA 在账号列表里翻不到。
-2. **agent 模式切号 = 临时配置，不碰用户的 MAA 档案**（用户口径，2026-11-18
-   晚再定版）。agent 跑 MAA 从不读写用户的 `gui.new.json` 档案：所谓的
-   「配置」就是 StartUp **任务参数**——只配「开始唤醒 + 该账号绑定的手机
-   尾号」，MaaCore 的 `StartUpTask` 拿到非空 `account_name` 就自己换号
+2. **agent 模式切号 = 临时配置，只读用户的 MAA 档案**（2026-11-18 定口径，
+   2026-11-22 放宽一处）。agent 跑 MAA 从不**写**用户的 `gui.new.json` 档案：
+   所谓的「配置」就是 StartUp **任务参数**——只配「开始唤醒 + 该账号的切号
+   名」，MaaCore 的 `StartUpTask` 拿到非空 `account_name` 就自己换号
    （核对过 6.20.1 源码：`set_params` 只认 `account_name` / `client_type` /
    `start_game_enabled` 三个键，**没有** `account_switch_enabled`，给了也
-   被忽略）。切号名的**唯一来源**是账号绑定 `maa.accountName`（设置 → MAA
-   路径填的，或对话里用户报给助手后回存的）；中间版曾加过「读 MAA 当前
-   档案 AccountName / 纯数字档案名」的 fallback，已按上面口径拆掉——
-   程序里两个游戏账号对 MAA 里五个尾号档案，档案名和 AccountName 说不清
-   谁是谁，猜错 MAA 在账号列表里死找 4 分钟。预检（`agent._roster`）同理：
-   只信用户这次给的 + 账号文件里存过的，没有就**问用户**，不从档案猜。
+   被忽略）。切号名的来源按顺序（`acctbind.resolve`）：① 账号绑的配置文件
+   里 StartUp 的 `AccountName`（用户 2026-11-22 要求：他在 MAA 里已经配过
+   一次，不该再抄一遍，**这一处破例读档案，但只读一个字段**）；② 账号存的
+   `maa.accountName`（手填的 / 对话里报的）；③ 都没有就**问用户**。
+   中间版（2026-11-18）曾完全禁读档案，因为「两个游戏账号对 MAA 里五个
+   尾号档案，档案名和 AccountName 说不清谁是谁」——现在不是猜：绑哪份档案
+   由用户在设置里点名，程序照他点的读，手改过的值（`manual`）优先。
 2. **「培养干员没进去就报错」——`Engine.wait` 启动竞态**。asst.log 现场：
    StartUp 完成 → append OperProgress → `start` → **同一毫秒 `~Assistant`
    析构**，任务「完成」但培养一步没跑。原因：AsstStart 异步生效，刚 start
@@ -1213,9 +1215,15 @@ MaaCore 只会报 `adb 连不上`，用户第一反应是程序坏了。放一�
 
 `accountName` 现在可以直接在设置 → MAA 路径里按账号填。规则不在这儿重写，
 一律 `acctname.check(nm, channel)`：能吃 `5505` / `136` / `23****45` /
-`181****5505` / 全角与带横线的写法；官服只拦「填了昵称」（MAA 拿昵称去
+`157****3635` / 全角与带横线的写法；官服只拦「填了昵称」（MAA 拿昵称去
 账号列表里子串匹配，死找几十次后超时，整轮挂机废掉）。**空串放行**——
 「还没填」和「填错了」是两件事，用 `check()` 原文会把清空输入框也拦下。
+
+同一个接口还收 `profile`（MAA 的配置档案名）和 `accountNameFrom`
+（`manual` / `profile`）。设置页里选了配置文件，前端会把该档案 StartUp 的
+`AccountName` 带进输入框、来源标 `profile`；用户一改就标 `manual`，之后
+`acctbind.resolve` 以他填的为准。**档案本身只读**，`gui.new.json` 一个字段
+都不写。
 
 ## 卫戍协议速刷（`garrison.py` / `garrisondl.py` / `resources/garrison/`，2026-11-20）
 
@@ -1281,10 +1289,9 @@ MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速�
 
 ## 定时任务（`scheduler.py`，2026-11-22）
 
-设置里的「定时任务」页：到点启动外部程序，支持链式启动。语义照着三月七助手
-（`app/schedule_dialog.py` + `app/common/schedule.py`）搬，只保留我们真正需要搬
-脚本的那部分——他自己写的 `autostart-*.exe`、`OneDragon-Launcher.exe`、cmd
-批处理都能原样填进来。
+设置里的「定时任务」页：到点启动外部程序，支持链式启动。只做「把用户的脚本
+按时拉起来」这一件事——`autostart-*.exe`、`OneDragon-Launcher.exe`、cmd
+批处理这类现成脚本都能原样填进来（程序 + 参数照抄）。
 
 | 概念 | 实现 |
 |---|---|

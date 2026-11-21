@@ -2512,6 +2512,16 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   margin-top: 2px;
 }
 .set-maarow-foot .onb-hint { flex: 1 1 auto; font-size: 11.5px; }
+/* 账号卡第二行：配置文件（MAA 的 Configuration）+ 切号名，并排两栏。
+   窄屏折成一列，免得下拉里的档案名被挤成「...」 */
+.set-maarow-two {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: 0 12px;
+}
+.set-maarow-two .field { margin-bottom: 10px; }
+@media (max-width: 780px) {
+  .set-maarow-two { grid-template-columns: 1fr; }
+}
 .btn-solid.mini { height: 32px; padding: 0 14px; font-size: 12px; }
 
 /* 版本 */

@@ -3479,9 +3479,25 @@ def check_settings_panel(tmp):
     m = api.api_account_maa({}, {'file': 'smoke-acc.json',
                                  'patch': {'accountName': '181 5505'}})['maa']
     assert m['accountName'] == '181****5505', m
+    assert m['accountNameFrom'] == 'manual', '没写来源的按手填存'
+    # 前 3 位 + 后 4 位（2026-11-22 用户要求）：157 3635 / 157****3635 都归一
+    for raw in ('157 3635', '1573635', '157****3635'):
+        m = api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                     'patch': {'accountName': raw}})['maa']
+        assert m['accountName'] == '157****3635', (raw, m)
     m = api.api_account_maa({}, {'file': 'smoke-acc.json',
                                  'patch': {'accountName': ''}})['maa']
     assert m['accountName'] == '', '清空切号名是合法操作，不能拦'
+    # 配置文件：只记名字（不校验存在性——MAA 没装也能先存），来源跟着改
+    m = api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                 'patch': {'profile': ' moren ',
+                                           'accountName': '1573635',
+                                           'accountNameFrom': 'profile'}})['maa']
+    assert m['profile'] == 'moren' and m['accountNameFrom'] == 'profile', m
+    # 来源字段只认两个值，乱传一律清空（别把脏值写进账号文件）
+    m = api.api_account_maa({}, {'file': 'smoke-acc.json',
+                                 'patch': {'accountNameFrom': 'whatever'}})['maa']
+    assert m['accountNameFrom'] == '', m
     try:
         api.api_account_maa({}, {'file': 'smoke-acc.json',
                                  'patch': {'accountName': '冒烟'}})
@@ -3704,15 +3720,14 @@ def check_oper_train(tmp):
     assert (maaplan._subtask_label('Copilot@BattleQuickFormationRole-Caster')
             == '编队·按职业筛选')
 
-    # 8) 切号名唯一来源 = 账号绑定的 maa.accountName；**绝不读用户的 MAA
-    #    配置档案**（2026-11-18 用户口径：agent 模式跑临时配置=StartUp 任务
-    #    参数，不碰用户的 gui.new.json）。以前这里会退回读 MAA 当前档案的
-    #    AccountName / 纯数字档案名来猜——档案和账号对不上号，猜错切号名
-    #    MAA 会在账号列表里死找 4 分钟。昵称也绝不能顶——官服切号认手机号。
+    # 8) 切号名来源（2026-11-22 改）：没绑配置文件时**完全不碰**用户的 MAA
+    #    配置；绑了配置文件（用户点名的那份）才读它 StartUp 的 AccountName。
+    #    手填过的值（accountNameFrom=manual）优先，档案里的旧号码不许盖回去。
+    #    全程只读——`_save_cfg` 必须一次都没被调用。
     from core import maa as maa_mod
 
     def _forbidden(*a, **k):
-        raise AssertionError('不许读用户的 MAA 配置档案')
+        raise AssertionError('没绑配置文件时不许读用户的 MAA 配置')
 
     orig_load = maa_mod._load_cfg
     maa_mod._load_cfg = _forbidden
@@ -3724,7 +3739,35 @@ def check_oper_train(tmp):
             '账号绑定的切号名要能读到'
     finally:
         maa_mod._load_cfg = orig_load
-        accounts.save_maa_meta('smoke-acc.json', {'accountName': ''})
+
+    fake_cfg = {'Current': 'moren',
+                'Configurations': {'moren': {'TaskQueue': [
+                    {'TaskType': 'StartUp', 'AccountName': '157****3635',
+                     'AccountSwitchEnabled': True}]}}}
+
+    def _no_write(*a, **k):
+        raise AssertionError('读配置档案时不许写回用户的 gui.new.json')
+
+    orig_save = maa_mod._save_cfg
+    maa_mod._load_cfg = lambda *a, **k: fake_cfg
+    maa_mod._save_cfg = _no_write
+    try:
+        accounts.save_maa_meta('smoke-acc.json', {'profile': 'moren',
+                                                  'accountName': '5505',
+                                                  'accountNameFrom': 'profile'})
+        assert skills._account_name_tail('smoke-acc.json') == '157****3635', \
+            '选了配置文件就要按档案里的 AccountName 来'
+        # 用户在设置里手改过 → 以他填的为准
+        accounts.save_maa_meta('smoke-acc.json', {'accountName': '5505',
+                                                  'accountNameFrom': 'manual'})
+        assert skills._account_name_tail('smoke-acc.json') == '5505', \
+            '手填的切号名不能被档案里的旧号码盖回去'
+    finally:
+        maa_mod._load_cfg = orig_load
+        maa_mod._save_cfg = orig_save
+        accounts.save_maa_meta('smoke-acc.json',
+                               {'profile': '', 'accountName': '',
+                                'accountNameFrom': ''})
 
     # 9) Engine.wait 的启动宽限：AsstStart 异步生效，刚 start 完 AsstRunning
     #    还是 False——以前这里直接 return，把「还没开始跑」当「跑完」，
@@ -5022,6 +5065,105 @@ def check_scheduler(tmp):
 # ---------------------------------------------------------------- 入口
 
 
+def check_account_bind(tmp):
+    """B50：切号名绑定（配置文件优先 / 手填优先 / 助手存尾号）
+
+    2026-11-22 用户要求三件事，这里各钉一条：
+
+    ① 账号绑了 MAA 配置文件，切号名就从那份档案读（**只读**，不写回）；
+    ② 用户手改过的值（`accountNameFrom=manual`）优先，档案里的旧号码不许盖；
+    ③ 助手新增 `set_account_name`：用户报尾号（后 4 位或前 3 + 后 4）就存进
+       对应账号的设置，多账号时先问是哪个号。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import accounts, acctbind, acctname, agent, multiacct
+
+    _reset_config(tmp)
+    cfg = os.path.join(tmp, 'config')
+
+    def dump(name, obj):
+        with open(os.path.join(cfg, name), 'w', encoding='utf-8') as f:
+            json.dump(obj, f, ensure_ascii=False)
+
+    dump('大号.json', {'account': {'uid': '1', 'nickName': '大号',
+                                   'channelName': '官服', 'game': 'arknights'}})
+    dump('小号.json', {'account': {'uid': '2', 'nickName': '小号',
+                                   'channelName': '官服', 'game': 'arknights'}})
+
+    # 1) 尾号归一：后 4 位 / 前 3 + 后 4 / 掩码都收
+    for raw, want in (('5505', '5505'), ('1573635', '157****3635'),
+                      ('157 3635', '157****3635'), ('157****3635', '157****3635')):
+        assert acctname.check(raw, '官服')[0] == want, (raw, want)
+
+    # 2) 助手存尾号：只填一个账号时不用再问是哪个号
+    out = agent.run_tool('set_account_name', {'account': '大号',
+                                              'accountName': '157 3635'})
+    assert out.get('ok') and out['accountName'] == '157****3635', out
+    maa = accounts.get_account('大号.json')['maa']
+    assert maa['accountName'] == '157****3635', maa
+    assert maa['accountNameFrom'] == 'manual', '手填必须打 manual 标记'
+    # 官服填昵称要拦（拿昵称切号 = MAA 死找 4 分钟）
+    bad = agent.run_tool('set_account_name', {'account': '大号',
+                                             'accountName': '大号'})
+    assert bad.get('error'), bad
+    # 多个账号又没指定 → 让模型先问用户
+    ask = agent.run_tool('set_account_name', {'accountName': '5505'})
+    assert ask.get('need_info') == 'account' and len(ask['accounts']) == 2, ask
+
+    # 3) 配置文件优先：造一份 MAA 配置，账号绑上它，切号名跟着档案走
+    md = os.path.join(tmp, 'fakemaa')
+    os.makedirs(os.path.join(md, 'config'), exist_ok=True)
+    with open(os.path.join(md, 'config', 'gui.new.json'), 'w',
+              encoding='utf-8') as f:
+        json.dump({'Current': 'moren', 'Configurations': {
+            'moren': {'TaskQueue': [
+                {'$type': 'StartUpTask', 'TaskType': 'StartUp',
+                 'AccountName': '181****5505', 'AccountSwitchEnabled': True}]},
+            '136': {'TaskQueue': [
+                {'$type': 'StartUpTask', 'TaskType': 'StartUp',
+                 'AccountName': '136'}]},
+        }}, f, ensure_ascii=False)
+    accounts.save_maa_meta('大号.json', {'dir': md, 'profile': 'moren',
+                                         'accountName': '',
+                                         'accountNameFrom': 'profile'})
+    nm, src = acctbind.resolve('大号.json')
+    assert (nm, src) == ('181****5505', 'profile'), (nm, src)
+    # 助手看到的账号列表也要是生效值，否则模型还会再问一遍
+    lc = agent._tool_list_accounts({})
+    row = next(a for a in lc['accounts'] if a['file'] == '大号.json')
+    assert row['accountName'] == '181****5505' and row['maaProfile'] == 'moren', row
+    cand = next(c for c in multiacct.candidates() if c['file'] == '大号.json')
+    assert cand['accountName'] == '181****5505', cand
+
+    # 4) 手填优先：档案里是 181****5505，用户写 5505 就按 5505 跑
+    accounts.save_maa_meta('大号.json', {'accountName': '5505',
+                                         'accountNameFrom': 'manual'})
+    assert acctbind.resolve('大号.json')[0] == '5505'
+    # 档案被删 / 换了目录读不到：回落手填值，不抛
+    accounts.save_maa_meta('大号.json', {'dir': os.path.join(tmp, 'nope'),
+                                         'accountName': '5505',
+                                         'accountNameFrom': 'profile'})
+    assert acctbind.resolve('大号.json')[0] == '5505', '读不到档案要回落手填值'
+
+    # 5) 读档案绝不能写回用户的 gui.new.json
+    from core import maa as maa_mod
+
+    def _no_write(*a, **k):
+        raise AssertionError('解析切号名时不许写 MAA 配置')
+
+    orig_save = maa_mod._save_cfg
+    maa_mod._save_cfg = _no_write
+    try:
+        accounts.save_maa_meta('大号.json', {'dir': md, 'profile': '136',
+                                             'accountName': '',
+                                             'accountNameFrom': 'profile'})
+        assert acctbind.resolve('大号.json')[0] == '136'
+    finally:
+        maa_mod._save_cfg = orig_save
+        accounts.save_maa_meta('大号.json', {'profile': '', 'accountName': '',
+                                             'accountNameFrom': ''})
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5087,6 +5229,7 @@ def main():
         r.check('B47 卫戍协议（核心检测/版本目录扫描/状态兜底/MAA 连接默认值/选项清洗/核心补丁）', lambda: check_garrison(tmp))
         r.check('B48 干员替换（塞1←黍1：匹配/写入/干员组/不触发边界）', check_copilot_substitution)
         r.check('B49 定时任务（清洗/下次运行/链式串接/参数解析）', lambda: check_scheduler(tmp))
+        r.check('B50 切号名绑定（配置文件优先/手填优先/助手存尾号）', lambda: check_account_bind(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

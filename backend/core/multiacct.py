@@ -60,10 +60,21 @@ def candidates():
     终末地账号（``game != 'arknights'``）MAA 根本不管，混进来会让后面
     对着它的练度去找明日方舟作业，结果一片「全部打不了」。
     """
+    from . import acctbind
+
     out = []
     for row in accounts.list_accounts():
         if (row.get('game') or 'arknights') != 'arknights':
             continue
+        # 绑了配置文件的账号：切号名以那份档案里的为准（用户 2026-11-22 要求，
+        # 规则在 acctbind）。没绑就用手填的，别为此去读 MAA 配置——列表接口
+        # 每次启动都会走一遍，能省一次文件读取就省一次。
+        nm = row.get('maaAccountName') or ''
+        if row.get('maaProfile'):
+            try:
+                nm, _src = acctbind.resolve(row['file'])
+            except Exception:
+                pass
         out.append({
             'file': row['file'],
             'name': row.get('alias') or row.get('nickName') or row['file'],
@@ -71,7 +82,7 @@ def candidates():
             'channel': row.get('channelName') or '',
             'level': row.get('level'),
             'maaProfile': row.get('maaProfile') or '',
-            'accountName': row.get('maaAccountName') or '',
+            'accountName': nm,
             'maaDir': row.get('maaDir') or '',
             'progress': row.get('progress') or {},
         })
@@ -196,7 +207,11 @@ def plan(req):
         nm, why = acctname.check(names.get(c['file']) or '', c.get('channel'))
         reuse = ''
         if not nm:
-            # 没给名字就看 MAA 里有没有现成的档案对得上。
+            # 设置里绑过的直接用（手填的尾号 / 选了配置文件带出来的账号名）：
+            # candidates 给的已经是生效值，用户配过一次就不该再问（2026-11-22）
+            nm, _ = acctname.check(c.get('accountName') or '', c.get('channel'))
+        if not nm:
+            # 还没绑：看 MAA 里有没有现成的档案对得上。
             # 注意取的是档案里的 **AccountName**，不是档案名：`maaProfile`
             # 是 moren / 136 这种档案名，拿它当账号名写进 StartUp，MAA 切号
             # 必然失败（切号要的是登录界面那行 181****5505）。
@@ -210,8 +225,8 @@ def plan(req):
             missing.append({
                 'what': 'accountName', 'file': c['file'], 'name': c['name'],
                 'question': '账号「%s」（%s）的手机号后 4 位是多少？给这四位就行'
-                            '（如 5505，MAA 切号用的就是它）；'
-                            'B 服填游戏里显示的用户名。%s'
+                            '（如 5505）；前 3 位 + 后 4 位也行（如 157****3635）。'
+                            'MAA 切号用的就是它；B 服填游戏里显示的用户名。%s'
                             % (c['name'], c['channel'] or '未知渠道',
                                ('你给的「%s」%s。' % (names.get(c['file']), why))
                                if names.get(c['file']) and why else ''),

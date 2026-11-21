@@ -2718,27 +2718,37 @@ function openSettings() {
       ? '这一栏还没有终末地账号。用森空岛 token 同步时，token 绑了终末地角色就会自动出现在这里。'
       : '还没有账号。用左上角「添加账号」粘一个森空岛 token，或直接从 MAA 导入。'}</div>`;
 
+  // 每个账号的 MAA 绑定：第一行路径，第二行「配置文件 + 切号名」
+  // 配置文件 = MAA 的 Configuration（Default / 136 / 157 / moren 那些）。
+  // 选了它，切号名就从档案里「开始唤醒」的 AccountName 带出来；用户还能
+  // 手改（改过就以他填的为准）。**我们只读档案，不写回 MAA**。
   const maaRows = game => (S.accounts || []).filter(a => gameOf(a) === game).map(a => `
-    <div class="set-card set-maarow" data-file="${esc(a.file)}" data-game="${gameOf(a)}">
+    <div class="set-card set-maarow" data-file="${esc(a.file)}" data-game="${gameOf(a)}"
+         data-from="${esc(a.maaAccountNameFrom || '')}">
       <div class="set-maarow-head">
         <b>${esc(a.nickName)}</b>
         <span class="${/bilibili/i.test(a.channelName || '') ? 'acct-ch bili' : 'set-muted'}">${
           esc(a.channelName || '官服')}</span>
-        ${a.maaProfile ? `<span class="set-chip">档案 ${esc(a.maaProfile)}</span>` : ''}
+        ${a.maaProfile ? `<span class="set-chip">配置文件 ${esc(a.maaProfile)}</span>` : ''}
       </div>
-      <label class="field"><span>切号名（${
-        game === 'endfield' ? 'MAAEND 账号列表里显示的名字；接入后生效'
-          : '手机号后 4 位；agent 启动这个账号时写进 MAA「开始唤醒」的就是它'}）</span>
-        <input type="text" data-f="accountName" value="${esc(a.maaAccountName || '')}"
-               placeholder="${game === 'endfield' ? 'MAAEND 账号名' : '后 4 位，如 5505'}"
-               spellcheck="false" autocomplete="off"></label>
       <label class="field"><span>这个账号的 MAA 路径（留空 = 用上面的默认目录）</span>
         <div class="path-row">
           <input type="text" data-f="dir" value="${esc(a.maaDir || '')}" placeholder="${esc((game === 'endfield' ? s.maaEndDir : s.maaDir) || '沿用默认目录')}">
           <button class="btn-plain mini" data-act="pick">浏览</button>
           <button class="btn-plain mini" data-act="probe">检测</button>
-          ${game === 'endfield' ? '' : '<button class="btn-plain mini" data-act="profiles">读档案</button>'}
         </div></label>
+      ${game === 'endfield' ? `
+      <label class="field"><span>切号名（MAAEND 账号列表里显示的名字；接入后生效）</span>
+        <input type="text" data-f="accountName" value="${esc(a.maaAccountName || '')}"
+               placeholder="MAAEND 账号名" spellcheck="false" autocomplete="off"></label>` : `
+      <div class="set-maarow-two">
+        <label class="field"><span>配置文件（MAA 里那份档案）</span>
+          <select data-f="profile" data-pf="${esc(a.maaProfile || '')}"></select></label>
+        <label class="field"><span>切号名（选配置文件会自动带出，可手改）</span>
+          <input type="text" data-f="accountName" value="${esc(a.maaAccountName || '')}"
+                 placeholder="后 4 位如 5505，或 157****3635"
+                 spellcheck="false" autocomplete="off"></label>
+      </div>`}
       <div class="set-maarow-foot">
         <span class="onb-hint" data-state></span>
         <button class="btn-solid mini" data-act="save">保存</button>
@@ -2806,8 +2816,12 @@ function openSettings() {
             <div class="set-head">
               <h3>MAA 路径</h3>
               <p>每个账号可以绑自己的 MAA（包含 <code>MAA.exe</code> 的目录），没绑就用下面的默认目录。
-                <b>切号名</b>是 MAA「开始唤醒 → 账号切换」里要比对的那行：官服填手机号后 4 位（如 <code>5505</code>），
-                <em class="bili-word">bilibili服</em>填游戏内用户名。填错的代价是 MAA 在账号列表里死找、4 分钟超时后整轮挂机作废。</p>
+                第二行选一个 <b>配置文件</b>（MAA 里那份档案，如 <code>Default</code> / <code>moren</code>），
+                程序会从它的「开始唤醒」里读出<b>切号名</b>——官服是手机号（后 4 位
+                <code>5505</code>，或前 3 位 + 后 4 位 <code>157****3635</code>，
+                <em class="bili-word">bilibili服</em>是游戏内用户名），读出来还能手改。
+                <b>只读不写</b>：MAA 里那份档案我们一个字段都不动。填错的代价是 MAA
+                在账号列表里死找、4 分钟超时后整轮挂机作废。</p>
             </div>
             ${gameTabs()}
             <div class="gamepane active" data-gamepane="arknights">
@@ -2852,10 +2866,11 @@ function openSettings() {
           <div class="set-pane" data-pane="schedule">
             <div class="set-head">
               <h3>定时任务</h3>
-              <p>到点自动启动程序，支持<b>链式启动</b>（上一个程序退出后接着跑下一个）。三月七助手里的
-                <code>autostart-*.exe</code>、<code>OneDragon-Launcher.exe</code>、<code>cmd</code> 批处理
-                这类脚本可以原样搬过来：把「程序」和「参数」照抄即可。定时只在程序运行时生效；
-                要开机自启，请把本程序放进系统启动项。「通知」是在程序里弹提示，程序关着就收不到。</p>
+              <p>到点自动启动一个程序：<b>exe、bat、cmd 批处理</b>都行，参数照程序自己
+                的说明填。常见用法是定时跑挂机脚本、到点打开模拟器或别的工具；多条任务
+                还能<b>链式启动</b>——上一个程序退出后接着跑下一个。定时只在程序运行时
+                生效，要开机自启请把本程序放进系统启动项；「通知」是在程序里弹提示，
+                程序关着就收不到。</p>
             </div>
             <div class="sched-wrap">
               <div class="sched-head">
@@ -3063,7 +3078,7 @@ function openSettings() {
         tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === id));
         panes.forEach(p2 => p2.classList.toggle('active', p2.dataset.pane === id));
         if (id === 'accounts') fillVisibleTokens();
-        if (id === 'maa') suggestNames();
+        if (id === 'maa') autoFillMaa();
         if (id === 'schedule') {
           schedLoad();
           if (!_setSchedTimer) _setSchedTimer = setInterval(() => schedLoad(true), 5000);
@@ -3327,6 +3342,65 @@ function openSettings() {
         catch (e2) { ev.target.checked = !ev.target.checked; toast('保存失败：' + e2.message, 'err'); }
       });
 
+      /* ---------------- 每个账号的 MAA 绑定：配置文件 → 切号名 ----------------
+         用户 2026-11-22 的要求：MAA 路径第一行，配置文件 + 切号名第二行。
+         选了配置文件就从那份档案的「开始唤醒」里读 AccountName 带出来；手改过
+         就以他填的为准（accountNameFrom=manual）。MAA 的档案**只读不写**。 */
+      const pfCache = new Map();      // 目录（或账号）→ {profiles, current}
+
+      async function loadPfRows(card, force) {
+        const dirEl = $('[data-f="dir"]', card);
+        const dir = dirEl ? dirEl.value.trim() : '';
+        const key = (dir || card.dataset.file).toLowerCase();
+        if (!force && pfCache.has(key)) return pfCache.get(key);
+        const q = dir ? ('maaDir=' + encodeURIComponent(dir))
+                      : ('file=' + encodeURIComponent(card.dataset.file));
+        let d = { profiles: [], current: '' };
+        try { d = await api('/api/maa/profiles?' + q); }
+        catch (e2) { d = { profiles: [], current: '' }; }
+        pfCache.set(key, d);
+        return d;
+      }
+
+      async function paintPfSelect(card, force) {
+        const sel = $('[data-f="profile"]', card);
+        if (!sel) return null;
+        const cur = sel.value || sel.dataset.pf || '';
+        const d = await loadPfRows(card, force);
+        const rows = d.profiles || [];
+        const one = (v, label) =>
+          `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label)}</option>`;
+        let html = one('', '（不指定）');
+        html += rows.map(p2 => one(p2.name,
+          p2.accountName ? `${p2.name} · ${p2.accountName}` : p2.name)).join('');
+        // 档案被删/换目录时，原来选着的那个还得留在选项里，不然一刷新就丢值
+        if (cur && !rows.some(p2 => p2.name === cur)) html += one(cur, cur + '（MAA 里没找到）');
+        sel.innerHTML = html;
+        sel.dataset.count = String(rows.length);
+        return d;
+      }
+
+      /* 按选中的配置文件把切号名带出来（用户手选时用） */
+      async function usePfName(card) {
+        const sel = $('[data-f="profile"]', card);
+        const input = $('[data-f="accountName"]', card);
+        const state = $('[data-state]', card);
+        const name = sel ? sel.value : '';
+        if (!name) { card.dataset.from = ''; return; }
+        const d = await loadPfRows(card);
+        const hit = (d.profiles || []).find(p2 => p2.name === name);
+        const an = hit ? (hit.accountName || '') : '';
+        if (an) {
+          input.value = an;
+          card.dataset.from = 'profile';
+          state.className = 'onb-hint';
+          state.textContent = `已从配置文件「${name}」带出切号名 ${an}，点保存生效`;
+        } else {
+          state.className = 'onb-hint';
+          state.textContent = `配置文件「${name}」里没记账号名，切号名请自己填`;
+        }
+      }
+
       const onMaaRowClick = async ev => {
         const card = ev.target.closest('.set-maarow');
         const btn = ev.target.closest('[data-act]');
@@ -3335,16 +3409,16 @@ function openSettings() {
         const input = $('[data-f="dir"]', card);
         const nameInput = $('[data-f="accountName"]', card);
         const state = $('[data-state]', card);
+        const isEnd = card.dataset.game === 'endfield';
         if (btn.dataset.act === 'pick') { await pickFolder(input); return; }
-        if (btn.dataset.act === 'probe' || btn.dataset.act === 'profiles') {
-          if (btn.dataset.act === 'profiles' && card.dataset.game === 'endfield') return;
+        if (btn.dataset.act === 'probe') {
           const dir = input.value.trim()
-            || ((card.dataset.game === 'endfield' ? S.settings.maaEndDir : S.settings.maaDir) || '');
+            || ((isEnd ? S.settings.maaEndDir : S.settings.maaDir) || '');
           if (!dir) { state.className = 'onb-hint bad'; state.textContent = '先填目录（或设置默认目录）'; return; }
           state.className = 'onb-hint';
           state.textContent = '检测中…';
           try {
-            const kind = card.dataset.game === 'endfield' ? 'endfield' : 'arknights';
+            const kind = isEnd ? 'endfield' : 'arknights';
             const r = await api('/api/maa/probe?dir=' + encodeURIComponent(dir)
               + '&kind=' + encodeURIComponent(kind));
             if (!r.exeExists) {
@@ -3355,27 +3429,15 @@ function openSettings() {
               return;
             }
             state.className = 'onb-hint ok';
-            state.textContent = kind === 'endfield'
-              ? `✓ 找到 ${r.exeName || '主程序'}（任务链接入后生效）`
-              : `✓ MAA.exe 在，配置 ${r.profiles.length} 个`;
-            if (btn.dataset.act === 'profiles') {
-              const pf = await api('/api/maa/profiles?file=' + encodeURIComponent(file));
-              const rows = pf.profiles || [];
-              const acc = (S.accounts || []).find(x => x.file === file) || {};
-              const hit = rows.find(x => x.name === acc.maaProfile)
-                || rows.find(x => x.name === pf.current)
-                || (rows.length === 1 ? rows[0] : null);
-              if (hit && hit.accountName) {
-                nameInput.value = hit.accountName;
-                state.textContent = `✓ 从档案「${hit.name}」读到切号名 ${hit.accountName}，点保存生效`;
-              } else if (rows.length) {
-                toast('MAA 里有这些档案：' + rows.map(x => `${x.name}（${x.accountName || '空'}）`).join('、')
-                  + '，没敢替你猜，手动填一下切号名', 'warn', 7000);
-                state.textContent = '✓ 读到 ' + rows.length + ' 个档案，切号名请手动确认';
-              } else {
-                state.className = 'onb-hint bad';
-                state.textContent = '这个 MAA 里还没有配置档案';
-              }
+            if (isEnd) {
+              state.textContent = `✓ 找到 ${r.exeName || '主程序'}（任务链接入后生效）`;
+            } else {
+              // 顺手把配置文件下拉刷一遍：用户刚换了目录，列表得跟着变
+              pfCache.clear();
+              await paintPfSelect(card, true);
+              const sel = $('[data-f="profile"]', card);
+              const n = (sel && sel.dataset.count) || r.profiles.length || 0;
+              state.textContent = `✓ MAA.exe 在，配置文件 ${n} 个`;
             }
           } catch (e2) {
             state.className = 'onb-hint bad';
@@ -3387,12 +3449,21 @@ function openSettings() {
           btn.disabled = true;
           btn.textContent = '保存中…';
           try {
-            const patch = { dir: input.value.trim(), accountName: nameInput.value.trim() };
+            const patch = { dir: input.value.trim(),
+                            accountName: nameInput.value.trim() };
+            const sel = $('[data-f="profile"]', card);
+            if (sel) {
+              patch.profile = sel.value;
+              patch.accountNameFrom = card.dataset.from === 'manual' ? 'manual'
+                : (sel.value ? 'profile' : '');
+            }
             const r = await api('/api/account/maa', { file, patch });
             const row = (S.accounts || []).find(x => x.file === file);
             if (row) {
               row.maaDir = (r.maa || {}).dir || '';
+              row.maaProfile = (r.maa || {}).profile || '';
               row.maaAccountName = (r.maa || {}).accountName || '';
+              row.maaAccountNameFrom = (r.maa || {}).accountNameFrom || '';
             }
             state.className = 'onb-hint ok';
             state.textContent = '✓ 已保存';
@@ -3407,34 +3478,56 @@ function openSettings() {
           }
         }
       };
+      // 下拉/目录改值走 change，切号名手打走 input（两者都要冒到列表容器上）
+      const onMaaRowChange = async ev => {
+        const card = ev.target.closest('.set-maarow');
+        if (!card) return;
+        if (ev.target.matches('[data-f="profile"]')) { await usePfName(card); return; }
+        if (ev.target.matches('[data-f="dir"]')) {
+          pfCache.clear();
+          if ($('[data-f="profile"]', card)) await paintPfSelect(card, true);
+        }
+      };
+      const onMaaRowType = ev => {
+        const card = ev.target.closest('.set-maarow');
+        if (!card || !ev.target.matches('[data-f="accountName"]')) return;
+        // 手改过就打上 manual：下次不会被配置档案里的旧号码盖回去
+        card.dataset.from = ev.target.value.trim() ? 'manual' : '';
+      };
       ['set-maa-list', 'set-maa-end-list'].forEach(id => {
         const box = $('#' + id, el);
-        if (box) box.addEventListener('click', onMaaRowClick);
+        if (!box) return;
+        box.addEventListener('click', onMaaRowClick);
+        box.addEventListener('change', onMaaRowChange);
+        box.addEventListener('input', onMaaRowType);
       });
 
-      /* ---------------- MAA 绑定：没填切号名时给个提示 ----------------
-         切号名是唯一「必须问用户」的字段，猜错的代价又特别大（MAA 在账号
-         列表里死找、4 分钟超时）。所以不做自动填写，只在 MAA 档案里恰好
-         记着的时候提一句，让用户自己点「读档案」确认。 */
-      async function suggestNames() {
+      /* ---------------- 打开设置时：把配置文件列表读出来 ----------------
+         绑了档案的账号，切号名直接从档案里填上（只改输入框，点保存才落盘）；
+         没绑的只在档案恰好有账号名时提示一句——**不替用户猜**：两个游戏账号
+         对 MAA 里五份档案，猜错就是切号死循环 4 分钟。 */
+      async function autoFillMaa() {
         for (const card of $$('.set-maarow', el)) {
-          // 终末地的档案在 MAAEND 里，格式不同；问 MAA 只会给出方舟那边的名字
-          if (card.dataset.game === 'endfield') continue;
-          if (card.dataset.sug || $('[data-state]', card).textContent) continue;
-          if ($('[data-f="accountName"]', card).value.trim()) continue;
-          card.dataset.sug = '1';
-          try {
-            const pf = await api('/api/maa/profiles?file=' + encodeURIComponent(card.dataset.file));
-            const rows = pf.profiles || [];
-            const acc = (S.accounts || []).find(x => x.file === card.dataset.file) || {};
-            const hit = rows.find(x => x.name === acc.maaProfile)
-              || rows.find(x => x.name === pf.current);
-            if (hit && hit.accountName) {
-              const st = $('[data-state]', card);
-              st.className = 'onb-hint';
-              st.textContent = `MAA 档案「${hit.name}」里记着切号名 ${hit.accountName}，点「读档案」填入`;
-            }
-          } catch (e2) { /* 没装 MAA / 配置读不到：不打扰 */ }
+          if (card.dataset.game === 'endfield') continue;   // MAAEND 档案格式不同
+          if (card.dataset.pfTried) continue;
+          card.dataset.pfTried = '1';
+          const d = await paintPfSelect(card);
+          const sel = $('[data-f="profile"]', card);
+          const input = $('[data-f="accountName"]', card);
+          const state = $('[data-state]', card);
+          if (!sel || !input) continue;
+          if (sel.value) {
+            if (!input.value.trim()) await usePfName(card);
+            else if (!state.textContent) state.textContent = `已绑定配置文件「${sel.value}」`;
+            continue;
+          }
+          const cur = d && d.current;
+          const hit = cur ? (d.profiles || []).find(p2 => p2.name === cur) : null;
+          if (hit && hit.accountName && !input.value.trim()) {
+            state.className = 'onb-hint';
+            state.textContent = `MAA 当前档案「${hit.name}」里记着切号名 ${hit.accountName}，`
+              + '在上面的下拉里选它就能带出来';
+          }
         }
       }
 

@@ -520,6 +520,28 @@ def profiles(maa_dir=None):
     return {'current': cfg.get('Current') or '', 'profiles': out}
 
 
+def profile_account_name(profile, maa_dir=None):
+    """读某个配置档案「开始唤醒」里的 AccountName（只读，不改用户配置）
+
+    设置 → MAA 路径里选了「配置文件」之后，切号名就优先按这里的值来：
+    用户自己的档案（moren / 136 / 157…）本来就在 MAA 里配好了账号切换，
+    再让他手抄一遍纯属重复劳动。**只读**——写回用户的档案是另一条路
+    （``set_tasklist`` / ``apply_plan``），这里一个字段都不许动。
+
+    读不到（MAA 没装、档案被删、配置坏）就返回空串，调用方回落手填值。
+    """
+    name = str(profile or '').strip()
+    if not name:
+        return ''
+    cfg = _load_cfg(maa_dir)
+    conf = (cfg.get('Configurations') or {}).get(name)
+    if not isinstance(conf, dict):
+        return ''
+    su = next((t for t in (conf.get('TaskQueue') or [])
+               if isinstance(t, dict) and t.get('TaskType') == 'StartUp'), None)
+    return str(((su or {}).get('AccountName') or '')).strip()
+
+
 def tasklist(profile=None, maa_dir=None):
     cfg = _load_cfg(maa_dir)
     profile = profile or cfg.get('Current') or ''
