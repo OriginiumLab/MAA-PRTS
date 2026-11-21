@@ -4258,8 +4258,8 @@ def check_battle_retry(tmp):
 def check_event_nav(tmp):
     """B44：当期活动导航 + 翻车重挂前点结算页 + 关卡名单核对
 
-    ① 当期活动表带有效期（TL 到 2026-11-25），过期只提示不失效
-    ② 用户说「最新活动 / 活动名」能落到真实代号（TL-1）
+    ① 当期活动表带有效期（OS 到 2026-12-02，TL 只剩商店到 11-28），过期只提示不失效
+    ② 用户说「最新活动 / 活动名」能落到真实代号（OS-1；已结束的 TL 排后面）
     ③ 导航模板都在包里（缺了就只能靠兜底坐标）
     ④ goto_stage_list 对当期活动先走 eventnav，不再点老的活动大图
     ⑤ 翻车重挂前点一下结算页（MAA 自己的 ClickCorner 位置）回关卡列表
@@ -4271,35 +4271,41 @@ def check_event_nav(tmp):
     from core import eventnav, maaplan, skills, stagenav
 
     # ① 有效期
-    assert eventnav.has('TL-EX-1') and not eventnav.has('SV-EX-1')
-    assert not eventnav.is_expired('TL', datetime.date(2026, 11, 19))
-    assert eventnav.is_expired('TL', datetime.date(2026, 11, 26))
-    act = eventnav.active(datetime.date(2026, 11, 19))
-    assert any(r['prefix'] == 'TL' and r['until'] == '2026-11-25' for r in act), act
+    assert eventnav.has('OS-EX-1') and not eventnav.has('SV-EX-1')
+    assert not eventnav.is_expired('OS', datetime.date(2026, 11, 22))
+    assert eventnav.is_expired('OS', datetime.date(2026, 12, 3))
+    assert not eventnav.is_expired('TL', datetime.date(2026, 11, 27))
+    assert eventnav.is_expired('TL', datetime.date(2026, 11, 29))
+    act = eventnav.active(datetime.date(2026, 11, 22))
+    assert any(r['prefix'] == 'OS' and r['until'] == '2026-12-02' for r in act), act
+    assert act[0]['prefix'] == 'OS', '已结束的 TL 要排在正在开的 OS 后面'
     assert not any(r['prefix'] == 'TL'
                    for r in eventnav.active(datetime.date(2026, 12, 1)))
 
     # ② 指代 → 真实代号
-    assert eventnav.match_name('最新活动') == 'TL-1'
-    assert eventnav.match_name('当期活动') == 'TL-1'
+    assert eventnav.match_name('最新活动') == 'OS-1'
+    assert eventnav.match_name('当期活动') == 'OS-1'
+    assert eventnav.match_name('雪山降临') == 'OS-1'
     assert eventnav.match_name('时间啊，向前！') == 'TL-1'
     assert eventnav.match_name('时间啊向前') == 'TL-1'
     assert eventnav.match_name('覆潮之下') == ''
-    assert skills.norm_stage('最新活动')[0] == 'TL-1'
+    assert skills.norm_stage('最新活动')[0] == 'OS-1'
     assert skills.norm_stage('SV-EX-1')[0] == 'SV-EX-1'
 
-    # ③ 模板齐全 + 分区结构（基础 / EX / S 都要有兜底坐标和识别区域）
-    ent = eventnav.ENTRIES['TL']
-    specs = [ent['entry']] + list(ent['zones'].values())
+    # ③ 模板齐全 + 分区结构（OS 是当期复刻活动：三个分区 + 三个工具入口 + 领奖按钮）
+    ent = eventnav.ENTRIES['OS']
+    specs = ([ent['entry'], ent['claim']] + list(ent['zones'].values())
+             + list(ent['tools'].values()))
     for s in specs:
         p = eventnav._tpl_path(s['tpl'])
         assert p and os.path.isfile(p), s
     assert set(ent['zones']) == {'base', 'ex', 's'}, ent['zones']
     for k, v in ent['zones'].items():
         assert len(v['tap']) == 2 and len(v['roi']) == 4, (k, v)
-    # ROI 只框住目标按钮：EX 和 S 的识别区域不能重叠到互相抢
-    assert ent['zones']['ex']['roi'][1] + ent['zones']['ex']['roi'][3] \
-        <= ent['zones']['s']['roi'][1], ent['zones']
+    # 活动结束后 TL 只留商店：分区关掉，别让导航到地图上才发现没按钮
+    tl = eventnav.ENTRIES['TL']
+    assert tl.get('closed') and not tl['zones'], tl
+    assert set(tl['tools']) == {'shop'}, tl['tools']
 
     # ④ 当期活动先走 eventnav
     called = []
@@ -4517,16 +4523,17 @@ def check_maa_tool(tmp):
 
     from core import eventnav, maaplan, maatools, skills
 
-    # ① 模板 + 结构
-    ent = eventnav.ENTRIES['TL']
-    assert set(ent['tools']) == {'minigame', 'shop'}, ent['tools']
+    # ① 模板 + 结构（OS 的三个入口：小游戏 / 商店 / 活动奖励）
+    ent = eventnav.ENTRIES['OS']
+    assert set(ent['tools']) == {'minigame', 'shop', 'reward'}, ent['tools']
     for k, v in ent['tools'].items():
         p = eventnav._tpl_path(v['tpl'])
         assert p and os.path.isfile(p), (k, v['tpl'])
         assert len(v['tap']) == 2 and len(v['roi']) == 4, (k, v)
-    # 小游戏在左上、商店在右上，识别区域不能互相盖住
+    # 小游戏在右上、商店在左侧，识别区域不能互相盖住（任一方向分开即可）
     a, b = ent['tools']['minigame']['roi'], ent['tools']['shop']['roi']
-    assert a[0] + a[2] <= b[0], (a, b)
+    assert (a[0] + a[2] <= b[0] or b[0] + b[2] <= a[0]
+            or a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1]), (a, b)
 
     # ② run_tool：先到活动地图，再点入口
     calls = []
@@ -4549,8 +4556,8 @@ def check_maa_tool(tmp):
     try:
         ok, why = eventnav.run_tool(Shot(), 'minigame', log=lambda *_: None)
         assert ok and why, (ok, why)
-        assert calls[0] == ('map', 'TL'), calls
-        assert calls[1][0] == 'tap' and '战时新闻委员会' in calls[1][1], calls
+        assert calls[0] == ('map', 'OS'), calls
+        assert calls[1][0] == 'tap' and '喀兰贸易' in calls[1][1], calls
         ok2, _ = eventnav.run_tool(Shot(), 'shop', log=lambda *_: None)
         assert ok2
         # 没配入口要说清楚，而不是默默点到别的地方
@@ -5164,6 +5171,47 @@ def check_account_bind(tmp):
                                              'accountNameFrom': ''})
 
 
+def check_event_os(tmp):
+    """B51 复刻活动 OS + TL 收尾
+
+    用户 2026-11-22 的口径：TL 只剩商店（关卡和小游戏入口都关了），OS 是当期
+    复刻活动，导航要能从「终端页横幅」进地图并点齐六个入口。这里只查数据与
+    模板是否齐、指代是否落到 OS——真实点击要模拟器，冒烟不碰。
+    """
+    from core import eventnav, resources
+
+    os_ent = eventnav.ENTRIES.get('OS') or {}
+    assert os_ent.get('reprint') is True, 'OS 要标成复刻（前端挂「复刻」、助手问突袭都靠它）'
+    assert set(os_ent.get('zones') or {}) == {'base', 'ex', 's'}, os_ent.get('zones')
+    assert set(os_ent.get('tools') or {}) == {'minigame', 'shop', 'reward'}, \
+        os_ent.get('tools')
+    assert (os_ent.get('claim') or {}).get('tpl'), '活动奖励页少了「一键领取」的按钮模板'
+
+    # 模板文件得都在（打包漏文件时这里当场暴露）
+    specs = [os_ent.get('entry'), os_ent.get('claim')]
+    specs += list((os_ent.get('zones') or {}).values())
+    specs += list((os_ent.get('tools') or {}).values())
+    for spec in specs:
+        tpl = (spec or {}).get('tpl') or ''
+        p = eventnav._tpl_path(tpl)
+        assert p and os.path.isfile(p), '缺活动导航模板：%s' % tpl
+
+    tl = eventnav.ENTRIES['TL']
+    assert tl.get('closed') is True, 'TL 已结束，要标 closed'
+    assert not (tl.get('zones') or {}), 'TL 的关卡分区要关掉（点了也进不去）'
+    assert set(tl.get('tools') or {}) == {'shop'}, 'TL 只留商店入口'
+    ok, why = eventnav.run(None, 'TL-5')
+    assert not ok and '结束' in why, why
+
+    assert eventnav.match_name('雪山降临') == 'OS-1', '活动名要能对到 OS'
+    assert eventnav.match_name('最新活动') == 'OS-1', '「最新活动」要给正在开的 OS，不是已结束的 TL'
+    assert eventnav.active()[0]['prefix'] == 'OS', 'active() 里已结束的活动要排后面'
+
+    rows = {r['id']: r for r in resources.activity_list(40)}
+    assert rows.get('act46side', {}).get('reprint') is True, '资源库活动列表没标复刻'
+    assert rows.get('act55side', {}).get('reprint') is False, 'TL 不该被标成复刻'
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5230,6 +5278,7 @@ def main():
         r.check('B48 干员替换（塞1←黍1：匹配/写入/干员组/不触发边界）', check_copilot_substitution)
         r.check('B49 定时任务（清洗/下次运行/链式串接/参数解析）', lambda: check_scheduler(tmp))
         r.check('B50 切号名绑定（配置文件优先/手填优先/助手存尾号）', lambda: check_account_bind(tmp))
+        r.check('B51 复刻活动 OS + TL 收尾（只留商店/复刻标记/最新活动指向 OS）', lambda: check_event_os(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

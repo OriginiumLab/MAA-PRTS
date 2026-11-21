@@ -198,13 +198,14 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
 
 ### B46 牛杂小工具（2026-11-19）
 
-两个入口（战时新闻委员会小游戏 / 活动商店）都长在当期活动地图上，点进去之后
-交给 MAA 的 `Custom` 任务。测试不连模拟器，全部打桩：
+入口（战时新闻委员会小游戏 / 活动商店）都长在当期活动地图上，点进去之后
+交给 MAA 的 `Custom` 任务。测试不连模拟器，全部打桩。2026-11-22 起用 OS
+（三个入口：喀兰贸易技术研发部 / 观测站后勤处 / 神谕谜题）当样本：
 
-- 模板：`TL_mini.png` / `TL_shop.png` 都在包里，`roi` + `tap` 齐全，
-  两个识别区域不能互相盖住（小游戏在左上、商店在右上）
+- 模板：`OS_mini.png` / `OS_shop.png` / `OS_reward.png` 都在包里，`roi` + `tap`
+  齐全，识别区域不能互相盖住（小游戏在右上、商店在左侧）
 - `run_tool`：先 `_to_map` 到活动地图，再点 `tools` 里配的节点；日志里带的
-  是节点的中文名（「战时新闻委员会」）；没配的入口要明确报错，不能乱点
+  是节点的中文名（「喀兰贸易技术研发部」）；没配的入口要明确报错，不能乱点
 - 名字：中文名 / 别名（「小游戏」「商店」）/ 键 都能解析，认不出抛错
 - **黑名单只能挂在 `params.event_shop.blacklist`**：顶层出现 `blacklist`、
   空数组、或元素不是字符串，都会被 MaaCore 静默忽略（等于买光无限池），
@@ -232,6 +233,21 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
 - 读不到档案（目录被删/档案没建）→ 回落手填值，不抛
 - 只读不写：`maa._save_cfg` mock 成「一调用就炸」，解析全程不许写用户的
   `gui.new.json`
+
+### B51 复刻活动 OS + TL 收尾（2026-11-22）
+
+用户这一天给了 OS（雪山降临1101，复刻）整套导航截图，同时要求 TL 结束之后
+只留商店。这条用例只查数据和模板（真点要模拟器）：
+
+- OS 标了 `reprint`，`zones` = base/ex/s，`tools` = minigame/shop/reward，
+  还有 `claim`（奖励页的「一键领取」）
+- OS 的九个模板（entry / z3 个分区 / 三个工具 / claim）文件都在包里——
+  打包漏一张，这里当场红
+- TL：`closed=True`、`zones` 空、`tools` 只剩 shop；`run(None,'TL-5')` 要在
+  导航之前就返回「已经结束了」，不能白跑一趟地图
+- 指代：「雪山降临」→ OS-1；「最新活动」→ OS-1（已结束的 TL 排后面）；
+  `active()[0]` 是 OS
+- 资源库：`activity_list()` 里 `act46side.reprint=True`、`act55side` 是 False
 
 ## 什么时候跑
 

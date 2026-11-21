@@ -925,17 +925,14 @@ function renderQuick() {
   // 顺序由后端给：进行中的活动在最前，其次按开始时间倒序。
   // 这里不再按编号重排，否则一堆 NEW 会把当前活动挤到滚动区外面去。
   const acts = (S.activities || []);
+  // 复刻活动钉在「悖论模拟」后面：资源库里它按原版的开始时间排序，早就被挤到
+  // 十几条之外了，但它才是当期要刷的（用户 2026-11-22 要求 OS 排第二位）。
+  const rerun = acts.filter(a => a.reprint);
+  const rest = acts.filter(a => !a.reprint);
 
   let html = '<span class="quick-label">快捷</span>' + paradoxChip();
-  acts.slice(0, 12).forEach(a => {
-    const isNew = news.indexOf(a.id) >= 0;
-    html += `<button class="chip${isNew ? ' is-new' : ''}" data-q="${esc(a.id)}"
-      title="${esc(a.name)}${a.prefix ? ' · ' + esc(a.prefix) : ''}（${a.count} 关）">
-      <span class="chip-name">${esc(a.name || a.id)}</span>
-      ${a.prefix ? `<em class="chip-code">${esc(a.prefix)}</em>` : ''}
-      ${isNew ? '<i class="chip-new">NEW</i>' : ''}
-    </button>`;
-  });
+  rerun.forEach(a => { html += actChip(a, news); });
+  rest.slice(0, 12).forEach(a => { html += actChip(a, news); });
   row.innerHTML = html;
   $$('#quick-row .chip[data-q]').forEach(c => c.addEventListener('click', () => {
     $('#search-input').value = c.dataset.q;
@@ -943,6 +940,18 @@ function renderQuick() {
   }));
   const px = $('#chip-paradox');
   if (px) px.addEventListener('click', openParadox);
+}
+
+/* 一个活动 chip：名字 + 代号字母（+ 复刻标记 / NEW） */
+function actChip(a, news) {
+  const isNew = news.indexOf(a.id) >= 0;
+  return `<button class="chip${isNew ? ' is-new' : ''}" data-q="${esc(a.id)}"
+    title="${esc(a.name)}${a.prefix ? ' · ' + esc(a.prefix) : ''}（${a.count} 关）">
+    <span class="chip-name">${esc(a.name || a.id)}</span>
+    ${a.prefix ? `<em class="chip-code">${esc(a.prefix)}</em>` : ''}
+    ${a.reprint ? '<i class="chip-rerun" title="复刻活动：去年打过的话，今年突袭没有首通奖励"><b>复</b><b>刻</b></i>' : ''}
+    ${isNew ? '<i class="chip-new">NEW</i>' : ''}
+  </button>`;
 }
 
 /* ------------------------------------------------------------ 悖论模拟
@@ -1390,19 +1399,8 @@ function bindOpCards(root, ops, variant) {
   });
 }
 
-// 结果区顶部的剧情关提示：这一段里还有几个剧情关，挂到那里会停。
-// MAA 的关卡导航是「关卡列表内右滑找关卡名」的局部搜索，一旦停在剧情界面
-// 就不认识任何按钮，只能等重试耗尽然后整队终止——提前说比让用户猜有用
-function storyTipHtml(d) {
-  const list = d.stories || [];
-  if (!list.length) return '';
-  const codes = list.map(s => s.code).filter(Boolean);
-  return `<div class="story-tip">
-    <span class="badge story">剧情</span>
-    <span>本段还有 ${list.length} 个剧情关${codes.length ? '：' + codes.map(esc).join('、') : ''}</span>
-    <em>挂机会停在这里，需要手动继续</em>
-  </div>`;
-}
+// 结果区顶部的剧情关提示已经去掉（用户 2026-11-22：这一条看着碍事）。
+// 后端 ``d.stories`` 还留着，助手那边的 note 和「剧情关」卡片仍然用它。
 
 function renderResult(d) {
   // 顺手学作者 id → 昵称：作者黑名单弹窗显示名字靠这个缓存
@@ -1427,8 +1425,6 @@ function renderResult(d) {
     box.innerHTML = '<div class="empty-state"><h3>没有结果</h3><p>换个关卡代号试试，例如 TL-10 或 act55side</p></div>';
     return;
   }
-  const tip = storyTipHtml(d);
-
   if (d.stages.length === 1) {
     const s = d.stages[0];
     const ops = s.ops || [];
@@ -1447,10 +1443,10 @@ function renderResult(d) {
         </div>
       </div>`;
     if (!ops.length) {
-      box.innerHTML = tip + head + '<div class="empty-state"><h3>这个关卡还没有作业</h3><p>作业站上暂时没人上传，换个关卡吧</p></div>';
+      box.innerHTML = head + '<div class="empty-state"><h3>这个关卡还没有作业</h3><p>作业站上暂时没人上传，换个关卡吧</p></div>';
       return;
     }
-    box.innerHTML = tip + head + '<div class="ops-grid">' +
+    box.innerHTML = head + '<div class="ops-grid">' +
       ops.map((op, i) => opCard(op, {
         best: i === 0 && op.mode !== 'blocked' && op.mode !== 'train',
         inBasket: inBasket(op.id, s.stage.variant),
@@ -1538,7 +1534,7 @@ function renderResult(d) {
       </div>`;
   }).join('');
 
-  box.innerHTML = tip + head + '<div class="stage-list">' + rows + '</div>';
+  box.innerHTML = head + '<div class="stage-list">' + rows + '</div>';
 
   const allOps = [];
   d.stages.forEach(s => (s.ops || []).forEach(o => allOps.push(o)));

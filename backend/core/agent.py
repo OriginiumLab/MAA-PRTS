@@ -441,7 +441,8 @@ TOOLS = [
            'raid': {'type': 'string', 'enum': ['auto', 'both', 'normal'],
                     'description': '没写 @ 后缀的关怎么打：auto（默认）=有突袭'
                                    '作业就只打突袭；both=普通+突袭都打（普通还没'
-                                   '通关时用）；normal=只打普通（刷材料）。主线'
+                                   '通关时用）；normal=只打普通（刷材料）。复刻活动'
+                                   '用户说去年打过、不要突袭时传 normal。主线'
                                    '磨难/险地不是突袭，不受这个参数影响'},
            'ops': {'type': 'array',
                    'description': '指定用哪一份作业（用户点名「用 41624 那份」'
@@ -694,7 +695,8 @@ def _tool_list_activities(args):
     n = max(1, min(40, int(args.get('limit') or 12)))
     rows = resources.activity_list(n) or []
     out = {'activities': [{'name': r.get('name'), 'prefix': r.get('prefix'),
-                           'stages': r.get('count') or r.get('stages')}
+                           'stages': r.get('count') or r.get('stages'),
+                           'reprint': bool(r.get('reprint'))}
                           for r in rows]}
     # 当期活动（我们写过导航的那几个，带有效期）：用户说「最新活动」时用
     # 这里的 prefix，别自己猜代号（2026-11-19 用户要求）
@@ -705,8 +707,11 @@ def _tool_list_activities(args):
             out['current'] = cur
             out['currentHint'] = ('current 是**当期还在有效期**的活动（我们写过'
                                   '导航），用户说「最新活动 / 当期活动」就用它的 '
-                                  'stage（如 TL-1），EX / S 关分别是 TL-EX-1 / '
-                                  'TL-S-1')
+                                  'stage（如 OS-1），EX / S 关分别是 OS-EX-1 / '
+                                  'OS-S-1。reprint=true 的是**复刻活动**：用户要刷'
+                                  '它的 EX / S 时，先问「要不要连突袭一起打」和'
+                                  '「去年打过吗」——去年打过的话突袭没有首通奖励，'
+                                  '默认只排普通（@normal）')
     except Exception:
         pass
     return out
@@ -1736,6 +1741,12 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
   同一次计划里可以逐关分开写：``["SV-EX-1@raid", "SV-EX-6@both"]``。
   只刷材料写 ``@normal`` 或 raid=normal。磨难/险地是主线独立难度，不用后缀。
   **不要**跟用户说「突袭打不了」——作业站有突袭作业就能排。
+- **复刻活动的 EX / S：先把突袭问清楚**（用户 2026-11-22 要求）：list_activities
+  里 `reprint: true`（现在 OS = 雪山降临1101）或活动导航标了复刻的，用户说要刷
+  它的 EX / S 时，**先问两句**：「要不要连突袭一起打」「去年这个活动打过吗」。
+  去年打过 → 突袭的首通奖励已经领过，今年再打只多花理智，**默认不加**；用户说
+  不用突袭，就逐关写 `@normal`（或 raid=normal），排进作业集的别出现突袭行。
+  用户明确要打，再按 `@raid` / `@both` 排。「去年打过」只影响奖励，不影响能不能打。
 - **换作业要真的换**：用户说「用 41624 那份」「换成令的单核」时，先 find_ops
   拿到 copilotId，再调 skill_fight 时用 ops=[{stage, copilotId}] 钉住。只把
   文案改成"已换"是没用的——不传 ops 就会重新搜索，排序又挑回原来那份。

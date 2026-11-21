@@ -3,23 +3,28 @@
 
 为什么单独写一段（2026-11-19 用户逐屏标注的步骤）：当期活动的入口已经不是
 ``stagenav.goto_stage_list`` 里那条「主界面活动大图 → 主题页 → 右下区域列表」
-了。新活动的入口在**终端页的活动提示条**上，进去是散点式活动地图，分区靠
-关卡列表右下角那排「区域名」按钮切换：
+了。新活动的入口在**终端页的活动提示条 / 活动卡片**上，进去是散点式活动地图，
+分区靠地图上的节点图标切换：
 
     任意界面 --底部第1个tab「终端」--> 主界面
-    主界面   --固定位置点「终端」大卡---> 终端页（有活动提示条 + 黄钻石进度）
-    终端页   --活动提示条（区域+图像识别）-> 活动地图（约 5 秒过场动画）
-    活动地图 --区域节点（残照终尽）------> 普通关卡界面（基础区）
-    关卡列表 --右下区域按钮（长冬初青）--> EX 关卡界面
-    关卡界面 --右下区域按钮（世纪之春）--> S 关卡界面
+    主界面   --固定位置点「终端」大卡---> 终端页
+    终端页   --左下横幅（当期活动）-----> 活动主页（约 5 秒过场动画）
+    终端页   --ATTENTION 区活动卡片-----> 活动地图（已结束的旧活动走这条）
+    活动主页 --节点（圣巡之旅）--------> 普通关卡界面（基础区）
+    活动主页 --节点（变革之路）--------> EX 关卡界面
+    活动主页 --节点（喀兰之心）--------> S 关卡界面
 
-到关卡列表就不用管了：Copilot 的 ``ClickStageName`` 会 OCR 认出 ``TL-EX-1``
+到关卡列表就不用管了：Copilot 的 ``ClickStageName`` 会 OCR 认出 ``OS-EX-1``
 点进去开打（``stagenav`` 顶部注释里写过这条）。
 
-**为什么模板识别 + 坐标兜底**：这排区域按钮在不同界面里的高度不一样（用户
-2026-11-19 的截图里 长冬初青 在 1280 口径 y≈573，世纪之春 在 y≈662，差 90px），
-活动换版整排还会挪，所以坐标只当兜底，主判据是模板匹配（用户给的红框就是
-「区域 + 图像识别」）。识别不到就按标定坐标点，并在日志里说清楚是兜底。
+**两种入口并存**（2026-11-22 用户实测）：当期活动在终端页左下角的横幅上
+（``<雪山降临1101>活动已开放``）；活动结束之后横幅会被下一个活动占走，旧活动
+退到 ATTENTION 区第二格卡片、状态显示「作战已结束」，点卡片照样能进地图——
+但地图上关卡分区已经关了，只剩商店。所以``closed`` 的活动只保留 ``tools``。
+
+**为什么模板识别 + 坐标兜底**：这排节点在不同界面里的高度不一样，活动换版整排
+还会挪，所以坐标只当兜底，主判据是模板匹配（用户给的红框就是「区域 + 图像
+识别」）。识别不到就按标定坐标点，并在日志里说清楚是兜底。
 
 **数据在 ``ENTRIES`` 里，一条活动一项，老的别删**：活动会复刻，复刻活动 UI
 不变、模板还能用（只是分区可能重排，所以日志里会提示过期）。``until`` 是
@@ -29,8 +34,8 @@
 ``config/navtpl/events/`` 同名文件优先，升级不覆盖）。加一条新活动：
 
 1. 用户给几张带红框的截图 + 步骤；
-2. 从截图里把按钮抠出来存成 ``<前缀>_z1/z2/z3.png``（1920 口径原样抠，红框
-   往里缩 6~8px，别把红线抠进去）；
+2. 从截图里把按钮抠出来存成 ``<前缀>_z1/z2/z3.png``（1920 口径，红框往里缩
+   6~12px，别把红线抠进去）；
 3. 在 ``ENTRIES`` 里加一项：``until`` 写活动结束日，``zones`` 按基础 / EX / S
    写 ``tpl`` + 兜底 ``tap`` + 识别区域 ``roi``；
 4. 跑 ``python tools/zone_calib.py`` 之外不需要任何标定——模板就是标定。
@@ -50,37 +55,68 @@ from . import stagenav
 ENTRIES = {
     'TL': {
         'name': '时间啊，向前！',
-        'until': '2026-11-25',          # 用户 2026-11-19 给的结束日
-        'wrote': '2026-11-19',
-        'entry': {                      # 终端页上的活动提示条（黄钻石进度行）
-            'tpl': '_entry_track.png',
-            'roi': [80, 500, 300, 130],
-            'tap': [218, 551],
-            # 认出来的是提示条下半截的黄钻石行，真正要点的是上面那行文字
-            # （用户红框画在文字上），所以往上挪 51 再点
-            'offset': [0, -51],
-            'wait': 5.0,                # 点完有过场动画，用户实测 5 秒
+        'until': '2026-11-28',          # 关卡已结束，商店还开着（用户 2026-11-22 截图）
+        'wrote': '2026-11-22',
+        # 活动已结束（2026-11-22 用户口径）：关卡分区和小游戏入口都不可用了，
+        # 只留商店。入口也不再是左下角的横幅——那个横幅现在归当期活动，TL 的
+        # 卡片退到终端页 ATTENTION 区第二格，点它才进活动地图。
+        'closed': True,
+        'entry': {
+            'tpl': 'TL_card.png',
+            'roi': [620, 300, 260, 150],
+            'tap': [753, 371],
+            'wait': 5.0,
         },
-        'zones': {
-            'base': {'tpl': 'TL_z1.png', 'label': '残照终尽',
-                     'roi': [380, 540, 320, 180], 'tap': [532, 628]},
-            'ex': {'tpl': 'TL_z2.png', 'label': '长冬初青',
-                   'roi': [960, 495, 320, 135], 'tap': [1110, 547]},
-            's': {'tpl': 'TL_z3.png', 'label': '世纪之春',
-                  'roi': [960, 630, 320, 90], 'tap': [1141, 662]},
-        },
-        # 活动地图上除了关卡分区，还有两个「入口节点」，和分区在同一屏，
-        # 但点进去不是关卡列表：小游戏（战时新闻委员会）和活动商店。
-        # 这两项由 MAA 的 Custom 任务接手，所以导航只负责把界面点到门口
-        # （见 maatools.py 顶部注释）。
+        'zones': {},                    # 关卡导航关闭（活动已结束）
+        # 活动地图上除了关卡分区，还有「入口节点」，点进去不是关卡列表：
+        # 小游戏和活动商店。这两项由 MAA 的 Custom 任务接手，所以导航只负责
+        # 把界面点到门口（见 maatools.py 顶部注释）。
         'tools': {
-            'minigame': {'tpl': 'TL_mini.png', 'label': '战时新闻委员会',
-                         'roi': [40, 165, 200, 130], 'tap': [127, 227],
-                         'wait': 3.0},
-            'shop': {'tpl': 'TL_shop.png', 'label': '炮火所掩埋的',
+            # 名字是用户 2026-11-22 截图里的写法（之前标成「炮火所掩埋的」）
+            'shop': {'tpl': 'TL_shop.png', 'label': '熄火所掩埋的',
                      'roi': [880, 120, 200, 130], 'tap': [975, 185],
                      'wait': 3.0},
         },
+    },
+    'OS': {
+        'name': '雪山降临1101',
+        'until': '2026-12-02',          # 截图「作战结束时间 2026/12/02 03:59」
+        'wrote': '2026-11-22',
+        # 复刻活动：去年打过的号今年没有首通奖励，突袭那档要问用户打不打
+        # （见 agent 提示词里的「复刻活动突袭」）。前端快捷栏也靠这个标「复刻」。
+        'reprint': True,
+        'entry': {                      # 终端页左下角的活动横幅（<雪山降临1101>活动已开放）
+            'tpl': 'OS_entry.png',
+            'roi': [40, 500, 330, 120],
+            'tap': [237, 556],
+            'wait': 5.0,
+        },
+        # 点横幅进的是散点式活动主页：六个入口绕成一圈，分区和工具入口长一个样，
+        # 所以每个都要单独的模板 + ROI（单看模板容易认错到隔壁去）。
+        'zones': {
+            'base': {'tpl': 'OS_z1.png', 'label': '圣巡之旅',
+                     'roi': [700, 470, 260, 230], 'tap': [922, 598]},
+            'ex': {'tpl': 'OS_z2.png', 'label': '变革之路',
+                   'roi': [860, 450, 250, 220], 'tap': [1057, 567]},
+            's': {'tpl': 'OS_z3.png', 'label': '喀兰之心',
+                  'roi': [980, 380, 200, 210], 'tap': [1173, 477]},
+        },
+        'tools': {
+            'minigame': {'tpl': 'OS_mini.png', 'label': '喀兰贸易技术研发部',
+                         'roi': [950, 110, 240, 230], 'tap': [1169, 220],
+                         'wait': 3.0},
+            'shop': {'tpl': 'OS_shop.png', 'label': '观测站后勤处',
+                     'roi': [30, 370, 240, 190], 'tap': [159, 462],
+                     'wait': 3.0},
+            # 活动奖励（神谕谜题任务页）：进去后还要点「一键领取」，
+            # 见 claim_reward()
+            'reward': {'tpl': 'OS_reward.png', 'label': '神谕谜题',
+                       'roi': [210, 470, 210, 190], 'tap': [347, 567],
+                       'wait': 3.0},
+        },
+        'claim': {'tpl': 'OS_claim.png', 'label': '一键领取',
+                  'roi': [900, 130, 300, 130], 'tap': [1146, 177],
+                  'wait': 2.0},
     },
 }
 
@@ -148,8 +184,11 @@ def active(today=None):
         out.append({'prefix': pre, 'name': ent.get('name') or '',
                     'until': ent.get('until') or '',
                     'stage': '%s-1' % pre,
+                    'closed': bool(ent.get('closed')),
+                    'reprint': bool(ent.get('reprint')),
                     'zones': sorted((ent.get('zones') or {}).keys())})
-    out.sort(key=lambda r: r['until'])
+    # 已结束的活动（只剩商店）排后面：用户说「最新活动」时要给正在开的那期
+    out.sort(key=lambda r: (bool(r.get('closed')), r['until']))
     return out
 
 
@@ -338,6 +377,11 @@ def run(touch, stage_code, log=None):
     ent = ENTRIES.get(pre)
     if not ent:
         return False, '「%s」没有当期活动导航' % (pre or stage_code)
+    # 活动结束后关卡入口就没了（2026-11-22 TL）：提前说清楚，别导航到地图上
+    # 才发现没有分区按钮，白跑一趟还让用户以为识别坏了
+    if ent.get('closed') and not (ent.get('zones') or {}):
+        return False, ('「%s」已经结束了，关卡入口关了——只能进活动商店'
+                       % (ent.get('name') or pre))
     kind = stagenav.zone_kind(stage_code)
     if kind not in ('base', 'ex', 's', 'mo'):
         kind = 'base'
@@ -421,6 +465,37 @@ def run_tool(touch, tool, prefix=None, log=None):
     return True, '已进入「%s」' % label
 
 
+def claim_reward(touch, prefix=None, log=None):
+    """活动奖励页 → 点「一键领取」→ ``(ok, 说明)``
+
+    只有 ``tools.reward`` + ``claim`` 都写了的活动才有（现在只有 OS）：进奖励页
+    后页面上有个「一键领取」，点一下把已完成的任务奖励一次性收掉。已经领完的
+    时候按钮还在，点了没反应——所以这里不校验，点完就回。
+    """
+    log = log or (lambda *_: None)
+    pre = str(prefix or '').strip().upper()
+    ok, why = run_tool(touch, 'reward', prefix=pre or None, log=log)
+    if not ok:
+        return False, why
+    ent = ENTRIES.get(pre) or (ENTRIES.get(active()[0]['prefix'])
+                               if active() else {})
+    spec = (ent or {}).get('claim')
+    if not spec:
+        return False, '这条导航没写领奖按钮（claim），进了奖励页但要手动点'
+    data = touch.shot()
+    x, y, sc = _find(data, spec)
+    if x:
+        touch.tap_px(x, y)
+        log('点「%s」（%.1f 分）' % (spec.get('label') or '一键领取', sc))
+    else:
+        tap = spec.get('tap') or [0, 0]
+        log('没认出「%s」（最像 %.0f 分），按标定坐标兜底点'
+            % (spec.get('label') or '一键领取', sc))
+        touch.tap(int(tap[0]), int(tap[1]))
+    time.sleep(float(spec.get('wait') or 2.0))
+    return True, '已点「%s」' % (spec.get('label') or '一键领取')
+
+
 def describe():
     """给助手看的当期活动清单（有效期内的在前）"""
     today = datetime.date.today()
@@ -432,9 +507,11 @@ def describe():
             'name': ent.get('name') or '',
             'until': ent.get('until') or '',
             'expired': bool(d and d < today),
+            'closed': bool(ent.get('closed')),
+            'reprint': bool(ent.get('reprint')),
             'zones': sorted((ent.get('zones') or {}).keys()),
             'tools': sorted((ent.get('tools') or {}).keys()),
             'stage': '%s-1' % pre,
         })
-    rows.sort(key=lambda r: (r['expired'], r['until']))
+    rows.sort(key=lambda r: (r['expired'], r['closed'], r['until']))
     return rows

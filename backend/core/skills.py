@@ -169,7 +169,10 @@ def norm_stage(raw, log=None):
 
     names = []
     try:
-        for r in resources.activity_list(40)[:12]:
+        acts = resources.activity_list(40)
+        # 复刻活动（当期要刷的那期）排前面，别让用户在一堆老活动里找
+        acts.sort(key=lambda r: (not r.get('reprint'),))
+        for r in acts[:12]:
             if r.get('name'):
                 names.append('%s(%s)' % (r['name'], r.get('prefix') or '?'))
     except Exception:

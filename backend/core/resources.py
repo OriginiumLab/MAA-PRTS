@@ -891,6 +891,11 @@ def activity_list(limit: int = 16) -> list:
     now = int(time.time())
 
     def state_rank(r):
+        # 复刻活动是**当下要刷的那一期**，但库里它按原版的开始时间算，早被排到
+        # 十几条之外去了（OS 在原位置第 19 名），前端只取 18 条根本拿不到。
+        # 让它永远排最前，前端再按「悖论模拟 → 复刻 → 其他」摆位置。
+        if r['id'] in RERUN_ACTS:
+            return 3
         s, e = act_span(r)
         if s and s <= now and (not e or now <= e):
             return 2
@@ -912,8 +917,17 @@ def activity_list(limit: int = 16) -> list:
             'count': r['count'],
             'start': a.get('start') or 0,
             'end': a.get('end') or 0,
+            'reprint': r['id'] in RERUN_ACTS,
         })
     return out
+
+
+#: 复刻活动：资源包里没有「是不是复刻」这个字段，只能按活动 id 记一条。
+#: 前端快捷栏会在名字后面挂「复刻」标记，助手也据此提醒「去年打过今年突袭没奖励」。
+#: 加新复刻就在这里补一行，注释写清楚活动名和日期来源。
+RERUN_ACTS = {
+    'act46side': 'OS',      # 雪山降临1101（2026-11-22 用户确认是复刻）
+}
 
 
 def _code_prefix(codes) -> str:

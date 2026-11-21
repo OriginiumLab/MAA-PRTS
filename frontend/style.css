@@ -1002,6 +1002,17 @@ input:focus, select:focus, button:focus-visible { outline: none; }
   border-radius: 4px;
   padding: 1.5px 4px;
 }
+
+/* 复刻活动标记：两个字两个颜色，拼成一个小双色签（用户 2026-11-22 要求） */
+.chip-rerun {
+  display: inline-flex;
+  font-style: normal;
+  font-size: 9px; font-weight: 800; letter-spacing: .4px;
+  border-radius: 4px; overflow: hidden;
+}
+.chip-rerun b { padding: 1.5px 3.5px; }
+.chip-rerun b:first-child { color: #ffb3d9; background: rgba(255, 157, 209, .18); }
+.chip-rerun b:last-child { color: #9fdcff; background: rgba(143, 212, 255, .18); }
 .chip.is-new {
   border-color: rgba(255, 207, 107, 0.45);
   background: rgba(255, 207, 107, 0.08);
