@@ -6186,6 +6186,123 @@ def check_pages_skills_logs(tmp):
         maaplan.time = old_time
 
 
+def check_cross_zone_segments(tmp):
+    """B57 跨分区分段导航（挂完 OS-10 要先去 EX 区再排 OS-EX-1）
+
+    用户 2026-11-22：「挂完 OS-10 后，没有切换我们的导航到 EX 的关卡界面，
+    就直接挂 OS-EX-1 了，导致 MAA 一直找不到 OS-EX-1」。根因是 MaaCore 的多关
+    Copilot 只在**当前这一页**上 OCR 找关卡名，它不会点活动地图的分区节点。
+    """
+    _reset_config(tmp)
+    from core import maaplan
+    import time as _t
+
+    def segs(codes):
+        rows = [{'stage_name': c, 'filename': c + '_1.json', 'is_raid': False}
+                for c in codes]
+        return maaplan.segments_of(rows)
+
+    # ---- ① 切段规则：同活动不同分区必须分开，同分区必须合并，不许重排 ----
+    s = segs(['OS-1', 'OS-2', 'OS-10', 'OS-EX-1', 'OS-EX-2'])
+    assert [x['key'] for x in s] == ['OS/base', 'OS/ex'], s
+    assert [len(x['rows']) for x in s] == [3, 2], s
+    assert (s[0]['from'], s[0]['to']) == ('OS-1', 'OS-10'), s[0]
+    assert [x['key'] for x in segs(['OS-EX-1', 'OS-S-1'])] == ['OS/ex', 'OS/s']
+    assert len(segs(['OS-1', 'OS-2', 'OS-3'])) == 1, '同分区的关要合成一段'
+    inter = segs(['OS-1', 'OS-EX-1', 'OS-2'])
+    assert [x['key'] for x in inter] == ['OS/base', 'OS/ex', 'OS/base'], inter
+    assert [r['stage_name'] for x in inter for r in x['rows']] == \
+        ['OS-1', 'OS-EX-1', 'OS-2'], '不许重排用户选的顺序'
+    assert [x['key'] for x in segs(['1-7', '2-1'])] == ['/base'], '主线不切段'
+    st = segs(['OS-ST-1', 'OS-1'])
+    assert len(st) == 1 and st[0]['key'] == 'OS/base', \
+        '剧情关归基础区，口径要和 eventnav.run 一致'
+    assert segs([]) == []
+
+    class FakeEng:
+        def __init__(self):
+            self.appended, self.chains, self.starts = [], [], 0
+
+        def append(self, t, p):
+            self.appended.append((t, p))
+
+        def start(self):
+            self.starts += 1
+            return True
+
+    rows = [{'stage_name': c, 'filename': c + '_1.json', 'is_raid': False}
+            for c in ['OS-1', 'OS-2', 'OS-10', 'OS-EX-1', 'OS-EX-2']]
+    spec = {'copilotList': rows}
+    conn = {'adb_path': 'x', 'address': 'y'}
+    old = (maaplan._navigate, maaplan._leave_result, maaplan._wait_run)
+    naved, left = [], []
+    maaplan._navigate = lambda c, st, log, client=None, strict=False: (
+        naved.append(st) or (True, 'ok'))
+    maaplan._leave_result = lambda c, sp, st, log: (left.append(st) or True)
+    maaplan._wait_run = lambda eng, total, log, state: True
+    try:
+        # ---- ② 首段复用已做的导航，只有跨段时才点结算页 + 重新导航 ----
+        eng = FakeEng()
+        talk = []
+        ok = maaplan._run_tail(
+            eng, [('Copilot', maaplan._copilot_params(rows, spec))],
+            spec, {}, talk.append, conn, 'dir', _t.time() + 3600,
+            can_reuse_nav=True)
+        assert ok, '分段跑完不该报没跑完'
+        assert len(eng.appended) == 2, eng.appended
+        assert [len(a[1]['copilot_list']) for a in eng.appended] == [3, 2], \
+            eng.appended
+        assert naved == ['OS-EX-1'], ('首段应复用已有导航', naved)
+        assert left == ['OS-10'], ('段间要先点掉上一段末关的结算页', left)
+        assert any('跨 2 个分区' in x for x in talk), talk
+        assert any('切到新分区完成' in x for x in talk), talk
+
+        # ---- ③ 段间导航失败不许 raise（前面几关已经打完了）----
+        naved.clear()
+        left.clear()
+        maaplan._navigate = lambda c, st, log, client=None, strict=False: (
+            naved.append(st) or (False, '模拟失败'))
+        eng2 = FakeEng()
+        talk2 = []
+        ok2 = maaplan._run_tail(
+            eng2, [('Copilot', maaplan._copilot_params(rows, spec))],
+            spec, {}, talk2.append, conn, 'dir', _t.time() + 3600,
+            can_reuse_nav=True)
+        assert ok2 and len(eng2.appended) == 2, (ok2, eng2.appended)
+        assert any('警告' in x and '找不到关卡' in x for x in talk2), talk2
+
+        # ---- ④ 抄作业前面还排了别的任务：首段也必须重新导航 ----
+        naved.clear()
+        left.clear()
+        maaplan._navigate = lambda c, st, log, client=None, strict=False: (
+            naved.append(st) or (True, 'ok'))
+        eng3 = FakeEng()
+        talk3 = []
+        maaplan._run_tail(
+            eng3, [('Recruit', {'max_times': 1}),
+                   ('Copilot', maaplan._copilot_params(rows, spec))],
+            spec, {}, talk3.append, conn, 'dir', _t.time() + 3600,
+            can_reuse_nav=True)
+        assert naved == ['OS-1', 'OS-EX-1'], ('跑过别的任务后界面不在关卡列表', naved)
+        assert [a[0] for a in eng3.appended] == ['Recruit', 'Copilot', 'Copilot'], \
+            eng3.appended
+
+        # ---- ⑤ 单分区（普通情况）一次都不多导航 ----
+        naved.clear()
+        left.clear()
+        one = [{'stage_name': c, 'filename': c + '_1.json', 'is_raid': False}
+               for c in ['OS-1', 'OS-2']]
+        eng4 = FakeEng()
+        maaplan._run_tail(
+            eng4, [('Copilot', maaplan._copilot_params(one, {'copilotList': one}))],
+            {'copilotList': one}, {}, lambda *_: None, conn, 'dir',
+            _t.time() + 3600, can_reuse_nav=True)
+        assert len(eng4.appended) == 1 and not naved and not left, \
+            (eng4.appended, naved, left)
+    finally:
+        (maaplan._navigate, maaplan._leave_result, maaplan._wait_run) = old
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -6263,6 +6380,8 @@ def main():
                 lambda: check_task_log_isolation(tmp))
         r.check('B56 页面识别+基建确认框+多账号默认导航+MAA 风格日志',
                 lambda: check_pages_skills_logs(tmp))
+        r.check('B57 跨分区分段导航（OS-10 → 先切 EX 区再挂 OS-EX-1）',
+                lambda: check_cross_zone_segments(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

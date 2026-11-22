@@ -369,6 +369,27 @@ B53 把「点哪」钉住了，这条钉的是「**从哪一页开始**」和「
   / `navtpl/pages/result_title.png` 都不该存在（2026-11-22 用户要求：失败
   以 MAA 通知为准，别自己识别）
 
+### B57 跨分区分段导航（2026-11-22 晚）
+
+`segments_of` 纯逻辑，不用 MaaCore：
+
+- `OS-1/OS-2/OS-10/OS-EX-1/OS-EX-2` → **2 段**（`OS/base` 3 关、`OS/ex` 2 关），
+  段上带 `from`/`to` 首末关
+- 同分区 3 关 → 1 段（不许每关都导航一次）
+- `OS-EX-1/OS-S-1` → 2 段；`OS-1/OS-EX-1/OS-2` → **3 段且顺序原样**（绝不重排）
+- 主线 `1-7/2-1` → 1 段；`OS-ST-1/OS-1` → 1 段且归 `OS/base`（剧情关口径要
+  和 `eventnav.run` 一致，否则会切出没标定分区节点的段）
+
+`_run_tail` 用假 Engine + 桩掉 `_navigate`/`_leave_result`/`_wait_run`：
+
+- 跨 2 段：`append` 两次（3 关 + 2 关），**段间 `_leave_result('OS-10')`
+  一次**、`_navigate('OS-EX-1')` 一次；`can_reuse_nav=True` 时首段不导航；
+  日志有「跨 2 个分区」「切到新分区完成」
+- 段间导航失败**不许 raise**：照样 `append` 两段、返回 True、日志留「警告」
+- 抄作业前面排了别的任务（Recruit）→ `can_reuse_nav` 失效，**首段也要导航**
+  （断言 `naved == ['OS-1', 'OS-EX-1']`，append 顺序 Recruit→Copilot→Copilot）
+- 单分区普通情况：只 `append` 一次，零导航、零点结算页
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

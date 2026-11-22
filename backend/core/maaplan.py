@@ -708,6 +708,80 @@ def _connection(maa_dir, profile=None):
     }
 
 
+# ---------------------------------------------------------------- 分段导航
+# MaaCore 的多关 Copilot 是**一条任务链里连着跑**的，关卡之间它只会
+# ``ClickStageName`` 在**当前这一页**上 OCR 找关卡名。它不会去点活动地图上的
+# 分区节点（圣巡之旅 / 变革之路 / 喀兰之心），也不会返回上一层换页。所以打完
+# OS-10 之后界面还停在基础区列表，OS-EX-1 根本不在这一页上——它会一直找，
+# 整轮卡死在那儿（2026-11-22 用户实测：「挂完 OS-10 后，没有切换我们的导航到
+# EX 的关卡界面，就直接挂 OS-EX-1 了，导致 MAA 一直找不到」）。
+#
+# 解法：把作业按「活动 + 分区」切成若干段，段与段之间停一下 MAA，点掉结算页、
+# 重新导航到下一段的分区，再把那一段排进去。多花 10~15 秒，换「作业永远排在
+# 它该在的那一页上」。
+def _zone_of(stage_code):
+    """关卡代号 → 分区类型（``base`` / ``ex`` / ``s`` / ``mo``）
+
+    **口径必须和 ``eventnav.run`` 选分区节点时完全一致**：那边也是
+    ``zone_kind`` 算完再套一份白名单，``st``（剧情关）/``f``（额外关）都归
+    基础区——它们在游戏里本来就待在基础区列表里。这里如果另分一档出来，就会
+    把作业切成「没标定过分区节点」的段，导航必然失败。
+    """
+    try:
+        from . import stagenav
+        k = stagenav.zone_kind(stage_code) or 'base'
+    except Exception:
+        k = 'base'
+    return k if k in ('base', 'ex', 's', 'mo') else 'base'
+
+
+def _seg_key(stage_code):
+    """一关属于哪一段：``活动前缀/分区``，例如 ``OS/ex``、``/base``（主线）"""
+    try:
+        from . import eventnav
+        pre = eventnav.prefix_of(stage_code) or ''
+    except Exception:
+        pre = ''
+    return '%s/%s' % (pre, _zone_of(stage_code))
+
+
+def segments_of(rows):
+    """作业列表 → 按「活动 + 分区」切好的段
+
+    每段是 ``{'key', 'rows', 'from', 'to'}``；``rows`` 原样保留（喂给
+    ``_copilot_params`` 的就是它）。
+
+    **只合并连续的同类，绝不重排**：用户要是把顺序排成 OS-1 → OS-EX-1 →
+    OS-2，那就老实切三段来回跑。偷偷重排等于替他改打关顺序，出问题全是
+    「为什么先打了后面那关」这种没法解释的疑问。
+    """
+    segs = []
+    for r in (rows or []):
+        code = str((r or {}).get('stage_name') or '').strip()
+        if not code:
+            continue
+        key = _seg_key(code)
+        if segs and segs[-1]['key'] == key:
+            segs[-1]['rows'].append(r)
+            continue
+        segs.append({'key': key, 'rows': [r]})
+    for s in segs:
+        s['from'] = str(s['rows'][0].get('stage_name') or '')
+        s['to'] = str(s['rows'][-1].get('stage_name') or '')
+    return segs
+
+
+def _seg_label(seg):
+    """日志里怎么写这一段：``OS 基础区 10 关（OS-1~OS-10）``"""
+    pre, _, kind = (seg.get('key') or '/base').partition('/')
+    name = {'base': '基础区', 'ex': 'EX 区', 's': 'S 区',
+            'mo': 'MO 区'}.get(kind, kind.upper() or '基础区')
+    a, b = seg.get('from') or '?', seg.get('to') or '?'
+    span = a if a == b else '%s~%s' % (a, b)
+    head = ('%s %s' % (pre, name)) if pre else name
+    return '%s %d 关（%s）' % (head, len(seg.get('rows') or []), span)
+
+
 def _navigate(conn, stage, log, client=None, strict=False):
     """把界面带到关卡列表，返回 ``(ok, 说明)``
 
@@ -878,6 +952,11 @@ def run_core(spec, tid=None, timeout=None):
                 'use_sanity_potion': bool(form.get('sanityPotion', True)),
                 'formation_index': 1}))
 
+        # 整轮的时间预算（分段抄作业、换作业重挂都用它算「还剩多少时间」）
+        total = timeout or (60 * 60 * 8)
+        budget = time.time() + total
+        finished = True
+
         # 队列头是 StartUp 就先只跑它，剩下的一律等登录完成再排——**绝不能
         # 让导航和唤醒并发**：唤醒点 START / 登录 / 关公告的那几十秒里界面
         # 根本不在主界面，导航按下去全落在启动页甚至安卓桌面上（2026-11-17
@@ -886,14 +965,21 @@ def run_core(spec, tid=None, timeout=None):
         started_login = bool(seq) and seq[0][0] == 'StartUp'
         head, tail = (seq[:1], seq[1:]) if started_login else (seq, [])
 
-        for typ, params in head:
-            eng.append(typ, params)
-            log('排队：%s %s' % (_label_of(typ), _brief(typ, params)))
-        log('开始执行（%s）' % _label_of(head[0][0]))
-        if not eng.start():
-            raise RuntimeError('AsstStart 返回失败')
-
-        if started_login:
+        if spec.get('noNav'):
+            # 直跑模式（调用方已经把界面停在想要的位置）：不唤醒、不导航。
+            # 但**跨分区还是要分段**——MaaCore 不会点活动地图的分区节点，一把
+            # 排到 EX 就是「一直找不到 OS-EX-1」（2026-11-22 用户实测）。
+            # can_reuse_nav=True = 首段沿用调用方已经做好的那次导航。
+            log('开始执行（%s）' % _label_of(seq[0][0]))
+            finished = _run_tail(eng, seq, spec, state, log, conn, d, budget,
+                                 can_reuse_nav=True)
+        elif started_login:
+            for typ, params in head:
+                eng.append(typ, params)
+                log('排队：%s %s' % (_label_of(typ), _brief(typ, params)))
+            log('开始执行（%s）' % _label_of(head[0][0]))
+            if not eng.start():
+                raise RuntimeError('AsstStart 返回失败')
             # ---- 第一段：登录 -------------------------------------------------
             # 等「开始唤醒」这条链跑完（不是等全部，后面还没排）。
             # 登录失败就别往下走了：MaaCore 会一直重试切号/点开始，白烧时间。
@@ -933,28 +1019,31 @@ def run_core(spec, tid=None, timeout=None):
                     log('导航没成功，交给 MAA 自己试（当期活动它认得）')
 
             # ---- 第三段：排作业，开打 -----------------------------------------
-            for typ, params in tail:
+            # 抄作业可能跨分区（基础区 → EX 区），_run_tail 会在段与段之间
+            # 停一下、导航过去再排（见文件顶部「分段导航」）。
+            finished = _run_tail(
+                eng, tail, spec, state, log, conn, d, budget,
+                can_reuse_nav=bool(first) and not spec.get('noNav'))
+        else:
+            # 防御分支：seq 里没有 StartUp（core_tasks 会强制补，正常走不到）。
+            # 整队原样排，先导航再跑——游戏没开时导航失败要立刻暴露。
+            for typ, params in head:
                 eng.append(typ, params)
                 log('排队：%s %s' % (_label_of(typ), _brief(typ, params)))
-            if tail and not eng.start():
+            log('开始执行（%s）' % _label_of(head[0][0]))
+            if not eng.start():
                 raise RuntimeError('AsstStart 返回失败')
-        elif first and not spec.get('noNav'):
-            # 没有 StartUp 的任务链（core_tasks 会强制补，正常走不到）：
-            # 先导航再跑，结果必须检查——游戏没开时导航失败要立刻暴露。
-            # noNav 直跑模式例外：不导航，Copilot 从当前位置自己接手。
-            nav_ok, nav_why = _navigate(
-                conn, first, log, client=spec.get('clientType'),
-                strict=bool(spec.get('profile') or spec.get('adbAddress')))
-            if not nav_ok:
-                from . import stagenav, eventnav
-                if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
-                        or eventnav.has(first)):
-                    raise RuntimeError('导航没到位（%s），不再把作业交给 MAA'
-                                       % nav_why)
-
-        total = timeout or (60 * 60 * 8)
-        budget = time.time() + total
-        finished = _wait_run(eng, total, log, state)
+            if first:
+                nav_ok, nav_why = _navigate(
+                    conn, first, log, client=spec.get('clientType'),
+                    strict=bool(spec.get('profile') or spec.get('adbAddress')))
+                if not nav_ok:
+                    from . import stagenav, eventnav
+                    if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
+                            or eventnav.has(first)):
+                        raise RuntimeError('导航没到位（%s），不再把作业交给 MAA'
+                                           % nav_why)
+            finished = _wait_run(eng, max(1.0, budget - time.time()), log, state)
         # ---- 换作业重挂：翻车的那几关再试一次（已成功的关不重打）----------
         # 用户 2026-11-19 需求 3：作业集里这一关的作业不行就换一份别的，
         # 自动接着挂，并且日志里说清楚换了哪份。
@@ -1634,6 +1723,104 @@ def _wait_run(eng, total, log, state):
                 state['last_log'] = time.time()
 
 
+def _run_tail(eng, tail, spec, state, log, conn, d, deadline, can_reuse_nav=False):
+    """排 tail 并开打；抄作业跨分区时中间停下来导航，返回「最后是否跑完」
+
+    普通任务（Fight / Recruit / Infrast…）各是一条独立链，原样排进队列。
+    抄作业不一样：**一条链里连着跑多关**，中途出不了手。所以这里把它前后的
+    任务分开，Copilot 自己按分区一段一段 ``append + start``，段与段之间停
+    MAA、点掉结算页、导航到下一段的分区（见文件顶部「分段导航」的说明）。
+
+    ``can_reuse_nav``：首关是不是**刚刚**导航过。只有「调用方已经导航且中间
+    没跑别的任务」时才为 True——这时第一段不用再导航，省 15 秒；其余情况
+    （前面排了收菜/招募之类）界面早就不在关卡列表上了，必须重新导航。
+    """
+    idx = next((i for i, (t, _) in enumerate(tail) if t == 'Copilot'), -1)
+    if idx < 0:
+        # 没有抄作业：整队原样排，行为和以前完全一样
+        for typ, params in tail:
+            eng.append(typ, params)
+            log('排队：%s %s' % (_label_of(typ), _brief(typ, params)))
+        if tail and not eng.start():
+            raise RuntimeError('AsstStart 返回失败')
+        return _wait_run(eng, max(1.0, deadline - time.time()), log, state)
+
+    before, (_, cop_params), after = tail[:idx], tail[idx], tail[idx + 1:]
+
+    if before:
+        for typ, params in before:
+            eng.append(typ, params)
+            log('排队：%s %s' % (_label_of(typ), _brief(typ, params)))
+        if not eng.start():
+            raise RuntimeError('AsstStart 返回失败')
+        if not _wait_run(eng, max(1.0, deadline - time.time()), log, state):
+            log('抄作业前面的任务没跑完，先停下')
+            return False
+        can_reuse_nav = False       # 前面的任务跑完，界面早就不在关卡列表了
+
+    segs = segments_of(spec.get('copilotList') or [])
+    if not segs:
+        # 作业列表是空的（core_tasks 已经把空 Copilot 跳过了，正常走不到）
+        eng.append('Copilot', cop_params)
+        log('排队：%s %s' % (_label_of('Copilot'), _brief('Copilot', cop_params)))
+        if not eng.start():
+            raise RuntimeError('AsstStart 返回失败')
+        return _wait_run(eng, max(1.0, deadline - time.time()), log, state)
+
+    if len(segs) > 1:
+        log('作业跨 %d 个分区，分段跑：%s'
+            % (len(segs), ' → '.join(_seg_label(s) for s in segs)))
+
+    finished = True
+    for i, seg in enumerate(segs):
+        left = deadline - time.time()
+        if left <= 60:
+            log('没时间跑剩下的 %d 段了（总时长到上限），停下' % (len(segs) - i))
+            finished = False
+            break
+        if state.get('pause'):
+            log('已暂停（%s），后面的段不跑了' % state['pause'])
+            break
+        if i:
+            # 上一段最后一关打完停在结算页：先点一下回到活动关卡界面，再去
+            # 新分区。顺序不能反——结算页上 MAA 的 ClickStageName OCR 不到
+            # 关卡名，排上去就是白跑（用户 2026-11-22 的硬条件）。
+            if not _leave_result(conn, spec, segs[i - 1]['to'], log):
+                log('没能离开结算页，剩下的 %d 段先不跑了' % (len(segs) - i))
+                finished = False
+                break
+            nav_ok, nav_why = _navigate(conn, seg['from'], log,
+                                       client=spec.get('clientType'))
+            log('切到新分区%s：%s' % ('完成' if nav_ok else '失败', nav_why))
+            if not nav_ok:
+                # 前面几关已经打完了，这里 raise 会把整轮记成失败。照样排下去
+                # 让 MAA 自己试一把（它有时能从列表滑过去），日志留痕就够。
+                log('警告：没导航到「%s」，这一段的作业可能全找不到关卡'
+                    % seg['from'])
+        elif not can_reuse_nav:
+            nav_ok, nav_why = _navigate(conn, seg['from'], log,
+                                       client=spec.get('clientType'))
+            log('导航%s：%s' % ('完成' if nav_ok else '失败', nav_why))
+
+        log('第 %d/%d 段：%s' % (i + 1, len(segs), _seg_label(seg)))
+        eng.append('Copilot', _copilot_params(seg['rows'], spec))
+        if not eng.start():
+            raise RuntimeError('AsstStart 返回失败')
+        if not _wait_run(eng, max(1.0, deadline - time.time()), log, state):
+            log('第 %d 段没跑完就停了，后面的段不跑了' % (i + 1))
+            finished = False
+            break
+
+    if after and finished and not state.get('pause'):
+        for typ, params in after:
+            eng.append(typ, params)
+            log('排队：%s %s' % (_label_of(typ), _brief(typ, params)))
+        if not eng.start():
+            raise RuntimeError('AsstStart 返回失败')
+        finished = _wait_run(eng, max(1.0, deadline - time.time()), log, state)
+    return finished
+
+
 def _nav_of(data):
     """换作业日志该显示哪个名字
 
@@ -1943,15 +2130,40 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
                             r.get('stage_name') for r in rows if r.get('filename')}
         state['cid_of'] = {os.path.basename(r.get('filename') or ''):
                            _cid_of(r.get('filename')) for r in rows if r.get('filename')}
-        eng.append('Copilot', _copilot_params(rows, spec))
+        segs = segments_of(rows)
+        if not segs:                    # 正常走不到（new_ops 非空就该有行）
+            log('重挂的作业一份都没落盘，停下')
+            break
+        if len(segs) > 1:
+            log('重挂的关也跨 %d 个分区（%s），同样分段跑'
+                % (len(segs), ' → '.join(_seg_label(s) for s in segs)))
         log('第 %d 轮：从「%s」起重挂 %d 关%s'
             % (rnd, order[start_idx]['stage'], len(new_ops),
                '（前面 %d 关不再重打）' % start_idx if start_idx else ''))
-        if not eng.start():
-            raise RuntimeError('重挂时 AsstStart 返回失败')
-        if not _wait_run(eng, max(60.0, left), log, state):
-            log('第 %d 轮超时，先停下' % rnd)
-            eng.stop()
+        timed_out = False
+        for si, seg in enumerate(segs):
+            if si:
+                # 上一段打完停在结算页：先点一下回关卡界面，再导航到新分区
+                # （和首轮分段同一个道理，见 _run_tail）
+                if not _leave_result(conn, spec, segs[si - 1]['to'], log):
+                    log('重挂时没能离开结算页，剩下的段不跑了')
+                    break
+                nav_ok, nav_why = _navigate(conn, seg['from'], log,
+                                           client=spec.get('clientType'))
+                log('重挂切到新分区%s：%s'
+                    % ('完成' if nav_ok else '失败', nav_why))
+                if state.get('pause'):
+                    log('已暂停（%s），后面的段不跑了' % state['pause'])
+                    break
+            eng.append('Copilot', _copilot_params(seg['rows'], spec))
+            if not eng.start():
+                raise RuntimeError('重挂时 AsstStart 返回失败')
+            if not _wait_run(eng, max(60.0, deadline - time.time()), log, state):
+                log('第 %d 轮第 %d 段超时，先停下' % (rnd, si + 1))
+                eng.stop()
+                timed_out = True
+                break
+        if timed_out:
             break
         # 这一轮的链一条都没报错 = 重挂成功。最后那一关没有「下一关」可以换，
         # 所以 states['results'] 里那条旧的失败记录不会被 ok 覆盖——不看链的话
