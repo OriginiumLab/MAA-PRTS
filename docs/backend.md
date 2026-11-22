@@ -551,10 +551,18 @@ MAA 事件日志通过 tid 透传进同一条任务日志，右栏日志栏与�
 
 现在的口径（`skills._prepare_ops`）：
 
-- 默认 `raid='auto'`：**有突袭作业就只排突袭**一条（`IsRaid=true`）；没有突袭
-  作业的关照旧排普通。
+- 默认 `raid='auto'`：**只排普通**（2026-11-23 改）。原先 auto = 「有突袭作业
+  就只排突袭」，出事经过：用户说「帮我挂 OS-S 关 1 到 5 普通」，助手没传 `raid`，
+  5 关全排成突袭，第二关还因为突袭作业要「圣聆初雪」编队失败卡了 20 分钟。
+  而且突袭本来要先通关普通才解锁，首次打某关排突袭大概率点不进去。
+  **要突袭必须明说**：`raid='raid'` 或逐关 `@raid`。
+- `raid='raid'`：只打突袭（用户明说要突袭时）。
 - `raid='both'`：普通 → 突袭两条（普通还没通关、要一次打通时用）。
 - `raid=False` / `'normal'`：只排普通（刷材料）。
+
+> **难度只照用户原话**：用户说「普通」→ 必须 `raid='normal'`；助手不许以
+> 「复刻活动」「应该打突袭」为由替他升级。`skill_fight` 排完单会单独打一行
+> 「难度：普通 OS-S-1、OS-S-2 …」，是给用户对照的锚点。
 - **逐关指定**：`stages` 支持 `SV-EX-1@raid` / `SV-EX-1@both` / `SV-EX-1@normal`，
   也支持 `{'stage': 'SV-EX-1', 'raid': 'both'}`（见 `_parse_stages`）。这是为了
   让助手能按计划执行（「EX-1~5 只打突袭、EX-6/7 普通+突袭」），以前只有全局
@@ -1123,6 +1131,31 @@ ex 16 分、s 12.5 分、reward 17.5 分、claim 21~23 分，全都压着阈值 
 2. `LAYOUTS` 里加一条（`zone` 填 eventnav 的分区键，`cells` 填编号→模板+ROI）；
 3. 每张模板先自检（同帧 `find_card_bytes` 应 0~2 分、别的页面 >18 分）；
 4. 冒烟 B58 会自动带上（模板缺失会直接报）。
+
+### 一关怎么算结束（2026-11-23 补齐，三个坑一起踩过）
+
+单作业模式下 MaaCore 的收尾回调**不是只有 Completed/Error 两种**，这三种都要认：
+
+| 回调 | 真实含义 | 处理 |
+|---|---|---|
+| `TaskChainCompleted` | 打完了 | 记成功、`back_to_cells`、下一关 |
+| `TaskChainError` | 任务链报错（结算不是三星等） | 记失败，接着打下一关 |
+| `SubTaskError(why=OperatorMissing)` + `TaskChainStopped` | **编队缺干员**（作业要的干员账号里没有） | 记失败并说出缺谁，接着打下一关 |
+| `TaskChainStopped`（无前置错误） | 次数打满 / 理智不足 / 用户按停止 | 正常收尾 |
+| `wait()` 返回 False 且 `eng.stopped` | **用户点了「停止挂机」** | 记「已停止」，不记失败，直接收尾 |
+
+- **`TaskChainStopped` 不能一律当成功**：编队缺干员时 MaaCore 只发
+  `SubTaskError` + `Stopped`，不发 `Error`。旧代码把 Stopped 记成 `ok=True`，
+  于是 `run_scatter` 既不报失败、`wait()` 又返回 False，最后打成一句
+  「这一关超时（1200 秒）」——用户 2026-11-23 就被这句骗了（实际是缺「圣聆初雪」，
+  而且他中途还手动按了停止）。现在 `maacore` 把 `SubTaskError` 的 `why` 记在
+  引擎上，下一条 `TaskChainStopped` 带 `why` 就走 `chain_failed`。
+- **`wait()` 返回 False ≠ 超时**：它有三种来源（真跑满 / 任务被停 / 根本没跑起来）。
+  现在日志报**实际等了多久**，别再说「超时 1200 秒」这个上限值。
+- **用户按停止要单独说**：`Engine.stop()` 置 `self.stopped`，`run_scatter` /
+  `run_core` 因此在 `wait()` 返回 False 时能分清「你按了停止」和「MAA 卡死」。
+  手动停止：不记 `stages_failed`、`timed_out=False`、`paused='手动停止'`，
+  日志说「已停止（你按了停止），剩下的关不打了」。
 
 **已知限制**：理智不足时「开始行动」点不动（弹理智不足框），`open_stage` 会
 返回「点开始后没进到编队界面」并按关跳过；用户要自己补理智或勾吃药。

@@ -3932,7 +3932,9 @@ def check_raid_order(tmp):
     「普通 → 突袭」两条，用户看到的就是白打一次普通。
 
     这里钉六件事：
-    ① 默认 raid='auto'：有突袭作业的关**只排突袭**一条；
+    ① 默认 raid='auto'：**只排普通**（2026-11-23 改，原先是只排突袭——
+       用户说「挂 1 到 5 普通」却被排成突袭，第二关缺干员卡死 20 分钟）；
+       显式 raid='raid' 才只排突袭；
     ② raid='both'：普通 → 突袭两条，顺序不能反；
     ③ raid=False / 'normal'：只排普通；
     ④ stages 支持 @raid / @both / @normal 逐关覆盖（agent 承诺的
@@ -3977,8 +3979,12 @@ def check_raid_order(tmp):
         rows, _retry = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '',
                                           logs.append)
         seq = [(r['stage_name'], r['is_raid']) for r in rows]
-        # ① 默认只打突袭——不再先刷一遍普通
-        assert seq == [('SV-EX-1', True), ('SV-EX-2', True)], seq
+        # ① 默认只打普通：没明说难度就不许替用户升级到突袭
+        assert seq == [('SV-EX-1', False), ('SV-EX-2', False)], seq
+
+        # ①b 显式 raid='raid' 才只排突袭
+        rows_r, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='raid')
+        assert [(r['stage_name'], r['is_raid']) for r in rows_r] == [('SV-EX-1', True)]
 
         # ② both：普通 → 突袭两条，顺序不能反
         rows_b, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='both')
@@ -4124,7 +4130,7 @@ def check_agent_tool_chain(tmp):
     try:
         logs = []
         rows, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append,
-                                      fixed={'SV-EX-1': 98765})
+                                      fixed={'SV-EX-1': 98765}, raid='raid')
         assert hits['search'] == 0, '指名作业后不许再搜作业站'
         assert rows[0]['filename'].endswith('98765.json'), rows
         assert rows[0]['is_raid'] is True, rows
@@ -4496,7 +4502,7 @@ def check_stage_infer(tmp):
     cp.search = fake_search
     try:
         logs = []
-        picks, pool = skills._select_ops(['TL-S-3'], '', logs.append, raid='auto')
+        picks, pool = skills._select_ops(['TL-S-3'], '', logs.append, raid='raid')
         assert picks == [{'copilotId': 12, 'stageCode': 'TL-S-3',
                           'variant': 'raid'}], picks
         assert any('缺干员' in x for x in logs), logs
@@ -5986,6 +5992,39 @@ def check_pages_skills_logs(tmp):
     slogs = []
     maaplan._on_core_event(serr, slogs.append, None, {})
     assert any('不是三星' in x for x in slogs), slogs
+
+    # ---- ⑤b 编队缺干员：MaaCore 发 SubTaskError(OperatorMissing)
+    #      + **TaskChainStopped**（不是 Error）。2026-11-23 用户排 5 关普通，
+    #      实际排成突袭，第二关缺「圣聆初雪」就这么停住；旧代码把 Stopped
+    #      一律当 ok=True，run_scatter 于是报「超时 1200 秒」骗了 20 分钟。
+    eng.chains, eng.errors, eng._sub_why = [], [], ''
+    eng._chain_starts = 0
+    serr2 = eng._translate(maacore.MSG_SUBTASK_ERROR,
+                           {'taskchain': 'Copilot', 'subtask': 'BattleFormationTask',
+                            'why': 'OperatorMissing',
+                            'details': {'opers': {'圣聆初雪': [{'name': '圣聆初雪'}]}}})
+    assert serr2['why'] == 'OperatorMissing', serr2
+    assert serr2['opers'] == ['圣聆初雪'], serr2
+    slogs2 = []
+    st2 = {}
+    maaplan._on_core_event(serr2, slogs2.append, None, st2)
+    assert any('缺干员：圣聆初雪' in x for x in slogs2), slogs2
+    assert st2['last_sub_opers'] == ['圣聆初雪'], st2
+    stop = eng._translate(maacore.MSG_TASK_STOPPED, {'taskchain': 'Copilot'})
+    assert stop and stop['kind'] == 'chain_failed', stop
+    assert eng.chains[-1]['ok'] is False, eng.chains
+    assert eng.chains[-1]['why'] == 'OperatorMissing', eng.chains
+    assert maacore.why_cn('OperatorMissing') == '编队缺干员'
+    # 正常的 Stop（次数打满 / 理智不足 / 用户按停止）仍然算成功
+    stop2 = eng._translate(maacore.MSG_TASK_STOPPED, {'taskchain': 'Copilot'})
+    assert stop2['kind'] == 'chain_stop', stop2
+    assert eng.chains[-1]['ok'] is True, eng.chains
+    # 新任务链开始要清掉上一链的残留 why，别让下一关背锅
+    eng._translate(maacore.MSG_SUBTASK_ERROR,
+                   {'taskchain': 'Copilot', 'why': 'OperatorMissing'})
+    eng._translate(maacore.MSG_TASK_START, {'taskchain': 'Copilot'})
+    stop3 = eng._translate(maacore.MSG_TASK_STOPPED, {'taskchain': 'Copilot'})
+    assert stop3['kind'] == 'chain_stop', stop3
     # 装置占位那条 ERR 要翻成人话，别让用户以为程序坏了
     from core import maalog
     human = maalog._humanize('asst::BattleProcessTask::to_group Group not found'
@@ -6390,8 +6429,12 @@ def check_scatter_stages(tmp):
             self.taps.append((x, y))
 
     class FakeEng:
+        # ④ 用：模拟「用户点了停止挂机」——wait 返回 False，且引擎被标记 stopped
+        user_stop = False
+
         def __init__(self, *a, **k):
             self.appended, self.starts, self.chains = [], 0, []
+            self.stopped = False
 
         def open(self):
             return self
@@ -6408,10 +6451,13 @@ def check_scatter_stages(tmp):
             return True
 
         def wait(self, timeout=None, poll=1.0):
+            if FakeEng.user_stop:
+                self.stopped = True
+                return False
             return True
 
         def stop(self):
-            pass
+            self.stopped = True
 
         def close(self):
             pass
@@ -6480,6 +6526,25 @@ def check_scatter_stages(tmp):
         assert r3['stages_failed'][0]['stage'] == 'OS-S-2', r3
         assert r3['stage_trail'] == ['OS-S-1'], r3['stage_trail']
         assert opened == [(2, False), (1, False)], opened
+
+        # ④ 用户点「停止挂机」：绝不是超时、也不记失败。
+        #    2026-11-23 用户手动暂停，日志写「这一关超时（1200 秒）」——
+        #    他当场质疑「前后矛盾」。停就是停，剩下的关不打了。
+        opened.clear()
+        bad.clear()
+        FakeEng.user_stop = True
+        cells = {1: (430, 385), 2: (1535, 385)}
+        logs4 = []
+        spec4 = dict(spec, copilotList=[
+            {'filename': 'h.json', 'stage_name': 'OS-S-1', 'is_raid': False},
+            {'filename': 'i.json', 'stage_name': 'OS-S-2', 'is_raid': False}])
+        r4 = maaplan.run_scatter(spec4, tid=None, timeout=600)
+        FakeEng.user_stop = False
+        assert r4['ok'], r4
+        assert r4['paused'] == '手动停止', r4
+        assert r4['stages_failed'] == [], r4
+        assert not r4['timed_out'], r4
+        assert opened == [(1, False)], opened
     finally:
         (stagenav.Touch, maacore.Engine, eventnav.run,
          scatter.is_here, scatter.cells_of, scatter.open_stage,

@@ -1094,16 +1094,23 @@ def run_core(spec, tid=None, timeout=None):
         _, still = _tally(state.get('results') or [])
         failed_stage = state['stage'] if bad else ''
         failed_why = next((c.get('why') for c in bad if c.get('why')), '') if bad else ''
+        # 用户点「停止挂机」时 wait 也返回 False，但这不是超时：以前 timed_out
+        # 一律为 True，上层就报「跑满 120 分钟还没结束」（2026-11-23 用户手动
+        # 暂停，日志跟事实完全对不上）。
+        user_stop = bool(getattr(eng, 'stopped', False)) and not finished
+        if user_stop:
+            log('已停止（你按了停止），不再往下排')
         return {'ok': (finished and not bad) or bool(state.get('pause')),
                 'tasks': len(seq),
                 'chains': eng.chains,
-                'timed_out': not finished,
+                'timed_out': (not finished) and not user_stop,
                 'failed_stage': failed_stage,
                 'failed_why': failed_why,
                 'stage_trail': state['trail'],
                 'stages_failed': still,
                 'swaps': swapped,
-                'paused': state.get('pause') or '',
+                'paused': (state.get('pause')
+                           or ('手动停止' if user_stop else '')),
                 'pauseDetail': state.get('pause_detail') or '',
                 'trained': state.get('done') or {},
                 'trainSummary': state.get('summary') or {},
@@ -1281,16 +1288,47 @@ def run_scatter(spec, tid=None, timeout=None):
                 scatter.back_to_cells(touch, pre, log)
                 continue
             left = max(120.0, deadline - time.time())
-            done = eng.wait(timeout=min(1200.0, left))
+            budget = min(1200.0, left)
+            t0 = time.time()
+            done = eng.wait(timeout=budget)
+            spent = time.time() - t0
+            if not done and getattr(eng, 'stopped', False):
+                # 用户自己点了「停止挂机」（stop_all_live → AsstStop）：这不是
+                # 超时也不是失败。2026-11-23 用户手动暂停，日志却写「这一关
+                # 超时（1200 秒）」，他当场就问「前后矛盾」。
+                log('已停止（你按了停止），剩下的关不打了')
+                state['user_stop'] = True
+                break
             bad = [c for c in eng.chains[mark:] if not c.get('ok')]
-            if not done:
-                log('这一关超时（%d 秒），先停下' % int(min(1200.0, left)))
+            if bad:
+                # 失败优先看链本身。MaaCore 在编队缺干员这类硬错误上不发
+                # TaskChainError，只发 SubTaskError + TaskChainStopped，
+                # maacore 那边已经把 why 补进 chains 了（2026-11-23）。
+                why = bad[0].get('why') or ''
+                opers = (state.get('last_sub_opers') or []) if state else []
+                cn = maacore.why_cn(why) or 'MAA 报任务链失败'
+                tail = '（缺：%s）' % '、'.join(opers) if opers else ''
+                log('%s 失败：%s%s' % (label, cn, tail))
+                failed.append({'stage': code, 'why': (cn + tail)})
+                # 缺干员是作业本身不匹配，重试同一份没用，直接跳过这关
+                if why:
+                    log('（%s 是作业和账号不匹配，这一关跳过，接着打下一关）'
+                        % cn)
+            elif not done:
+                # wait 返回 False 有三种：真跑满 budget、MAA 自己停了、
+                # 根本没跑起来。以前一律报「超时 1200 秒」，实测只等了 8 秒
+                # 就回来了，日志骗人 20 分钟（2026-11-23 用户报障）。
+                if spent >= budget - 5:
+                    log('这一关跑了 %d 秒还没结束，先停下' % int(spent))
+                    failed.append({'stage': code, 'why': '跑满 %d 秒' % int(spent)})
+                    eng.stop()
+                    break
+                else:
+                    sub = (state.get('last_sub_error') or '') if state else ''
+                    log('这一关 %.0f 秒就被中止了（MAA 没报完任务链就停了%s）'
+                        % (spent, ('，卡在 %s' % sub.split('@')[-1]) if sub else ''))
+                    failed.append({'stage': code, 'why': '任务被中止'})
                 eng.stop()
-                failed.append({'stage': code, 'why': '超时'})
-            elif bad:
-                why = bad[0].get('why') or 'MAA 报任务链失败'
-                log('%s 失败：%s' % (label, why))
-                failed.append({'stage': code, 'why': why})
             else:
                 log('%s 打完了（单作业模式不判三星，界面停在结算页）' % label)
                 trail.append(code + ('(突袭)' if raid else ''))
@@ -1312,7 +1350,8 @@ def run_scatter(spec, tid=None, timeout=None):
             'stage_trail': trail,
             'stages_failed': failed,
             'swaps': [],
-            'paused': state.get('pause') or '',
+            'paused': (state.get('pause')
+                       or ('手动停止' if state.get('user_stop') else '')),
             'pauseDetail': state.get('pause_detail') or '',
             'trained': {}, 'trainSummary': {},
             'stageReport': 'trail',
@@ -1725,6 +1764,7 @@ def _on_train_detail(data, log, state):
 
 def _on_core_event(ev, log, tid, state=None):
     """把引擎事件转成任务日志（跑机面板实时能看到）"""
+    from . import maacore
     kind = ev.get('kind')
     if kind == 'error':
         log('[错误] %s' % (ev.get('text') or ''))
@@ -1758,14 +1798,25 @@ def _on_core_event(ev, log, tid, state=None):
         # 子任务失败：MaaCore 只说「哪个 pipeline 卡住」，原因要我们自己翻。
         sub = ev.get('sub') or ''
         key = sub.rsplit('@', 1)[-1]
-        if key in ('WaitUntilEndOfAction', 'EndOfAction'):
+        why = ev.get('why') or ''
+        opers = ev.get('opers') or []
+        if why == 'OperatorMissing' or opers:
+            # 编队缺干员：作业要的干员账号里没有 / 没解锁。以前只说「选择干员
+            # 没成功」，用户根本猜不到是哪个人（2026-11-23 实测：圣聆初雪）。
+            log('缺干员：%s（作业要的干员账号里没有，换一份作业或先练）'
+                % ('、'.join(opers) or '未知'))
+        elif key in ('WaitUntilEndOfAction', 'EndOfAction'):
             log('作战结束了，但结算不是三星（漏怪 / 作业没打过这关）')
         else:
             label = _subtask_label(sub)
             if label:
                 log('%s 没成功' % label)
+            if why:
+                log('　原因：%s' % maacore.why_cn(why))
         if state is not None:
             state['last_sub_error'] = sub
+            state['last_sub_why'] = why
+            state['last_sub_opers'] = opers
     elif kind == 'extra':
         what = ev.get('what')
         data = ev.get('data') or {}

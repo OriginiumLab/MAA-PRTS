@@ -132,10 +132,18 @@ class Engine:
         # AllTasksCompleted 在链报错后也会来，只看它就等于永远成功。
         self.chains = []
         self.errors = []
+        # 最近一条子任务失败的原因（SubTaskError 的 why）：编队缺干员时
+        # MaaCore 发的是 TaskChainStopped 而不是 TaskChainError，只能靠它
+        # 回头补一句「为什么停的」（2026-11-23 实测：圣聆初雪 OperatorMissing）
+        self._sub_why = ''
         self._cur_chain = ''
         # 收到过多少次 TaskChainStart。start() 用它判断「AsstStart 返回 false
         # 之后新任务到底有没有被接上」（见 start 的注释）。
         self._chain_starts = 0
+        # 有人从外面叫停过（用户点「停止挂机」→ stop_all_live() → stop()）。
+        # wait() 返回 False 时靠它区分「真跑满 / 任务卡死」和「用户按了停止」：
+        # 2026-11-23 用户手动暂停，日志却写「这一关超时（1200 秒）」，完全对不上。
+        self.stopped = False
         self.connected = False
 
     # ---------------------------------------------------------- 绑定
@@ -261,17 +269,31 @@ class Engine:
             return None
         if msg == MSG_TASK_START:
             self._cur_chain = chain
+            self._sub_why = ''          # 新任务链开始，别带上一链的残留
             self._chain_starts += 1
             return {'t': t, 'kind': 'chain_start', 'chain': chain,
                     'text': '开始任务：%s' % _chain_cn(chain)}
         if msg == MSG_TASK_COMPLETED:
+            self._sub_why = ''
             self.chains.append({'chain': chain, 'ok': True, 'stopped': False})
             return {'t': t, 'kind': 'chain_done', 'chain': chain,
                     'text': '完成任务：%s' % _chain_cn(chain)}
         if msg == MSG_TASK_STOPPED:
-            # Stopped 不是失败：次数打满、理智不足、我方 AsstStop 都会走这里。
-            # 真正的失败只有 TaskChainError。把两者混起来，用户就会看到
-            # 「打完了却报失败」——这一条踩过。
+            # Stopped 一般不是失败：次数打满、理智不足、我方 AsstStop 都走这里。
+            # 但**前面刚报过 SubTaskError 就是真失败**——MaaCore 在编队缺干员
+            # （OperatorMissing）这类硬错误上不发 TaskChainError，只发
+            # SubTaskError + TaskChainStopped。以前一律记 ok=True，于是
+            # run_scatter 把它当成「打完了」（2026-11-23 实测：OS-S-2 突袭缺
+            # 「圣聆初雪」，日志里一句「超时 1200 秒」骗了用户 20 分钟）。
+            why = self._sub_why
+            self._sub_why = ''
+            if why:
+                self.chains.append({'chain': chain, 'ok': False, 'stopped': True,
+                                    'why': why})
+                self.errors.append('%s：%s' % (_chain_cn(chain), why))
+                return {'t': t, 'kind': 'chain_failed', 'chain': chain,
+                        'why': why, 'text': '任务中止：%s（%s）'
+                                            % (_chain_cn(chain), why)}
             self.chains.append({'chain': chain, 'ok': True, 'stopped': True})
             return {'t': t, 'kind': 'chain_stop', 'chain': chain,
                     'text': '结束任务：%s' % _chain_cn(chain)}
@@ -306,7 +328,13 @@ class Engine:
             # （2026-11-22 实测：OS-6 打了 2 星，日志里没有任何解释）。
             first = data.get('first') or []
             node = str(first[0] or '') if isinstance(first, list) and first else sub
-            return {'t': t, 'kind': 'sub_error', 'chain': chain, 'sub': node}
+            # why 是 MaaCore 给的机器可读原因（OperatorMissing / ...），
+            # details.opers 里是缺哪些干员。2026-11-23 之前这里全丢了，
+            # 用户只看到「结束了」却不知道为什么。
+            why = str(data.get('why') or '')
+            self._sub_why = why
+            return {'t': t, 'kind': 'sub_error', 'chain': chain, 'sub': node,
+                    'why': why, 'opers': _missing_opers(data)}
         if msg == MSG_SUBTASK_EXTRA:
             # 掉落 / 关卡识别 / 抄作业换关 / 理智 / 战斗动作 / 培养结果，
             # 这几类对「现在在干什么」有意义。2026-11-18 补 CopilotAction 与
@@ -407,6 +435,7 @@ class Engine:
         return bool(self._lib.AsstStart(self._handle))
 
     def stop(self):
+        self.stopped = True
         if self._handle:
             try:
                 self._lib.AsstStop(self._handle)
@@ -546,3 +575,43 @@ _CHAIN_CN = {
 
 def _chain_cn(chain):
     return _CHAIN_CN.get(chain) or chain or '任务'
+
+
+# SubTaskError 的 why 是 MaaCore 的机器码，日志里直接甩给用户看不懂。
+_WHY_CN = {
+    'OperatorMissing': '编队缺干员',
+    'InsufficientSanity': '理智不足',
+    'UnsupportedStage': '这一关不支持',
+    'NotEnoughMedicine': '理智药不够',
+    'RoguelikeSquadNotFound': '没找到指定分队',
+}
+
+
+def why_cn(why):
+    """``OperatorMissing`` → ``编队缺干员``；认不出的保留原文"""
+    w = str(why or '').strip()
+    if not w:
+        return ''
+    return _WHY_CN.get(w) or w
+
+
+def _missing_opers(data):
+    """SubTaskError 的 ``details.opers`` → 缺的干员名（去重保序）
+
+    形如 ``{"圣聆初雪": [{"name": "圣聆初雪", "reason": "Unchecked"}]}``。
+    2026-11-23 用户排 5 关普通，实际被排成突袭、第二关就缺干员卡死，日志里
+    一个名字都没有——就是因为这里没解析。
+    """
+    out = []
+    try:
+        opers = (data.get('details') or {}).get('opers') or {}
+        for k, v in opers.items():
+            name = ''
+            if isinstance(v, list) and v:
+                name = str((v[0] or {}).get('name') or '')
+            name = name or str(k or '')
+            if name and name not in out:
+                out.append(name)
+    except Exception:                                  # noqa: BLE001 回调字段可能变形
+        pass
+    return out

@@ -568,8 +568,9 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
 
     **默认每关只排真正要打的那一档**（2026-11-19 用户实测口径）：
 
-    - ``raid='auto'``（默认）→ 有突袭作业就**只排突袭**（IsRaid=true 一条）。
-      MaaCore 拿到 is_raid=true 会自己点「ChangeToRaidDifficulty」切难度
+    - ``raid='auto'``（默认，等同 normal）→ **只排普通**。突袭必须先通关
+      普通才解锁，首次打某关排突袭大概率点不进去；用户没明说要突袭就别替
+      他升级（2026-11-23 事故：说「普通 1 到 5」实际全排了突袭）
       （asst.log 01:42 实证），不需要前面垫一条普通。以前排「普通 → 突袭」
       两条，用户看到的就是「又从头打了一遍普通 EX-1」，白烧一次理智。
     - ``raid='both'`` → 普通 + 突袭两条（普通还没通关、要一次打通时用）。
@@ -594,9 +595,15 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
     if isinstance(raid, bool):
         gw = 'both' if raid else 'normal'
     else:
-        gw = {'auto': 'raid', 'raid': 'raid', 'true': 'both', 'both': 'both',
+        # ``auto``（没指定）**只打普通**，不再自动升级成突袭。
+        # 2026-11-23 事故：用户说「帮我挂 OS-S 关 1 到 5 普通」，助手没传
+        # raid，走到了 auto→raid，5 关全排成突袭——第二关还因为突袭作业要
+        # 「圣聆初雪」编队失败卡了 20 分钟。而且突袭本来就要先通关普通才解
+        # 锁，首次打某关排突袭大概率点不进去。
+        # 要打突袭必须明说：raid='raid' / 逐关 @raid；两档都要 -> 'both'。
+        gw = {'auto': 'normal', 'raid': 'raid', 'true': 'both', 'both': 'both',
               'normal': 'normal', 'false': 'normal', '0': 'normal',
-              'no': 'normal'}.get(str(raid).strip().lower(), 'raid')
+              'no': 'normal'}.get(str(raid).strip().lower(), 'normal')
     wants = {str(k).upper(): v for k, v in (wants or {}).items()}
     fixed = {str(k).upper(): int(v) for k, v in (fixed or {}).items() if v}
     prereq = {str(k).upper() for k in (prereq or ()) if k}
@@ -738,8 +745,12 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
             log('%s：作业站这关没有突袭作业，只排普通' % st)
         # 走到这里就是「打普通」
         if n_op is None:
-            if strict:
-                log('跳过 %s：没有能抄的普通作业（这一轮只要普通）' % st)
+            # ``want == 'normal'`` 也当 strict：用户要的是普通，拿突袭作业顶上
+            # 等于**偷偷把难度升级成突袭**（MAA 会去点「切换突袭难度」）。这正是
+            # 2026-11-23 用户投诉的那类事，宁可跳过并说明，也不能打错档。
+            if strict or want == 'normal':
+                log('跳过 %s：作业站没有这关的普通作业（真要打突袭就说「打突袭」）'
+                    % st)
                 continue
             _note(st, r_op)
             log('%s：没有普通版作业，改用突袭作业 #%s《%s》'
@@ -852,9 +863,10 @@ def skill_fight(params, log, tid=None):
     接手（当期活动 MAA 自己认路；老活动请先用 navigate skill 或手动到位）。
     用户明确要「连唤醒/导航一起」时传 wakeup=true 才走全套。
 
-    **突袭（raid）**：默认每关**只打真正要打的那一档**（见 ``_prepare_ops``）：
-    ``raid='auto'``（默认）有突袭作业就只排突袭；``raid='both'`` 普通+突袭
-    两条（普通还没通关、要一次打通用）；``raid=False`` 只排普通（刷材料）。
+    **突袭（raid）**：``raid='auto'``（默认）**只打普通**；``raid='raid'`` 只
+    打突袭；``raid='both'`` 普通+突袭两条（还没通关、要一次打通用）。
+    **用户说「普通」就一定是普通**，程序不许替他升级到突袭（2026-11-23 用户
+    报障：说「S 关 1 到 5 普通」，实际全排成突袭）。
     单关可以写 ``stages=['SV-EX-1@raid', 'SV-EX-6@both']`` 逐关覆盖。
     主线磨难 / 险地不是突袭，各排一条。
     """
@@ -991,6 +1003,23 @@ def skill_fight(params, log, tid=None):
             if retry:
                 spec['retry'] = retry
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
+
+    # 把**实际要打的难度**单独打成一行。用户 2026-11-23 报障：「说普通 1 到 5，
+    # 日志里却在打突袭」——那时只有逐关一行「用作业 #xxx（突袭）」，看不出全局
+    # 排的是哪一档。这一行是给他的对照锚点。
+    if mode == 'copy':
+        rows = spec.get('copilotList') or []
+        if rows:
+            grp = {}
+            for r in rows:
+                grp.setdefault(bool(r.get('is_raid')), []).append(
+                    str(r.get('stage_name') or ''))
+            bits = []
+            if grp.get(False):
+                bits.append('普通 %s' % '、'.join(grp[False]))
+            if grp.get(True):
+                bits.append('突袭 %s' % '、'.join(grp[True]))
+            log('难度：%s（一共 %d 趟）' % (' + '.join(bits), len(rows)))
     if with_nav:
         log('带唤醒+导航的全套流程')
     else:
@@ -1048,7 +1077,11 @@ def skill_fight(params, log, tid=None):
     if failed:
         why = stageplan.explain_failure((r or {}).get('failed_why') or '')
         log('卡在 %s：%s' % (failed, why or 'MAA 没给原因，看上面的报错'))
-    if rest and (got_bad or failed):
+    user_stop = (r or {}).get('paused') == '手动停止'
+    if user_stop and rest:
+        log('你按了停止，剩下的关没打：%s（说一声「接着挂」就从这些关继续）'
+            % '、'.join(rest))
+    elif rest and (got_bad or failed):
         log('没打的关：%s（前面卡住了，这些关排不进去）' % '、'.join(rest))
     elif rest and not (r or {}).get('timed_out') and ok_chain:
         log('这些关没见到开打记录，可能被跳过了：%s' % '、'.join(rest))
@@ -1056,7 +1089,9 @@ def skill_fight(params, log, tid=None):
         log('跑满 %d 分钟还没结束，已停下%s'
             % (int((params.get('timeout') or 2 * 60 * 60) // 60),
                ('；最后一关是 %s' % trail[-1]) if trail else ''))
-    if ok_chain and not got_bad:
+    if user_stop:
+        pass                      # 上面已经说了「你按了停止」，别再说「正常结束」
+    elif ok_chain and not got_bad:
         log('本轮任务链正常结束%s'
             % ('；MAA 不提供逐关结果，成功几关不统计' if trail else ''))
     elif not ok_chain:
@@ -1651,7 +1686,7 @@ def _sweep_segments(keyword, log, tiers=None, raid='both'):
         codes = [s['code'] for s in rows]
         label = _SWEEP_TIER_CN.get(k, k.upper())
         if k == 'ex' and raid != 'normal':
-            if raid in ('both', 'auto'):
+            if raid == 'both':
                 out.append({'name': label + '·普通', 'codes': codes,
                             'nav': codes[0], 'variant': 'normal'})
             out.append({'name': label + '·突袭', 'codes': codes,

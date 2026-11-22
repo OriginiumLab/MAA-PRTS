@@ -128,7 +128,9 @@ mock 掉，验证闸门口径——
 MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，不需要
 前面垫一条普通；上一版排「普通 → 突袭」两条就是白烧一次理智。
 
-- 默认 `raid='auto'`：有突袭作业的关**只排突袭**一条
+- 默认 `raid='auto'`：**只排普通**（2026-11-23 改；原先只排突袭，导致用户
+  说「挂 1 到 5 普通」被排成突袭）
+- `raid='raid'`：显式只排突袭
 - `raid='both'`：`普通 → 突袭` 两条，顺序不能反
 - `raid=False` / `'normal'`：只排普通
 - 逐关覆盖：`wants={'SV-EX-2': 'both'}` → EX-1 只突袭、EX-2 两条
