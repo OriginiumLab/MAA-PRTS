@@ -52,10 +52,11 @@ from . import acctname, maa, maalog, multiproc, settings, tasks
 PROFILE_PREFIX = 'PRTS-'
 _SAFE = re.compile(r'[\\/:*?"<>|]')
 
-# 结算页「点一下继续」的位置（1280 口径）：MAA 自己的 ClickCorner 是
-# ``specificRect [1000, 20, 270, 50]``，定义里注明「点屏幕右边不会点到掉落
-# 物品，也不会关掉关卡选择」，取中心点用。翻车重挂前必须先点掉结算页，
-# 否则新作业集排下去 Copilot 在结算页上认不出关卡名（2026-11-19 用户实测）。
+# 结算页「点一下继续」的位置（1280 口径）：MAA 自己的 ClickCorner，
+# ``specificRect [1000, 20, 270, 50]`` 的中心。任务定义写明「点屏幕右边不会
+# 点到掉落物品，也不会关掉关卡选择」，所以结算页上能推进、已经在地图上点了
+# 也不误触（用户 2026-11-22 实测「失败后点屏幕任何位置都能立即返回关卡界面」，
+# 取这个「不会误触」的点更稳）。
 _RESULT_TAP = (1135, 45)
 
 #: 多开时几条线程都会往 report 里加行，加锁免得丢（也顺手把日志顺序稳住）
@@ -1744,26 +1745,29 @@ def _tally(results):
 
 
 def _leave_result(conn, spec, stage, log):
-    """翻车后把界面从「失败结算页」退回**关卡菜单**；退不掉就重新导航
+    """翻车后把界面退回**活动关卡界面**
 
-    用户 2026-11-19 的实测口径：一次战斗失败后要随便点一下界面回到关卡界面，
-    在那个界面重排作业集就能换作业开打，**不需要重新唤醒/登录**。
+    「这一局翻车了」这件事**只认 MaaCore 的回调**（``TaskChainError``，或
+    ``WaitUntilEndOfAction`` 子任务失败 = 结算不是三星），不靠自己截图猜
+    ——用户 2026-11-22 的原话：「失败识别应该以 maa 的失败通知为准，而不是
+    自己识别有没有失败」。
 
-    2026-11-22 又补了关键一句：「**在失败界面重新挂作业是不会成功的，需要在
-    关卡菜单界面重挂**」。所以这里不能只看 ``stagenav.probe == 'map'`` 就放行
-    ——结算页底部也是暗的，probe 会把它判成「活动地图」，作业排上去 MaaCore
-    在结算页上 OCR 不到关卡名，整轮白跑。现在先用 ``pages.is_result_bytes``
-    认「行动结束」那两颗星：认到就继续点，点到认不出来才算离开结算页。
+    翻车之后界面一定停在「行动结束」结算页。用户同一天的实测口径：**点屏幕
+    任意位置都会立刻回到活动关卡界面**，在那个界面重排作业集就能换作业开打，
+    不需要重新唤醒/登录，也不需要写导航。所以这里**不认结算页**（星星和
+    「行动结束」标题都是自识别，1 星 / 直接失败 / 活动间 UI 差异都可能失效），
+    只做三步：
 
-    点哪儿不是随便挑的：用的是 MAA 自己 ``ClickCorner`` 那块
-    ``[1000, 20, 270, 50]``（1280 口径，中心 (1135,45)）——任务定义里写得很
-    清楚「点击屏幕右边，不会点到掉落物品，且不会关掉关卡选择的一块区域」，
-    所以结算页上能推进、在关卡列表上点了也无害，重复点几次都安全。
-
-    点干净之后：probe 说是关卡列表就停手；否则 ``pages.to_home()`` 回主页、
-    再走一次完整导航（主页 → 终端页 → 活动地图 → 分区）。多花十几秒，但能
-    保证作业排在关卡菜单上。这一段只保证「界面能接受新的作业集」，失败也不
-    抛错——真开不了打，下一轮还有日志。
+    1. 点一下 MAA 自己的 ClickCorner（``_RESULT_TAP``）——任务定义里写明
+       「点屏幕右边不会点到掉落物品，也不会关掉关卡选择」，所以结算页上能
+       推进，万一已经在地图上了也不会误触。
+    2. 再判 ``stagenav.probe_bytes`` 是不是活动关卡地图（底部 tab 暗）。
+       **第一帧不判**：结算页底部也是暗的，probe 会把它当成地图，于是「还没
+       点就放行」，作业排在结算页上白跑一整轮——这正是用户说的「在失败界面
+       重新挂作业是不会成功的」。点过一次之后结算页必然消失，probe 才有意义。
+    3. 点三次还不在关卡界面（落到主页 / 基建 / 剧情）→ ``to_home`` + 完整
+       导航兜底。这一段只保证「界面能接受新的作业集」，失败也不抛错——真开
+       不了打，下一轮还有日志。
     """
     try:
         from . import pages, stagenav
@@ -1778,35 +1782,21 @@ def _leave_result(conn, spec, stage, log):
         if not alive:
             log('点结算页失败：adb 不可用（%s）' % detail)
             return False
-        cur = touch.shot()
-        if not cur:
-            log('点结算页失败：截不到图')
-            return False
-        if not pages.is_result_bytes(cur) and stagenav.probe_bytes(cur) == 'map':
-            log('已经不在结算页，界面就在关卡列表')
-            return True
-        on_result = pages.is_result_bytes(cur)
-        for i in range(6):
-            touch.tap(*_RESULT_TAP)
-            time.sleep(1.5)
+        tapped = 0
+        for _i in range(3):
             cur = touch.shot()
-            if not cur:
-                break
-            on_result = pages.is_result_bytes(cur)
-            if not on_result:
-                log('结算页已点掉')
-                break
-        if cur and not on_result:
-            state_now = stagenav.probe_bytes(cur)
-            if state_now == 'map':
-                log('已回到关卡列表，在这里重排作业')
+            if cur and tapped and stagenav.probe_bytes(cur) == 'map':
+                log('已回到活动关卡界面，在这里重排作业')
                 return True
-            log('点完不在关卡列表（判定：%s），回主页重新导航一次再重挂'
-                % (state_now or '未知'))
-        elif on_result:
-            log('结算页点了 6 次还在（认得出左上角两颗星），回主页重新导航')
-        # 兜底：先回主页（这一步认得基建确认框/剧情页，不会盲按返回），
-        # 再走一遍完整导航。多花十几秒，换「一定在关卡菜单上」。
+            touch.tap(*_RESULT_TAP)
+            tapped += 1
+            time.sleep(1.4)
+        cur = touch.shot()
+        where = stagenav.probe_bytes(cur) if cur else '截不到图'
+        log('点了 %d 次还不在活动关卡界面（现在是「%s」），回主页重新导航'
+            % (tapped, where or '未知'))
+        # 兜底：先回主页（认得基建确认框/剧情页，不会盲按返回），再走一遍
+        # 完整导航。多花十几秒，换「一定在关卡菜单上」。
         pages.to_home(touch, log)
         ok, why = _navigate(conn, stage, log, client=spec.get('clientType'))
         log('重挂前重新导航%s：%s' % ('完成' if ok else '失败', why))
@@ -1831,9 +1821,9 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
        以前「候选都试过」直接收工，把后面几关一起丢下——用户看到的「翻车后
        什么都不做」有一半是这个。同一份只补试一次（记在 ``same_retry``），
        不会死循环。
-    3. **回到对应关卡界面**：翻车时游戏停在「作战失败」结算页，先点回关卡列表
-       （``_leave_result``）。不点的话 MaaCore 的 ClickStageName 在结算页上 OCR
-       不到关卡名，整轮重挂白跑。
+    3. **回到活动关卡界面**：翻车时游戏停在「行动结束」结算页，先点一下把界面
+       带回活动关卡地图（``_leave_result``）。不点的话 MaaCore 的 ClickStageName
+       在结算页上 OCR 不到关卡名，整轮重挂白跑。
     4. **重挂后按最新结果继续**：每轮结束重看 ``state['results']``，哪关还失败才
        继续重挂；都过了立刻收手，不会把打过的关再打一遍（旧实现每轮都从同一个
        起点重排，第二轮会白烧一遍理智）。
@@ -1939,10 +1929,10 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
         # 界面重新挂作业是不会成功的，需要在关卡菜单界面重挂」。
         # 所以**先离开结算页、再下载/排作业**——顺序反了的话，界面还停在
         # 结算页时 MaaCore 的 ClickStageName OCR 不到关卡名，整轮白跑。
-        # _leave_result 认左上角两颗星，点干净后 probe 确认在关卡列表；实在
-        # 退不出来就回主页重走一遍导航，仍然不行才放弃这一轮。
+        # _leave_result 点一下屏幕，再用 probe 确认回到了活动关卡界面；实在
+        # 回不去就回主页重走一遍导航，仍然不行才放弃这一轮。
         if not _leave_result(conn, spec, order[start_idx]['stage'], log):
-            log('没能离开结算页，这轮不重挂了（在结算页上排作业一定白跑）')
+            log('没能回到活动关卡界面，这轮不重挂了（在结算页上排作业一定白跑）')
             break
         rows = prepare_copilot(new_ops, d, account=spec.get('accountFile'),
                                log=lambda m: log('  ' + m))

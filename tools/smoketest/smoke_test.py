@@ -4354,9 +4354,9 @@ def check_event_nav(tmp):
 
     # ⑤ 重挂前点结算页 → 回到关卡列表
     # 2026-11-22 用户补的口径：「在失败界面重新挂作业是不会成功的，需要在关卡
-    # 菜单界面重挂」。所以这里桩「结算页判据」：第一帧认得出两颗星 → 必须点
-    # 一下；点完不再是结算页且 probe 说是关卡列表 → 放行。真实的两颗星模板
-    # 在 B56 ⑧ 用真图验，这里只验流程。
+    # 菜单界面重挂」。所以这里桩「结算页判据」：第一帧认得出 → 必须点一下；
+    # 点完不再是结算页且 probe 说是关卡列表 → 放行。真实的标题模板在 B56 ⑧
+    # 用合成帧验，这里只验流程。
     taps = []
 
     class Touch:
@@ -4394,17 +4394,10 @@ def check_event_nav(tmp):
             return 0.0
 
     old = (stagenav.Touch, stagenav.probe, stagenav.probe_bytes,
-           stagenav._moved, maaplan.time,
-           pages.is_result_bytes, pages.to_home)
+           stagenav._moved, maaplan.time, pages.to_home)
     stagenav.Touch = Touch
     stagenav._moved = lambda a, b, thr=3.0: False      # 画面不动 = 点完了
     maaplan.time = FakeTime
-    seen = {'n': 0}
-
-    def is_result(_d):
-        seen['n'] += 1
-        return seen['n'] <= 1            # 只有第一帧是结算页
-    pages.is_result_bytes = is_result
     talk, naved = [], []
     old_nav = maaplan._navigate
     maaplan._navigate = lambda conn, st, log, client=None: (
@@ -4415,10 +4408,12 @@ def check_event_nav(tmp):
                                    {'clientType': 'Official'}, 'TL-EX-1',
                                    talk.append)
         assert ok, talk
-        assert taps and taps[0] == maaplan._RESULT_TAP, (taps, maaplan._RESULT_TAP)
-        assert any('已回到关卡列表' in x for x in talk), talk
+        # 第一帧不判（结算页底部也暗，probe 会误判成地图），必须先点一下
+        assert len(taps) == 1, taps
+        assert taps[0] == maaplan._RESULT_TAP, (taps, maaplan._RESULT_TAP)
+        assert any('已回到活动关卡界面' in x for x in talk), talk
         assert not naved, '已经在关卡列表就不该再导航'
-        # 点完不在关卡列表（例如停在主题页）：先回主页再重新导航
+        # 点完还不在关卡界面（例如停在主题页）：点满 3 次后回主页重新导航
         taps.clear()
         stagenav.probe_bytes = lambda d: 'theme'
         pages.to_home = lambda *a, **k: True
@@ -4426,10 +4421,11 @@ def check_event_nav(tmp):
                                     {'clientType': 'Official'}, 'TL-EX-1',
                                     talk.append)
         assert ok2 and naved == ['TL-EX-1'], (ok2, naved)
+        assert len(taps) == 3, taps
+        assert any('还不在活动关卡界面' in x for x in talk), talk
     finally:
         (stagenav.Touch, stagenav.probe, stagenav.probe_bytes,
-         stagenav._moved, maaplan.time,
-         pages.is_result_bytes, pages.to_home) = old
+         stagenav._moved, maaplan.time, pages.to_home) = old
         maaplan._navigate = old_nav
 
     # ⑥ 名单核对：用户点名之外的关剔掉，缺的要点名
@@ -5811,7 +5807,7 @@ def check_pages_skills_logs(tmp):
     这里全用合成图 + 假 Touch，不碰真机、不连模拟器。
     """
     _reset_config(tmp)
-    from core import copilot, pages, skills, maaplan
+    from core import copilot, pages, skills, maaplan, stagenav
 
     # ---- ① 主页识别：齿轮 + 邮件同时命中才算（设置页只有齿轮） ----
     gear = os.path.join(pages._TPL_DIR, 'home_gear.png')
@@ -6104,20 +6100,28 @@ def check_pages_skills_logs(tmp):
     finally:
         copilot.fetch_prepared, skills._default_maa_dir = old
         maaplan._leave_result = old_leave
-    # ---- ⑧ 结算页：认得出，而且必须先离开它才能重挂 ----
-    # 用户 2026-11-22：「在失败界面重新挂作业是不会成功的，需要在关卡菜单
-    # 界面重挂」。结算页底部也是暗的，stagenav.probe 会把它当成活动地图——
-    # 所以必须靠「左上角两颗星」这个定点判据，不能靠 probe。
-    star1 = os.path.join(pages._TPL_DIR, 'result_star1.png')
-    star2 = os.path.join(pages._TPL_DIR, 'result_star2.png')
-    assert os.path.isfile(star1) and os.path.isfile(star2), '结算页模板缺了'
-    result = compose([(star1, (106, 439)), (star2, (217, 439))])
-    assert pages.is_result_bytes(result), '两颗星都在还不认结算页'
-    assert not pages.is_result_bytes(compose([(star1, (106, 439))])), \
-        '只认到一颗星就当结算页（太松）'
-    assert not pages.is_result_bytes(home), '主页被当成结算页'
+    # ---- ⑧ 翻车后回活动关卡界面：失败只认 MAA 回调 ----
+    # 用户 2026-11-22 两句原话：
+    #   「失败识别应该以 maa 的失败通知为准，而不是自己识别有没有失败」
+    #   「失败后点击屏幕任何位置都能立即返回关卡界面，重新运行作业集，
+    #     甚至不需要写导航」
+    # 所以结算页那套自识别（先两颗亮星、后来「行动结束」标题）整个删掉了：
+    # 失败由 TaskChainError / 子任务失败决定，界面只做「点一下 → 看是不是
+    # 活动关卡地图」。
+    assert not hasattr(pages, 'is_result_bytes'), '结算页自识别应该删掉'
+    assert not hasattr(pages, 'result_cover'), '结算页自识别应该删掉'
+    assert not os.path.isfile(os.path.join(pages._TPL_DIR, 'result_title.png'))
+
+    logs8 = []
+    st8 = {'stage': 'OS-6', 'results': [],
+           'last_sub_error': 'Copilot@WaitUntilEndOfAction'}
+    maaplan._on_core_event({'kind': 'chain_failed', 'chain': 'Copilot',
+                            'text': '任务失败：Copilot'}, logs8.append, None, st8)
+    assert st8['results'] and st8['results'][0]['ok'] is False, st8
+    assert '结算不是三星' in st8['results'][0]['why'], st8['results']
+
     dark = compose([], bg=(30, 32, 40))
-    assert not pages.is_result_bytes(dark), '关卡列表被当成结算页'
+    assert stagenav.probe_bytes(dark) == 'map', '深色帧应判成活动关卡地图'
 
     class FakeTouch2:
         def __init__(self, frames):
@@ -6132,30 +6136,54 @@ def check_pages_skills_logs(tmp):
         def tap(self, x, y):
             self.taps.append((x, y))
 
-    from core import stagenav
-    fake = FakeTouch2([result, dark])
+    fake = FakeTouch2([dark])
     old_touch = stagenav.Touch
+
+    class _FastTime:                 # 别为了等 1.4 秒让冒烟慢几秒
+        @staticmethod
+        def sleep(_s):
+            return None
+
+        @staticmethod
+        def time():
+            return 0.0
+    old_time = maaplan.time
+    maaplan.time = _FastTime
     stagenav.Touch = lambda *a, **k: fake
     logs_lr = []
     try:
         assert maaplan._leave_result(
             {'adb_path': 'x', 'address': 'y'}, {'clientType': 'Official'},
-            'OS-6', logs_lr.append), '结算页点掉后要在关卡列表上放行'
+            'OS-6', logs_lr.append), '点一下就该回到活动关卡界面'
+        # 第一帧不判（结算页底部也暗，probe 会误判成地图），必须先点一下
         assert len(fake.taps) == 1, fake.taps
-        assert any('结算页已点掉' in x for x in logs_lr), logs_lr
-        assert any('关卡列表' in x for x in logs_lr), logs_lr
+        assert fake.taps[0] == maaplan._RESULT_TAP, fake.taps
+        assert any('已回到活动关卡界面' in x for x in logs_lr), logs_lr
 
-        # 已经在关卡列表上就别乱点（点了会推进结算/选关界面）
-        fake2 = FakeTouch2([dark])
-        stagenav.Touch = lambda *a, **k: fake2
-        logs_lr2 = []
-        assert maaplan._leave_result(
-            {'adb_path': 'x', 'address': 'y'}, {'clientType': 'Official'},
-            'OS-6', logs_lr2.append)
-        assert fake2.taps == [], fake2.taps
-        assert any('已经不在结算页' in x for x in logs_lr2), logs_lr2
+        # 点满 3 次还不在关卡界面（比如掉到主页）→ 回主页 + 重新导航兜底
+        fake3 = FakeTouch2([dark])
+        stagenav.Touch = lambda *a, **k: fake3
+        old_probe = stagenav.probe_bytes
+        stagenav.probe_bytes = lambda d: 'home'
+        old_home, old_nav = pages.to_home, maaplan._navigate
+        pages.to_home = lambda *a, **k: True
+        naved3 = []
+        maaplan._navigate = (lambda conn, st, log, client=None:
+                             (naved3.append(st) or (True, 'ok')))
+        logs_lr3 = []
+        try:
+            assert maaplan._leave_result(
+                {'adb_path': 'x', 'address': 'y'}, {'clientType': 'Official'},
+                'OS-6', logs_lr3.append), logs_lr3
+        finally:
+            pages.to_home, maaplan._navigate = old_home, old_nav
+            stagenav.probe_bytes = old_probe
+        assert len(fake3.taps) == 3, fake3.taps
+        assert naved3 == ['OS-6'], naved3
+        assert any('还不在活动关卡界面' in x for x in logs_lr3), logs_lr3
     finally:
         stagenav.Touch = old_touch
+        maaplan.time = old_time
 
 
 def main():
