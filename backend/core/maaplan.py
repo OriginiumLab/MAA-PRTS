@@ -958,7 +958,12 @@ def run_core(spec, tid=None, timeout=None):
         # 用户 2026-11-19 需求 3：作业集里这一关的作业不行就换一份别的，
         # 自动接着挂，并且日志里说清楚换了哪份。
         swapped, chains_mark = [], None
-        if state.get('results') and spec.get('retry'):
+        failed = any(not r.get('ok') for r in (state.get('results') or []))
+        if failed and spec.get('copilotList'):
+            # 用户 2026-11-22「我刚刚确实是 2 星，但是 agent 并没有帮我换作业
+            # 重新挂」：旧条件要求 spec['retry'] 非空，而每关只有一份候选时
+            # _prepare_ops 根本不给 retry，于是翻车后什么都不做。现在只要翻
+            # 过车就交给 _retry_failed——里面没得换会同一份再试一次。
             swapped, chains_mark = _retry_failed(eng, spec, state, log, d, budget,
                                                  conn=conn)
         if not finished and not state.get('pause'):
@@ -1480,6 +1485,15 @@ def _on_core_event(ev, log, tid, state=None):
                 # 是最可靠的「每关成功」信号（2026-11-22 用户要求）。
                 if prev and prev.upper() != code.upper():
                     log('✓ %s 完成' % prev)
+                    if state is not None:
+                        # 顺便记进 results：重挂（_retry_failed）靠它判断
+                        # 「这关到底过没过」。MaaCore 在 Copilot 里不发
+                        # StageDrops，换关是唯一可靠的「上一关三星通过」
+                        # 信号（2026-11-22 用户报「2 星后不换作业」时补的）。
+                        state.setdefault('results', []).append(
+                            {'stage': prev, 'ok': True, 'why': '',
+                             'at': time.time(),
+                             'cid': state.get('cur_cid') or 0})
                 log('换作业：%s' % code)
                 if state is not None:
                     state['stage'] = code
@@ -1692,11 +1706,20 @@ def _mark_fail(ev, log, state):
     state['fail_stage'] = cur
     state['fail_at'] = time.time()
     why = str(ev.get('why') or '').strip()
-    try:
-        from . import stageplan
-        why = stageplan.explain_failure(why) or why
-    except Exception:
-        pass
+    if why:
+        try:
+            from . import stageplan
+            why = stageplan.explain_failure(why) or why
+        except Exception:
+            pass
+    else:
+        # MaaCore 的 TaskChainError 只带 taskchain/taskid，**没有原因字段**
+        # （2026-11-22 实测：details 是空的）。只能拿刚才那条 SubTaskError 推：
+        # Copilot@WaitUntilEndOfAction = 结算页认了 20 次没认出三星。不说这句
+        # 的话日志只有「MAA 没给原因」，用户根本不知道干嘛要换作业重挂。
+        sub = str(state.get('last_sub_error') or '')
+        if sub.rsplit('@', 1)[-1] in ('WaitUntilEndOfAction', 'EndOfAction'):
+            why = '结算不是三星（漏怪 / 作业没打过这关）'
     state.setdefault('results', []).append(
         {'stage': cur, 'ok': False, 'why': why, 'at': time.time(),
          'cid': state.get('cur_cid') or 0})
@@ -1721,22 +1744,29 @@ def _tally(results):
 
 
 def _leave_result(conn, spec, stage, log):
-    """翻车后把界面从「失败结算页」点回关卡列表；点不动就重新导航
+    """翻车后把界面从「失败结算页」退回**关卡菜单**；退不掉就重新导航
 
     用户 2026-11-19 的实测口径：一次战斗失败后要随便点一下界面回到关卡界面，
     在那个界面重排作业集就能换作业开打，**不需要重新唤醒/登录**。
+
+    2026-11-22 又补了关键一句：「**在失败界面重新挂作业是不会成功的，需要在
+    关卡菜单界面重挂**」。所以这里不能只看 ``stagenav.probe == 'map'`` 就放行
+    ——结算页底部也是暗的，probe 会把它判成「活动地图」，作业排上去 MaaCore
+    在结算页上 OCR 不到关卡名，整轮白跑。现在先用 ``pages.is_result_bytes``
+    认「行动结束」那两颗星：认到就继续点，点到认不出来才算离开结算页。
 
     点哪儿不是随便挑的：用的是 MAA 自己 ``ClickCorner`` 那块
     ``[1000, 20, 270, 50]``（1280 口径，中心 (1135,45)）——任务定义里写得很
     清楚「点击屏幕右边，不会点到掉落物品，且不会关掉关卡选择的一块区域」，
     所以结算页上能推进、在关卡列表上点了也无害，重复点几次都安全。
 
-    点完看一眼是不是回到关卡列表（``stagenav.probe == 'map'``）；不是就按
-    正常导航流程重新到位（首页 → 终端页 → 活动地图 → 分区）。这一段只保证
-    「界面能接受新的作业集」，失败也不抛错——真开不了打，下一轮还有日志。
+    点干净之后：probe 说是关卡列表就停手；否则 ``pages.to_home()`` 回主页、
+    再走一次完整导航（主页 → 终端页 → 活动地图 → 分区）。多花十几秒，但能
+    保证作业排在关卡菜单上。这一段只保证「界面能接受新的作业集」，失败也不
+    抛错——真开不了打，下一轮还有日志。
     """
     try:
-        from . import stagenav
+        from . import pages, stagenav
     except Exception:
         return False
     if not conn:
@@ -1748,23 +1778,36 @@ def _leave_result(conn, spec, stage, log):
         if not alive:
             log('点结算页失败：adb 不可用（%s）' % detail)
             return False
-        prev = touch.shot()
-        if not prev:
+        cur = touch.shot()
+        if not cur:
             log('点结算页失败：截不到图')
             return False
-        for i in range(4):
+        if not pages.is_result_bytes(cur) and stagenav.probe_bytes(cur) == 'map':
+            log('已经不在结算页，界面就在关卡列表')
+            return True
+        on_result = pages.is_result_bytes(cur)
+        for i in range(6):
             touch.tap(*_RESULT_TAP)
             time.sleep(1.5)
             cur = touch.shot()
-            if cur and not stagenav._moved(prev, cur, thr=2.5):
-                break                   # 画面不动了：结算页已经点完
-            prev = cur
-        state_now = stagenav.probe(touch)
-        if state_now == 'map':
-            log('结算页已点回到关卡列表')
-            return True
-        log('点完不在关卡列表（判定：%s），重新导航一次再重挂'
-            % (state_now or '未知'))
+            if not cur:
+                break
+            on_result = pages.is_result_bytes(cur)
+            if not on_result:
+                log('结算页已点掉')
+                break
+        if cur and not on_result:
+            state_now = stagenav.probe_bytes(cur)
+            if state_now == 'map':
+                log('已回到关卡列表，在这里重排作业')
+                return True
+            log('点完不在关卡列表（判定：%s），回主页重新导航一次再重挂'
+                % (state_now or '未知'))
+        elif on_result:
+            log('结算页点了 6 次还在（认得出左上角两颗星），回主页重新导航')
+        # 兜底：先回主页（这一步认得基建确认框/剧情页，不会盲按返回），
+        # 再走一遍完整导航。多花十几秒，换「一定在关卡菜单上」。
+        pages.to_home(touch, log)
         ok, why = _navigate(conn, stage, log, client=spec.get('clientType'))
         log('重挂前重新导航%s：%s' % ('完成' if ok else '失败', why))
         return ok
@@ -1772,19 +1815,28 @@ def _leave_result(conn, spec, stage, log):
         log('点结算页出错：%s: %s' % (type(e).__name__, e))
         return False
 
-
 def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
-    """一轮打完，把翻车的关**换一份作业**重挂（同段内，不重新导航）
+    """翻车后换作业重挂：**只改翻车那一关，其余关原样**
 
-    用户 2026-11-19 的需求 3：「某关战斗失败了，修改作业集中该关卡的作业，
-    换其他作业自动挂这关（重新搞作业集应该排查已经成功的关卡，不用重复挂到
-    之前打完的关卡了）」。
+    用户 2026-11-19 需求 3 的原话是「某关战斗失败了，修改作业集中该关卡的作业，
+    换其他作业自动挂这关」；2026-11-22 又补了实测口径：「我刚刚确实是 2 星，但是
+    agent 并没有帮我换作业重新挂……翻车后 agent 应该知道我翻车了，然后回到对应的
+    关卡界面，更换作业集（只改那关，其他不变，帮我重新挂），然后任务继续」。
 
-    所以每轮只重排「没成功」的关，每关取候选池里**下一份没试过**的作业；
-    某关的候选都试过了就跳过它（再用同一份只会同样翻车）。
+    所以这里做四件事：
 
-    同一个 Engine 内直接 append 新的 Copilot 任务：MaaCore 的队列支持追加，
-    不必重新 open/connect/导航——省掉每轮十几秒，界面也留在原地。
+    1. **只动翻车那一关**：从候选池取该关「下一份没试过」的作业；翻车关之后
+       **还没打**的关沿用原来那份（旧实现会顺手把它们也换成下一份，白冒风险）。
+    2. **没别的作业就同一份再试一次**：漏怪是偶发的，2 星重打一次经常就三星。
+       以前「候选都试过」直接收工，把后面几关一起丢下——用户看到的「翻车后
+       什么都不做」有一半是这个。同一份只补试一次（记在 ``same_retry``），
+       不会死循环。
+    3. **回到对应关卡界面**：翻车时游戏停在「作战失败」结算页，先点回关卡列表
+       （``_leave_result``）。不点的话 MaaCore 的 ClickStageName 在结算页上 OCR
+       不到关卡名，整轮重挂白跑。
+    4. **重挂后按最新结果继续**：每轮结束重看 ``state['results']``，哪关还失败才
+       继续重挂；都过了立刻收手，不会把打过的关再打一遍（旧实现每轮都从同一个
+       起点重排，第二轮会白烧一遍理智）。
 
     返回 ``(swapped, mark)``；``mark`` 是重试前 ``eng.chains`` 的长度（可能是 0），
     收尾判失败要从它往后看，否则第一轮的失败会把重试成功的结果盖掉。真的没
@@ -1792,90 +1844,130 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
     """
     retry = spec.get('retry') or {}
     pool = retry.get('pool') or {}
-    rounds = int(retry.get('maxRounds') or 1)
+    # 没有 retry（每关都只有一份作业、或上层没给候选池）也要走一轮：用户报的
+    # 就是「2 星之后什么都不做」。maxRounds 缺省 2 = 首轮 + 一次同份重挂。
+    rounds = int(retry.get('maxRounds') or 2)
+    if state.get('pause'):
+        log('已暂停（%s），不重挂' % state['pause'])
+        return [], None
+    # 重挂也没用的原因（理智不够 / 关卡没解锁 / 作业与关卡对不上），别烧时间
+    why_all = ' '.join(str(r.get('why') or '')
+                       for r in (state.get('results') or []) if not r.get('ok'))
+    for k in ('理智不够', '关卡还没解锁', 'MAA 不认这个关卡'):
+        if k in why_all:
+            log('翻车原因不值得重挂（%s），跳过' % k)
+            return [], None
     order = []
     for r in (spec.get('copilotList') or []):
         code = str(r.get('stage_name') or '').strip()
         if code:
             order.append({'stage': code,
-                          'variant': 'raid' if r.get('is_raid') else 'normal'})
-    if rounds <= 1 or not order or not pool:
+                          'variant': 'raid' if r.get('is_raid') else 'normal',
+                          'cid': _cid_of(r.get('filename'))})
+    if not order:
         return [], None
 
     mark = len(eng.chains)
-    # 已经试过的作业（首轮那份算一份）：换过的不再换回来，否则两轮就在
-    # #102 → #202 → #102 之间打转，白烧理智
-    attempted = {}
+    # 首轮已经在用哪份作业：换过的不再换回来，否则 #102 → #202 → #102 打转
+    tried = {}
     for k, v in (state.get('tried') or {}).items():
-        attempted[k] = {v}
+        tried[k] = {v}
+    same = set(state.get('same_retry') or [])      # 已用「同一份」补试过的关
+    skip = set(state.get('skip_retry') or [])      # 候选都试过、放弃的关
     swapped = []
-    # 从**失败的那一关**往下重排。以前拿 `cleared`（靠 StageDrops 判定）排除
-    # 已成功的关，但 MaaCore 在 Copilot 里根本不发这个回调，cleared 永远是
-    # 空的——那样会把前面打完的关全重打一遍，白烧理智。现在按「卡在哪一关」
-    # 定位一次：跑到 X 才失败，说明 X 之前的关都已经过去了，只重挂 X 及其
-    # 后面。**idx 在进循环前算好**：每轮重排后 state['stage'] 会被清空，第二轮
-    # 再算就会回到第 0 关，把前面的关又打一遍（这次踩过）。
-    cur = str(state.get('stage') or '').strip().upper()
-    start_idx = 0
-    if cur:
-        start_idx = next((i for i, o in enumerate(order)
-                          if o['stage'].upper() == cur), 0)
-    for rnd in range(2, rounds + 1):
+    for rnd in range(2, rounds + 2):
         left = deadline - time.time()
         if left <= 30:
             log('没时间再重挂了（总时长到上限），停下')
             break
-        pend = order[start_idx:]
-        if not pend:
+        bad = [b for b in _tally(state.get('results') or [])[1]
+               if str(b.get('stage') or '').strip().upper() not in skip]
+        if not bad:
+            break                     # 上一轮重挂成功（或没有失败关）
+        bad_up = {str(b.get('stage') or '').strip().upper() for b in bad}
+        idx_bad = [i for i, o in enumerate(order) if o['stage'].upper() in bad_up]
+        if not idx_bad:
             break
+        start_idx = min(idx_bad)
+        log('翻车了：%s，先回关卡界面再换个作业重挂'
+            % '、'.join(order[i]['stage'] for i in idx_bad))
         new_ops, picked = [], []
-        for o in pend:
+        for i, o in enumerate(order):
+            if i < start_idx:
+                continue              # 前面已经打完的关不再重打
             key = '%s@%s' % (o['stage'].upper(), o['variant'])
-            cids = [x for x in (pool.get(key) or []) if x]
-            used = attempted.setdefault(key, set())
-            nxt = next((c for c in cids if c not in used), None)
-            if nxt is None:
-                continue
-            new_ops.append({'copilotId': nxt, 'stageCode': o['stage'],
+            # 「当前在用的是哪份」= state['tried']（每换一次就更新）。order 里的
+            # cid 只是首轮那份，拿它当「同一份」会退回更早的作业（实测：第二轮
+            # 换回 #102 而不是刚在用的 #202，等于又换了一次却记成「同一份」）。
+            cid = (state.get('tried') or {}).get(key) or o['cid']
+            if i in idx_bad:
+                cids = [x for x in (pool.get(key) or []) if x]
+                used = tried.setdefault(key, {cid})
+                nxt = next((c for c in cids if c not in used), None)
+                if nxt is None:
+                    if key in same or not cid:
+                        skip.add(o['stage'].upper())
+                        log('跳过 %s：候选作业都试过了，再挂也是同样结果'
+                            % o['stage'])
+                        continue
+                    nxt = cid          # 没有别的作业了：同一份再试一次
+                    same.add(key)
+                    state['same_retry'] = sorted(same)
+                    log('翻车重挂：%s 没有别的作业，同一份 #%s 再试一次'
+                        % (o['stage'], nxt))
+                else:
+                    used.add(nxt)
+                    state.setdefault('tried', {})[key] = nxt
+                    log('换作业重挂：%s %s #%s → #%s'
+                        % (o['stage'],
+                           '突袭' if o['variant'] == 'raid' else '普通',
+                           cid or '?', nxt))
+                picked.append({'stage': o['stage'], 'variant': o['variant'],
+                               'from': cid, 'to': nxt})
+                cid = nxt
+            new_ops.append({'copilotId': cid, 'stageCode': o['stage'],
                             'variant': o['variant']})
-            picked.append((key, o['stage'], o['variant'],
-                           (state.get('tried') or {}).get(key) or 0, nxt))
+        if skip:
+            state['skip_retry'] = sorted(skip)
         if not new_ops:
-            log('没有更多能换的作业了（每关的候选都试过）')
+            log('没有能重挂的作业了，停下（翻车：%s）'
+                % '、'.join(order[i]['stage'] for i in idx_bad))
+            break
+        # 翻车之后游戏停在**失败结算页**（「作战失败 / 行动结束」那一层）。
+        # 用户 2026-11-19：「随便点一下回关卡界面，在那个界面重新运行作业集
+        # 就能换作业，不需要重新唤醒登录」；2026-11-22 又补了硬条件：「在失败
+        # 界面重新挂作业是不会成功的，需要在关卡菜单界面重挂」。
+        # 所以**先离开结算页、再下载/排作业**——顺序反了的话，界面还停在
+        # 结算页时 MaaCore 的 ClickStageName OCR 不到关卡名，整轮白跑。
+        # _leave_result 认左上角两颗星，点干净后 probe 确认在关卡列表；实在
+        # 退不出来就回主页重走一遍导航，仍然不行才放弃这一轮。
+        if not _leave_result(conn, spec, order[start_idx]['stage'], log):
+            log('没能离开结算页，这轮不重挂了（在结算页上排作业一定白跑）')
             break
         rows = prepare_copilot(new_ops, d, account=spec.get('accountFile'),
                                log=lambda m: log('  ' + m))
-        for key, code, var, prev, nxt in picked:
-            used = attempted.setdefault(key, set())
-            used.add(nxt)
-            state.setdefault('tried', {})[key] = nxt
-            swapped.append({'stage': code, 'variant': var,
-                            'from': prev, 'to': nxt})
-            log('换作业重挂：%s %s #%s → #%s'
-                % (code, '突袭' if var == 'raid' else '普通', prev or '?', nxt))
+        swapped.extend(picked)
         state['stage'] = ''
         state['cur_cid'] = 0
         state['by_file'] = {os.path.basename(r.get('filename') or ''):
                             r.get('stage_name') for r in rows if r.get('filename')}
         state['cid_of'] = {os.path.basename(r.get('filename') or ''):
                            _cid_of(r.get('filename')) for r in rows if r.get('filename')}
-        # 翻车之后游戏停在**失败结算页**（「作战失败 / 行动结束」那一层），
-        # 这时把新的作业集排下去，MAA 的 ClickStageName 在结算页上 OCR 不到
-        # 关卡名，整轮重挂就白跑——用户 2026-11-19 实测口径：「战斗失败需要
-        # 随便点击一下界面回到关卡界面，在那个界面重新运行修改后的作业集就
-        # 可以换作业运行，不需要重新唤醒登录」。所以先点一下（MAA 自己的
-        # ClickCorner 区域，点这里不会点到掉落物、也不会关掉关卡选择）再排。
-        _leave_result(conn, spec, pend[0]['stage'], log)
         eng.append('Copilot', _copilot_params(rows, spec))
-        done_n = len(order) - len(pend)
         log('第 %d 轮：从「%s」起重挂 %d 关%s'
-            % (rnd, pend[0]['stage'], len(new_ops),
-               '（前面 %d 关不再重打）' % done_n if done_n else ''))
+            % (rnd, order[start_idx]['stage'], len(new_ops),
+               '（前面 %d 关不再重打）' % start_idx if start_idx else ''))
         if not eng.start():
             raise RuntimeError('重挂时 AsstStart 返回失败')
         if not _wait_run(eng, max(60.0, left), log, state):
             log('第 %d 轮超时，先停下' % rnd)
             eng.stop()
+            break
+        # 这一轮的链一条都没报错 = 重挂成功。最后那一关没有「下一关」可以换，
+        # 所以 states['results'] 里那条旧的失败记录不会被 ok 覆盖——不看链的话
+        # 会接着再排一轮（把刚打完的关又打一遍）。
+        if not [c for c in eng.chains[mark:] if not c.get('ok')]:
+            log('第 %d 轮重挂没再报失败，继续往下走' % rnd)
             break
     return swapped, mark
 
