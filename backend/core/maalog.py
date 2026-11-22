@@ -57,6 +57,12 @@ _HINTS = (
      '培养计划是空的（plans 没传进去）'),
     (re.compile(r'oper plan does not support drone:\s*(.+)$'),
      '「%s」是装置/召唤物，没有技能可专精'),
+    # 这条 ERR 其实无害：作业里把装置/召唤物写成了「干员组」，MAA 找不到就跳过。
+    # 原文一行 `asst::BattleProcessTask::to_group Group not found in combat
+    # data:  雪崩触发装置` 挂在「开始任务」下面，用户只会以为程序坏了
+    # （2026-11-22 用户对着这条报错问「战斗日志有问题」）。
+    (re.compile(r'to_group .*?combat data:\s*(.+)$'),
+     '作业里的「%s」是装置/召唤物占位，MAA 认不出会跳过，不影响打'),
 )
 
 

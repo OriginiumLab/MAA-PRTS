@@ -1121,11 +1121,12 @@ def _fix_oper(op, idx, notes):
             need = max(2, need)         # 带模组要求精二
 
     if need > 0:
+        # 练度下限是**顺手补齐**的，不写进修正说明：一场作业集有 5~10 个干员，
+        # 每个都来一行「芬 精英要求 None → 1」，用户看到的就是一屏噪音
+        # （2026-11-22 明确说「修正练度就不要显示了」）。补照样补，只是不出声。
         if not isinstance(req, dict):
             op['requirements'] = {'elite': need}
-            notes.append('%s 缺练度字段，补上精英 %d' % (name, need))
         elif int(req.get('elite') or 0) < need:
-            notes.append('%s 精英要求 %s → %d' % (name, req.get('elite'), need))
             req['elite'] = need
     return True
 

@@ -42,6 +42,13 @@ import time
 # 实测钉住（asst.log 的 append_callback 与收到的号一一对齐）：
 #   TaskChainStart=10001  TaskChainCompleted=10002  TaskChainStopped=10004
 #   TaskChainError=10000
+#
+# **子任务是 20000 段，不是 70000 段**（2026-11-22 用户报「战斗日志没有 MAA
+# 那种提示」才查出来）：这个项目最初抄的是 MaaCore 4.x 的号，5.x/6.x 的
+# AsstMsg 已经把 SubTask* 挪到 20000~20004。写了 70001 的后果是——任务链级
+# 的「开始任务/任务失败」照常显示，但「开始编队 / 选择干员 / 当前步骤: 部署」
+# 这些**全被子任务判断挡掉**（`_translate` 里一个都不匹配），一场仗打完日志
+# 里一个字都没有。真机实测回调码：Depot 跑一趟 = 10001,10002,20001,20002,20003。
 MSG_INTERNAL_ERROR = 0
 MSG_INIT_FAILED = 1
 MSG_CONNECTION_INFO = 2
@@ -51,11 +58,16 @@ MSG_TASK_START = 10001
 MSG_TASK_COMPLETED = 10002
 MSG_TASK_EXTRA = 10003
 MSG_TASK_STOPPED = 10004
-MSG_SUBTASK_ERROR = 70000
-MSG_SUBTASK_START = 70001
-MSG_SUBTASK_COMPLETED = 70002
-MSG_SUBTASK_EXTRA = 70003
-MSG_SUBTASK_STOPPED = 70004
+MSG_SUBTASK_ERROR = 20000
+MSG_SUBTASK_START = 20001
+MSG_SUBTASK_COMPLETED = 20002
+MSG_SUBTASK_EXTRA = 20003
+MSG_SUBTASK_STOPPED = 20004
+
+# 老核心（4.x）用 70000 段发子任务：两段都认，换核心不至于又哑一次
+_SUBTASK_OLD = {70000: MSG_SUBTASK_ERROR, 70001: MSG_SUBTASK_START,
+                70002: MSG_SUBTASK_COMPLETED, 70003: MSG_SUBTASK_EXTRA,
+                70004: MSG_SUBTASK_STOPPED}
 
 CONNECT_FAILED = {MSG_INIT_FAILED, MSG_CONNECTION_INFO}
 
@@ -188,7 +200,15 @@ class Engine:
                     data = {'raw': raw}
             except Exception:
                 return
-            ev = self._translate(msg, data)
+            # 翻译层自己抛异常绝不能把**整条**事件吞掉还无声无息：以前
+            # `_translate` 裸调，子任务号写错之后一场仗的日志就是这么消失的
+            # （面板上只有「开始任务/任务失败」两行）。现在出错记一条 error
+            # 事件，至少面板上看得出「翻译炸了」。
+            try:
+                ev = self._translate(msg, data)
+            except Exception as e:
+                ev = {'t': time.time(), 'kind': 'error',
+                      'text': '日志翻译出错（msg=%s）：%s' % (msg, e)}
             if ev is None:
                 return
             with self._lock:
@@ -216,6 +236,7 @@ class Engine:
         ``SubTaskStart`` 每秒能刷十几条，全推给前端会把面板刷爆，所以只在
         子任务名变化时才出一条。
         """
+        msg = _SUBTASK_OLD.get(msg, msg)      # 4.x 老核心的 70000 段
         chain = data.get('taskchain') or ''
         sub = data.get('subtask') or ''
         what = data.get('what') or ''
@@ -277,6 +298,15 @@ class Engine:
             if node and '@' not in node and chain:
                 node = '%s@%s' % (chain, node)
             return {'t': t, 'kind': 'node', 'chain': chain, 'sub': node}
+        if msg == MSG_SUBTASK_ERROR:
+            # 子任务失败：MaaCore 只给 pipeline 名，不给原因。最典型的是
+            # ``Copilot@WaitUntilEndOfAction``——打仗打完了，但结算不是三星
+            # （漏怪 / 作业没打过），MaaCore 反复认「三颗星」认不到 20 次就报
+            # 这个。以前这层不接，用户只看到「任务失败：自动战斗」+ 一片空白
+            # （2026-11-22 实测：OS-6 打了 2 星，日志里没有任何解释）。
+            first = data.get('first') or []
+            node = str(first[0] or '') if isinstance(first, list) and first else sub
+            return {'t': t, 'kind': 'sub_error', 'chain': chain, 'sub': node}
         if msg == MSG_SUBTASK_EXTRA:
             # 掉落 / 关卡识别 / 抄作业换关 / 理智 / 战斗动作 / 培养结果，
             # 这几类对「现在在干什么」有意义。2026-11-18 补 CopilotAction 与

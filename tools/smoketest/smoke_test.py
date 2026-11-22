@@ -5907,6 +5907,54 @@ def check_pages_skills_logs(tmp):
     assert '✓ OS-1 完成' in logs, logs
     assert state['stage'] == 'OS-2', state
 
+    # ---- ⑤ 回调码：MaaCore 5.x/6.x 的子任务是 20000 段 ----
+    # 这一段是 2026-11-22 用户报「战斗日志没有 MAA 那种提示」的真凶：代码里
+    # 一直写着 4.x 的 70001/70003，于是任务链级照常显示、逐条步骤全被丢掉。
+    from core import maacore
+    assert maacore.MSG_SUBTASK_START == 20001, maacore.MSG_SUBTASK_START
+    assert maacore.MSG_SUBTASK_COMPLETED == 20002
+    assert maacore.MSG_SUBTASK_EXTRA == 20003
+    assert maacore.MSG_SUBTASK_ERROR == 20000
+    eng = maacore.Engine.__new__(maacore.Engine)    # 不加载核心，只验翻译层
+
+    node = eng._translate(maacore.MSG_SUBTASK_START,
+                          {'taskchain': 'Copilot', 'first': ['Copilot@BattleStartPre']})
+    assert node and node['kind'] == 'node' and node['sub'] == 'Copilot@BattleStartPre', node
+    assert maaplan._subtask_label(node['sub']) == '开始编队'
+    old = eng._translate(70001, {'taskchain': 'Copilot', 'first': ['BattleStartAll']})
+    assert old and old['sub'] == 'Copilot@BattleStartAll', old
+    ext = eng._translate(maacore.MSG_SUBTASK_EXTRA,
+                         {'taskchain': 'Copilot', 'what': 'CopilotAction',
+                          'details': {'action': 'Deploy', 'target': '芬'}})
+    assert ext and ext['kind'] == 'extra' and ext['what'] == 'CopilotAction', ext
+    assert eng._translate(70003, {'taskchain': 'Copilot', 'what': 'BattleFormation',
+                                  'details': {'formation': ['芬']}})
+
+    serr = eng._translate(maacore.MSG_SUBTASK_ERROR,
+                          {'taskchain': 'Copilot', 'first': ['Copilot@WaitUntilEndOfAction']})
+    assert serr and serr['kind'] == 'sub_error', serr
+    slogs = []
+    maaplan._on_core_event(serr, slogs.append, None, {})
+    assert any('不是三星' in x for x in slogs), slogs
+    # 装置占位那条 ERR 要翻成人话，别让用户以为程序坏了
+    from core import maalog
+    human = maalog._humanize('asst::BattleProcessTask::to_group Group not found'
+                             ' in combat data:  雪崩触发装置')
+    assert '雪崩触发装置' in human and '不影响打' in human, human
+
+    # ---- ⑥ 练度修正是顺手补的，不再写进修正说明 ----
+    from core import copilot as cpl
+    notes = []
+    op = {'name': '维什戴尔', 'skill': 1, 'requirements': {'skill_level': 8}}
+    cpl._fix_oper(op, {'维什戴尔': (6, 'char_113_cqbw')}, notes)
+    assert op['requirements']['elite'] == 2, op
+    assert not any('精英' in n for n in notes), notes
+    notes = []
+    bare = {'name': '某某', 'skill': 2}
+    cpl._fix_oper(bare, {'某某': (4, 'char_x')}, notes)
+    assert bare['requirements'] == {'elite': 1}, bare
+    assert not notes, notes
+
 
 def main():
     try:

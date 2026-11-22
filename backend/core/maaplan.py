@@ -1455,6 +1455,18 @@ def _on_core_event(ev, log, tid, state=None):
         if state is not None:
             state['nodes'] = {'label': label, 'at': now}
         log(label)
+    elif kind == 'sub_error':
+        # 子任务失败：MaaCore 只说「哪个 pipeline 卡住」，原因要我们自己翻。
+        sub = ev.get('sub') or ''
+        key = sub.rsplit('@', 1)[-1]
+        if key in ('WaitUntilEndOfAction', 'EndOfAction'):
+            log('作战结束了，但结算不是三星（漏怪 / 作业没打过这关）')
+        else:
+            label = _subtask_label(sub)
+            if label:
+                log('%s 没成功' % label)
+        if state is not None:
+            state['last_sub_error'] = sub
     elif kind == 'extra':
         what = ev.get('what')
         data = ev.get('data') or {}
