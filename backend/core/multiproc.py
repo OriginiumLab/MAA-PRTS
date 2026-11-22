@@ -24,9 +24,54 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 from . import settings
+
+# 正在跑的子进程：``(tid, idx) → {'proc', 'files', 'tag'}``。
+# 「停止」要能只停某一路（用户 2026-11-23：「停止的话不能指定停止，会一起
+# 停其他任务」）：多开时一台模拟器一个子进程，光 AsstStop 是够不着子进程里
+# 那个 MaaCore 的，只能按账号把那一路的进程杀掉。
+_RUNNING = {}
+_STOPPED = set()
+_RUN_LOCK = threading.Lock()
+
+
+def _files_of(payload):
+    """这一组负责哪些账号（group.files 优先，其次 rows[].file）"""
+    g = payload.get('group') or {}
+    files = [str(x) for x in (g.get('files') or []) if x]
+    if not files:
+        files = [str(r.get('file')) for r in (g.get('rows') or [])
+                 if r.get('file')]
+    return files
+
+
+def stop_groups(owners=None):
+    """停掉正在跑的子进程（``owners`` 空 = 全停）→ 停掉的组数
+
+    只 kill 点名的那些组，别的组继续跑。被杀的那一路不会写回结果文件，
+    调用方按「手动停止」记账（见 :func:`run_group` 的第三个返回值）。
+    """
+    with _RUN_LOCK:
+        items = list(_RUNNING.items())
+    n = 0
+    from . import maacore
+    for key, ent in items:
+        with _RUN_LOCK:
+            if key in _STOPPED:                  # 已经发过 kill，别重复计数
+                continue
+        if owners and not maacore.owner_match_any(ent.get('files') or [], owners):
+            continue
+        with _RUN_LOCK:
+            _STOPPED.add(key)
+        try:
+            ent['proc'].kill()
+            n += 1
+        except Exception:                        # noqa: BLE001 已退出也算停掉
+            pass
+    return n
 
 
 def group_tag(group):
@@ -85,17 +130,21 @@ def tail_lines(path, pos, log):
 
 
 def run_group(kind, tid, idx, payload, log, who='默认模拟器'):
-    """在独立进程里跑一组 → ``(results, report)``
+    """在独立进程里跑一组 → ``(results, report, stopped)``
 
     ``kind`` 是 worker 那边的分发键（``skill`` = skills._run_group，
-    ``plan`` = maaplan._run_group）。子进程起不来 / 中途崩了返回 ``({}, [])``，
-    调用方按自己的口径记失败。
+    ``plan`` = maaplan._run_group）。子进程起不来 / 中途崩了返回
+    ``({}, [], False)``，调用方按自己的口径记失败。
+
+    ``stopped`` 为 True 表示这一组是**用户点名停掉的**（:func:`stop_groups`
+    杀了子进程），此时结果为空但不算失败——不能给它记一条「子进程异常」。
     """
     base = os.path.join(settings.DEBUG_DIR, 'tasks', '%s-g%d' % (tid, idx))
     logp, resp, payp = base + '.log', base + '.json', base + '.payload'
     body = dict(payload)
     body.update({'kind': kind, 'log': logp, 'result': resp,
                  'tag': payload.get('tag') or group_tag(body.get('group') or {})})
+    key = (tid, idx)
     for p in (logp, resp):
         try:
             os.remove(p)
@@ -112,13 +161,31 @@ def run_group(kind, tid, idx, payload, log, who='默认模拟器'):
     except Exception as e:                       # noqa: BLE001 起不来要留痕
         log('[组 %s] 起子进程失败：%s: %s（这一组没跑）'
             % (who, type(e).__name__, e))
-        return {}, []
+        return {}, [], False
+
+    with _RUN_LOCK:
+        _RUNNING[key] = {'proc': proc, 'files': _files_of(body), 'tag': who}
 
     pos = 0
-    while proc.poll() is None:
+    try:
+        while proc.poll() is None:
+            pos = tail_lines(logp, pos, log)
+            time.sleep(0.35)
         pos = tail_lines(logp, pos, log)
-        time.sleep(0.35)
-    pos = tail_lines(logp, pos, log)
+    finally:
+        with _RUN_LOCK:
+            _RUNNING.pop(key, None)
+    with _RUN_LOCK:
+        stopped = key in _STOPPED
+        _STOPPED.discard(key)
+
+    if stopped:
+        log('[组 %s] 已按你的要求停下（这一组，别的组还在跑）' % who)
+        try:
+            os.remove(payp)
+        except OSError:
+            pass
+        return {}, [], True
 
     got = {}
     try:
@@ -134,4 +201,4 @@ def run_group(kind, tid, idx, payload, log, who='默认模拟器'):
         os.remove(resp)
     except OSError:
         pass
-    return got.get('results') or {}, got.get('report') or []
+    return got.get('results') or {}, got.get('report') or [], False

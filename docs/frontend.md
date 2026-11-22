@@ -374,3 +374,10 @@ markdown 渲染：`mdToHtml(src)`（app.js）——整篇先 `esc()` 再按行�
 日志按钮会清右栏 DOM 但不清 Set（避免旧任务历史重灌）。多任务并发时日志按到达
 顺序混排，靠任务头分隔。右栏标题改「任务进度」，空态文案「skill / 后台任务的
 进度日志会显示在这里。」
+
+**标题栏那个「停止」（2026-11-23）**：`.chat-side-head` 里 `#chat-side-stop`
+（`.chat-head-btn`，`margin-left:auto` 贴右），点了只停**当前这个账号**——
+`POST /api/run/stop {file}`，后端按账号筛实例/子进程。用户报的原话是「停止
+不能指定，会一起停其他任务」，所以这个按钮永远只传 `CHAT.side.cur`，全停仍
+走聊天（`stop_run` 不带 account）。结果用 `sideSay()` 写进右栏：右栏是数据
+驱动的（按任务存行、按账号过滤），直接 append DOM 切一次账号就没了。

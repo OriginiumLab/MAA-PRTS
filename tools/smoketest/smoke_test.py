@@ -5270,7 +5270,10 @@ def check_emu_binding(tmp):
     import json
     from core import acctbind, api, envcheck, maaplan, settings, skills
 
-    # ---- ① 客户端类型：档案里的 Config(LDPlayer) 绝不能当客户端类型 ----
+    # ---- ① 客户端类型：档案里的 Config(LDPlayer) 只当**连接配置名** ----
+    # 2026-11-23 修：AsstConnect 第 4 个参数是连接配置名（General/LDPlayer…），
+    # 客户端类型只能进任务参数（StartUp.client_type）。以前把客户端类型塞进
+    # AsstConnect，asst.log 每次都留一行 `config Official not found`。
     old_conn = maaplan._connection
     maaplan._connection = lambda d, p=None: {
         'adb_path': 'adb', 'address': 'emulator-5554', 'emu_kind': 'LDPlayer',
@@ -5278,13 +5281,13 @@ def check_emu_binding(tmp):
     try:
         c = maaplan._conn_for({'maaDir': r'D://M', 'profile': 'moren',
                                'clientType': 'Bilibili'})
-        assert c['config'] == 'Bilibili', c
+        assert c['config'] == 'LDPlayer', c
         assert c['client'] == 'Bilibili' and c['emu_kind'] == 'LDPlayer', c
         c2 = maaplan._conn_for({'maaDir': r'D://M', 'clientType': 'Official',
                                 'adbAddress': 'emulator-5556'})
-        assert c2['address'] == 'emulator-5556' and c2['config'] == 'Official', c2
-        c3 = maaplan._conn_for({'maaDir': r'D://M'})   # 没渠道 → 官服兜底
-        assert c3['config'] == 'Official', c3
+        assert c2['address'] == 'emulator-5556' and c2['config'] == 'LDPlayer', c2
+        c3 = maaplan._conn_for({'maaDir': r'D://M'})   # 档案没写连接配置 → General
+        assert c3['config'] == 'LDPlayer' and c3['client'] == 'Official', c3
         assert maaplan._client_cn(c) == 'b服', maaplan._client_cn(c)
     finally:
         maaplan._connection = old_conn
@@ -5363,6 +5366,131 @@ def check_emu_binding(tmp):
     finally:
         envcheck.read_config, envcheck._devices = old_rc, old_dev
         skills._ADDR.map = {}
+
+
+def check_client_and_stop(tmp):
+    """B61 客户端类型落到任务参数 / 停止能按账号点名
+
+    2026-11-23 用户报两件事，同一条跑机链上两个洞：
+
+    ① 「还是把我 b 服账号认成官服的，毫不犹豫启动了官服，在一群数字里找我
+       b 服账号」。asst.log 实证 ``append_task StartUp {"client_type":
+       "Official"}`` + ``am start -n com.hypergryph.arknights/...``。根因不是
+       判定写错，而是 ``skill_fight`` 建 spec 时只从 ``_profile_kw`` 里取了
+       ``profile``，把 ``clientType`` 丢了，``core_tasks`` 只能按 Official
+       兜底。现在 ``resolve_client`` 收口，并且 spec 固定带 ``accountFile``。
+
+    ② 「停止的话不能指定停止，会一起停其他任务」。以前只有全停入口
+       （``stop_all_live``），停 b 服会把官服那台正在打的关也砍掉。
+    """
+    _reset_config(tmp)
+    import json
+    from core import acctbind, api, maacore, maaplan, settings, skills
+
+    # ---- ① 渠道判定只有一个入口 ----
+    assert maaplan.resolve_client({'clientType': 'Bilibili'}) == 'Bilibili'
+    assert maaplan.resolve_client({'clientType': 'bilibili服'}) == 'Bilibili'
+    assert maaplan.resolve_client({'channel': '官服'}) == 'Official'
+    assert maaplan.resolve_client({'clientType': '乱写'}) == 'Official'
+    assert maaplan.resolve_client({}) == 'Official'
+
+    # 账号文件兜底：以后谁再加一条跑机入口忘了带 clientType，也不会按官服跑
+    file = '测试号 bilibili服.json'
+    with io.open(os.path.join(settings.CONFIG_DIR, file), 'w',
+                 encoding='utf-8', newline='') as f:
+        json.dump({'account': {'uid': '1', 'nickName': '测试号',
+                               'channelName': 'bilibili服'}, 'maa': {}},
+                  f, ensure_ascii=False)
+    with io.open(os.path.join(settings.CONFIG_DIR, '别的号 官服.json'), 'w',
+                 encoding='utf-8', newline='') as f:
+        json.dump({'account': {'uid': '2', 'nickName': '别的号',
+                               'channelName': '官服'}, 'maa': {}},
+                  f, ensure_ascii=False)
+    assert maaplan.resolve_client({'accountFile': file}) == 'Bilibili'
+    kw = skills._spec_kw(file)
+    assert kw.get('clientType') == 'Bilibili' and kw.get('accountFile') == file, kw
+
+    # ---- ② StartUp 的 client_type 才是决定启哪个包的参数 ----
+    spec = dict({'tasks': ['startup']}, **skills._spec_kw(file))
+    tasks = maaplan.core_tasks(spec, maa_dir=tmp)
+    assert tasks and tasks[0][0] == 'StartUp', tasks
+    assert tasks[0][1]['client_type'] == 'Bilibili', tasks[0]
+    tasks2 = maaplan.core_tasks({'tasks': ['startup'],
+                                 'accountFile': '别的号 官服.json'}, tmp)
+    assert tasks2[0][1]['client_type'] == 'Official', tasks2[0]
+    # 简报里说的是人话（b服 / 官服），不是 Bilibili
+    assert 'b服' in maaplan._brief('StartUp', tasks[0][1]), \
+        maaplan._brief('StartUp', tasks[0][1])
+
+    # ---- ③ 停止按账号点名：只停那一路 ----
+    class _Fake(object):
+        def __init__(self, owner):
+            self.owner = owner
+            self._handle = 1
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    a = _Fake(file)
+    b = _Fake('别的号 官服.json')
+    c = _Fake('')                      # 没挂归属的实例：点名永远停不到它
+    old_live = maacore._LIVE
+    maacore._LIVE = {a, b, c}
+    try:
+        assert maacore.owner_match(file, [file[:-5]]) is True    # 不带 .json 也认
+        assert maacore.owner_match(file, ['别的号 官服.json']) is False
+        assert maacore.owner_match('', [file]) is False
+        assert maacore.owner_match_any([file, '别的号 官服.json'], ['别的号'])
+        assert maacore.stop_live(['测试号 bilibili服']) == 1
+        assert a.stopped and not b.stopped and not c.stopped
+        assert maacore.stop_live(['不存在的号']) == 0
+        assert maacore.stop_live(None) == 2              # 全停：剩下两个
+        assert b.stopped and c.stopped
+    finally:
+        maacore._LIVE = old_live
+
+    # 名字 → 账号文件：完全相等优先，子串对上多个就报错（停错号代价太大）
+    assert skills.match_accounts('测试号') == [file]
+    assert skills.match_accounts(file) == [file]
+    try:
+        skills.match_accounts('号')
+    except ValueError as e:
+        assert '对上了' in str(e) and '个账号' in str(e), e
+    else:
+        raise AssertionError('对上多个账号时应该拦下')
+
+    # 界面上那个「停止」（/api/run/stop）只传当前账号
+    out = api.api_run_stop({}, {'file': file})
+    assert out.get('accounts') == [file] and out.get('stopped') == 0, out
+    allstop = api.api_run_stop({}, {'all': True})
+    assert allstop.get('accounts') == [], allstop
+
+    # 多开时停的是**子进程**：注册表按账号筛，杀不中的不动
+    from core import multiproc
+    killed = []
+
+    class _Proc(object):
+        def __init__(self, name):
+            self.name = name
+
+        def kill(self):
+            killed.append(self.name)
+
+    old_running, old_stopped = multiproc._RUNNING, multiproc._STOPPED
+    multiproc._RUNNING = {
+        ('t1', 1): {'proc': _Proc('p1'), 'files': [file], 'tag': 'emu-5556'},
+        ('t1', 2): {'proc': _Proc('p2'), 'files': ['别的号 官服.json'],
+                    'tag': 'emu-5554'},
+    }
+    multiproc._STOPPED = set()
+    try:
+        assert multiproc.stop_groups(['测试号 bilibili服']) == 1
+        assert killed == ['p1'] and ('t1', 1) in multiproc._STOPPED
+        assert ('t1', 2) not in multiproc._STOPPED
+        assert multiproc.stop_groups(None) == 1 and killed == ['p1', 'p2']
+    finally:
+        multiproc._RUNNING, multiproc._STOPPED = old_running, old_stopped
 
 
 def check_account_bind(tmp):
@@ -5596,7 +5724,7 @@ def check_multi_emu_batch(tmp):
                      for s in payload.get('steps') or []]
             skills._run_group(payload['group'], steps, payload.get('names') or {},
                               log, res, lk, tid=None)
-            return res, []
+            return res, [], False
 
         multiproc.run_group = local_proc
         t = None
@@ -6855,6 +6983,8 @@ def main():
                 lambda: check_schedule_presets(tmp))
         r.check('B60 实例绑定与渠道（地址钉在账号上/钉死不换台/b服按Bilibili）',
                 lambda: check_emu_binding(tmp))
+        r.check('B61 客户端类型进任务参数 / 停止能按账号点名',
+                lambda: check_client_and_stop(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

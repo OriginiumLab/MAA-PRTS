@@ -440,9 +440,9 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
 用户报「指定 5554 却影响 5556」和「启动不看 b 服还是官服」，一个用例钉住两条
 链路，全程不动真模拟器（`_devices` / `read_config` 换成假数据）：
 
-- **客户端类型**：假档案返回 `Config: LDPlayer` + `clientType: Bilibili` →
-  `_conn_for` 出来的 `config` 必须是 `Bilibili`、`emu_kind` 才是 `LDPlayer`；
-  没渠道时兜底 `Official`
+- **连接参数 vs 客户端类型**：假档案返回 `Config: LDPlayer` + `clientType:
+  Bilibili` → `_conn_for` 出来的 `config` 必须是 `LDPlayer`（那是 AsstConnect
+  认的连接配置名）、`client` 才是 `Bilibili`；档案没写连接配置时兜底 `General`
 - **地址校验**：`emulator-5556` / `127.0.0.1:16384` 收，`5556` 当场报错并提示
   正确写法
 - **绑定落盘**：`/api/account/maa` 写 `adbAddress` → `acctbind.addr_of` /
@@ -453,6 +453,26 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
 - **档案过期**：档案地址不在线时，两台在线 → 拦下要用户指定；只剩一台 → 顶上；
   一台都没开 → 返回空交给 `envcheck` 去启动
 - **设备下拉**：`/api/account/devices` 返回在线列表（地址 + 状态）和当前绑定
+
+### B61 客户端类型进任务参数 / 停止能按账号点名（2026-11-23）
+
+同一条跑机链上两个洞，一个用例一起钉住：
+
+- **渠道判定一个入口**：`resolve_client` 认 `Bilibili` / `bilibili服` / `官服`
+  / 乱写（→ `Official`）/ 空；只给 `accountFile` 时也能从账号的 `channelName`
+  回查出 `Bilibili`——上游漏传 `clientType` 也不会再按官服跑
+- **落进任务参数**：b 服账号的 `core_tasks` 里 `StartUp.client_type` 必须是
+  `Bilibili`（asst.log 里那个值才决定 `am start` 哪个包），官服账号是
+  `Official`；`_brief` 说的是人话「b服」
+- **停止按账号**：`owner_match` 认带/不带 `.json` 的文件名、不认空归属；
+  `stop_live([这个号])` 只停它一个，全停才把剩下的停掉，已停过的不重复计数
+- **名字解析**：`match_accounts` 完全相等优先，子串对上多个 → 报错（停错号
+  代价太大）
+- **界面接口**：`/api/run/stop {file}` 的 `accounts` 只含这个号；`{all:true}`
+  才是全停
+- **多开子进程**：`multiproc.stop_groups` 按这一组的 `files` 匹配，命中才
+  `kill`，并把 key 记进 `_STOPPED`（`run_group` 据此返回 `stopped=True`，
+  不记「子进程异常」）
 
 ## 什么时候跑
 

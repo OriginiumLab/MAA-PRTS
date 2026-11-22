@@ -5901,9 +5901,41 @@ function chatSideSwitch(file) {
   }).catch(() => { });
 }
 
+/* 往右栏塞一句「操作记录」（停止这类没有 taskId 的动作）
+   右栏是数据驱动的（按任务存行、按账号过滤），所以造一个临时任务挂上去，
+   而不是直接往 DOM 里 append——那样切一次账号就没了。 */
+function sideSay(text, cls, file) {
+  const tid = 'say-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const own = file ? [file] : [];
+  CHAT.side.tasks.set(tid, { tid, name: '操作', file: file || S.current || '',
+                             owners: own, lines: [], startedAt: Date.now() });
+  sideAddLines(tid, [text], cls || '', own);
+}
+
+/* 只停「当前账号」正在跑的活（右栏标题旁的「停止」）
+   用户 2026-11-23 报：「停止的话不能指定停止，会一起停其他任务」——以前只有
+   聊天里那个全停（agent 的 stop_run 一次砍掉两路），他让停 b 服，官服那边正在
+   打的关也一起断了。这里只把**这一个号**的文件名传给后端，别的号照跑。 */
+async function stopSideAccount() {
+  const f = CHAT.side.cur || S.current || '';
+  if (!f) return;
+  const btn = $('#chat-side-stop');
+  const name = ((S.accounts || []).find(a => a.file === f) || {}).nickName || f;
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  try {
+    const d = await api('/api/run/stop', { file: f });
+    sideSay((d && d.stopped)
+      ? `⏹ 已停 ${name} 这一路（引擎 ${d.engines || 0} / 子进程 ${d.processes || 0}），别的账号没动`
+      : `${name} 现在没有在跑的任务`, (d && d.stopped) ? 'err' : '', f);
+  } catch (e) {
+    sideSay(`⏹ 停止失败：${e.message || e}`, 'err', f);
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+  }
+}
+
 /* 清空只清「当前账号」的日志，别的号的不动 */
-function clearSideLog() {
-  const cur = CHAT.side.cur || '';
+function clearSideLog() {  const cur = CHAT.side.cur || '';
   CHAT.side.tasks.forEach(t => {
     const own = (t.owners || []).filter(Boolean);
     if (own.length && cur && !own.includes(cur)) return;  // 别动别的账号的任务
@@ -6116,6 +6148,8 @@ function bindChat() {
   if (st) st.addEventListener('click', chatSkillTest);
   const logClear = $('#chat-log-clear');
   if (logClear) logClear.addEventListener('click', clearSideLog);
+  const logStop = $('#chat-side-stop');
+  if (logStop) logStop.addEventListener('click', stopSideAccount);
   $('#chat-send').addEventListener('click', () => sendChat(input.value));
   input.addEventListener('input', () => {
     input.style.height = 'auto';

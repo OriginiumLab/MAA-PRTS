@@ -89,18 +89,61 @@ _LIVE = set()
 _LIVE_LOCK = threading.Lock()
 
 
-def stop_all_live():
-    """叫停所有直连实例（只 AsstStop，不销毁，让调用方的 wait() 自己收到结束）"""
+def stop_live(owners=None):
+    """叫停直连实例（只 AsstStop，不销毁，让调用方的 wait() 自己收到结束）
+
+    ``owners``：只停这些账号的实例（账号文件名；空 = 全停）。用户 2026-11-23
+    报的原话「停止的话不能指定停止，会一起停其他任务」——之前只有一个全停
+    入口，点一下两台模拟器一起断，另一台正在打的关就白烧了。
+
+    匹配走 :func:`owner_match`，所以传文件名、``示例昵称#0384 bilibili服`` 这种
+    去掉扩展名的写法、昵称都能对上。
+    """
     with _LIVE_LOCK:
         live = [e for e in _LIVE if e._handle]
     n = 0
     for e in live:
+        if getattr(e, 'stopped', False):
+            continue                    # 已经停过的别重复计数
+        if owners and not owner_match(e.owner, owners):
+            continue
         try:
             e.stop()
             n += 1
         except Exception:
             pass
     return n
+
+
+def owner_match(owner, wants):
+    """这个实例的归属算不算 ``wants`` 里的一个
+
+    ``owner`` 是引擎挂的账号文件名（``示例昵称#0384 bilibili服.json``，没挂就是
+    空串）。比较时忽略扩展名与路径，并允许传昵称/别名——用户在聊天里说的是
+    「b 服那个号」「示例昵称#0384」，不会带 ``.json``。
+    """
+    if not owner:
+        return False
+    o = os.path.basename(str(owner))
+    stem = o[:-5] if o.lower().endswith('.json') else o
+    for w in (wants or ()):
+        s = os.path.basename(str(w or '').strip())
+        if not s:
+            continue
+        s2 = s[:-5] if s.lower().endswith('.json') else s
+        if o == s or stem == s2 or stem.split(' ')[0] == s2:
+            return True
+    return False
+
+
+def owner_match_any(owners, wants):
+    """一组账号里有任意一个被点名就算命中（多开子进程停止用）"""
+    return any(owner_match(o, wants) for o in (owners or ()))
+
+
+def stop_all_live():
+    """叫停所有直连实例（旧入口，等价于 ``stop_live(None)``）"""
+    return stop_live(None)
 
 
 class Engine:
@@ -110,7 +153,7 @@ class Engine:
     → 等 ``AllTasksCompleted`` → ``close()``。
     """
 
-    def __init__(self, maa_dir, on_event=None):
+    def __init__(self, maa_dir, on_event=None, owner=''):
         self.maa_dir = os.path.abspath(maa_dir)
         self.dll_path = os.path.join(self.maa_dir, 'MaaCore.dll')
         if not os.path.isfile(self.dll_path):
@@ -145,6 +188,9 @@ class Engine:
         # 2026-11-23 用户手动暂停，日志却写「这一关超时（1200 秒）」，完全对不上。
         self.stopped = False
         self.connected = False
+        # 这个实例在替哪个账号干活（账号文件名）。「停止」要能只停某一路：
+        # 多开时两台各一个实例，全停等于把另一台正在打的关也砍了。
+        self.owner = str(owner or '')
 
     # ---------------------------------------------------------- 绑定
     def _bind(self):
@@ -373,10 +419,13 @@ class Engine:
     def connect(self, adb_path, address, config='General', touch='MiniTouch'):
         if not self._handle:
             raise EngineError('还没 open()')
-        try:
-            self._lib.AsstSetInstanceOption(self._handle, b'TouchMode', _utf8(touch))
-        except Exception:
-            pass
+        # **别在这里调 AsstSetInstanceOption 改触摸模式**：MAA 6.x 的这个 C
+        # 接口只有一个数字 key（TouchMode = 2），传字符串（MAA 官方 GUI 也是
+        # 这么传的）会被读成指针值，asst.log 里固定留一行
+        #   set_instance_option | key 1650568816 value MiniTouch
+        #   Unknown key or value MiniTouch
+        # 也就是**从来没生效过**，官方 GUI 同样天天报这句。MAA 自己按连接配置
+        # 兜底成 MiniTouch，实测点击/滑动都正常，所以直接不调，省一行假报错。
         ok = self._lib.AsstConnect(self._handle, _utf8(adb_path or 'adb'),
                                    _utf8(address), _utf8(config or 'General'))
         self.connected = bool(ok)

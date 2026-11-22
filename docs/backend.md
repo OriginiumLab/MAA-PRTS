@@ -777,14 +777,30 @@ adb 路径；不同就多开并行；同一台就切号 → 普通 → 突袭 �
 
    `skills.run_skill` 和 `_run_group` 起跑前都会先过这一层，把解析结果用
    `_set_addr` 钉到线程上，`run_core` / `run_scatter` / `run_custom` 全按它连。
-2. **客户端类型被模拟器类型顶掉了**。MAA 5.x/6.x 的 `Gui.ConnectSettings.Config`
-   已经改成**模拟器类型**（`LDPlayer` / `MuMuEmulator12` / `General`），而
-   `AsstConnect` 的第四个参数要的是**客户端类型**（`Official` / `Bilibili`）。
-   以前原样传 `LDPlayer`，MaaCore 不认识就按 `Official` 兜底——b 服账号在 b 服
-   模拟器上找官服包，启动不起来。现在 `maaplan._conn_for(spec)` 统一组装连接参数：
-   `config` 只认账号渠道（`spec['clientType']`，来自 `account.channelName`），
-   档案的 `Config` 只留作 `emu_kind`（给 `envcheck` 认模拟器用）。日志会写
-   `连接 emulator-5556（b服）`，串台/串渠道一眼可见。
+2. **客户端类型没落到任务参数上**。这块踩了两次，一次比一次深，记清楚：
+
+   | 参数 | 认的是什么 | 写错的症状 |
+   |---|---|---|
+   | `AsstConnect(adb, address, config)` 第 4 个 | **模拟器连接配置名**（`General` / `LDPlayer` / `MuMuEmulator12`，就是 `resource/config.json` 里 `connection[].configName`） | 传 `Official` / `Bilibili` → `ConnectionInfo why=ConfigNotFound` + `ERR config  Official not found`，MAA 退回 `General` 才连上（能用，但每次先报一次错，且丢了模拟器专属的 adb 调优） |
+   | 任务参数 `StartUp.client_type` | **客户端类型**（`Official` / `Bilibili` / `YoStarJP`…） | 传成 `Official` → `am start -n com.hypergryph.arknights/...`，b 服账号去启动**官服包**、在官服账号列表里找 b 服昵称，表现就是「认成官服了」 |
+
+   两个参数长得像，**混一次就是一轮空跑**。现在的口径：
+
+   - `maaplan._conn_for(spec)`：`config` 只取档案的 `ConnectSettings.Config`
+     （空则 `General`），客户端类型放在 `conn['client']` 里只用于人话日志
+     （`连接 emulator-5556（b服）`）
+   - `maaplan.resolve_client(spec)`：客户端类型的**唯一判定入口**。优先级
+     `spec['clientType']`（`Bilibili` 或 `bilibili服` 都吃）> `spec['channel']`
+     > `spec['accountFile']` 里的 `account.channelName` > `Official`
+   - `maaplan.core_tasks` 用 `resolve_client` 填 `StartUp.client_type`
+
+   光有判定入口还不够——2026-11-23 用户第二次报「还是把我 b 服账号认成官服的」，
+   asst.log 实证 `append_task StartUp {"client_type": "Official"}`。根因是
+   `skill_fight` 建 spec 时只从 `skills._profile_kw()` 里取了 `profile`，同一份
+   字典里的 `clientType` 被丢掉了，`core_tasks` 拿不到只能兜底。现在 spec 统一
+   用 `skills._spec_kw(file)` 展开（`profile` + `clientType` + `adbAddress` +
+   `accountFile`），并且 `resolve_client` 最后那层能拿 `accountFile` 回查渠道，
+   **以后新加一条跑机入口漏传也不会再按官服跑**。
 
 设置界面对应「账号 → 模拟器」下拉（`/api/account/devices` 列在线设备），助手侧对应
 `bind_emulator` 工具——两边写的是同一个 `maa.adbAddress`，不靠谁记得传参。
@@ -1190,6 +1206,36 @@ ex 16 分、s 12.5 分、reward 17.5 分、claim 21~23 分，全都压着阈值 
 
 **已知限制**：理智不足时「开始行动」点不动（弹理智不足框），`open_stage` 会
 返回「点开始后没进到编队界面」并按关跳过；用户要自己补理智或勾吃药。
+
+### 停止：必须能按账号点名（2026-11-23）
+
+用户原话：「停止的话不能指定停止，会一起停其他任务」。他让停 b 服那个号，
+结果两台模拟器一起断，官服那轮正在打的关白烧。以前只有 `stop_all_live()`
+一个全停入口，现在按账号筛：
+
+| 停什么 | 在哪 | 怎么筛 |
+|---|---|---|
+| 本进程里的 MaaCore 实例 | `maacore.stop_live(owners)` | `Engine.owner` 是账号文件名，比较走 `maacore.owner_match`（忽略 `.json`、认昵称） |
+| 多开时的独立子进程 | `multiproc.stop_groups(owners)` | `_RUNNING` 注册表按这一组的 `files` 匹配，命中就 `proc.kill()` |
+| MAA 本体（跑 GUI 任务队列那条老路） | `maa.close(dir)` | 只在**全停**时做 |
+
+```python
+skills.stop_accounts(['示例昵称#0384 bilibili服.json'])   # → {'engines':1,'processes':0,'stopped':1}
+skills.stop_accounts()                                    # 全停
+skills.match_accounts('b服那个')                           # 名字 → 文件名，对上多个直接报错
+```
+
+- `skills.match_accounts`：完全相等的优先（文件名 / 昵称 / 别名），子串命中
+  **只允许唯一**。守住这条是因为停止是破坏性操作——用户说「停灰」，把三个
+  「灰」开头的号全停了比多问一句亏得多。
+- 子进程被 kill 的那一组，`multiproc.run_group` 返回的第三个值是 `True`，
+  调用方按「你手动停了这一组」记账（`stopped=True`），不记「子进程异常」。
+- `Engine.stop()` 会置 `self.stopped`，已停过的实例不会再被重复计数，
+  所以工具返回的 `engines` 就是「这次实际停了几路」。
+- 入口三处共用同一套：agent 的 `stop_run(account=...)`、
+  `/api/run/stop`（body `{file}` 或 `{all:true}`）、界面右栏「停止」按钮
+  （只传当前账号）。返回里带 `accounts / engines / processes`，**说话照它说**，
+  别把「停了一个号」讲成「都停了」。
 
 ## MAA 小工具（牛杂，`maatools.py`，2026-11-19）
 

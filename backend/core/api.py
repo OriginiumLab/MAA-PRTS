@@ -868,6 +868,20 @@ def api_skill_run(_q, body):
     return {'taskId': tid}
 
 
+def api_run_stop(q, body):
+    """停挂机：带 file 就只停那一个号，不带才全停
+
+    界面右栏那个「停止」按钮走这里（只停当前这个账号）。用户 2026-11-23
+    报的是「停止不能指定，会一起停其他任务」——以前只有 agent 的全停接口，
+    两台模拟器一起断，另一台正在打的关就白烧了。
+    """
+    body = body or {}
+    f = str(body.get('file') or q.get('file') or '').strip()
+    all_ = bool(body.get('all') or q.get('all'))
+    files = [] if all_ else ([f] if f else [])
+    return skills.stop_accounts(files)
+
+
 def api_skill_list(_q, _body):
     return {'skills': [{'name': k, 'desc': v[0]} for k, v in sorted(skills.SKILLS.items())]}
 
@@ -1003,6 +1017,7 @@ ROUTES = {
     '/api/watch/start': api_watch_start,
     '/api/watch/stop': api_watch_stop,
     '/api/runs': api_runs,
+    '/api/run/stop': api_run_stop,
     '/api/maa/profiles': api_profiles,
     # 多账号
     '/api/multi/candidates': api_multi_candidates,

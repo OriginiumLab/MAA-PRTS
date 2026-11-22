@@ -515,6 +515,58 @@ def client_type_of(channel):
     return 'Official'
 
 
+#: MaaCore 认的客户端类型（就是 ``resource/config.json`` 里 ``packageName``
+#: 的那几个 key）。跑机日志、任务参数里出现别的值时一定是上游传错了。
+CLIENT_IDS = frozenset(('Official', 'Bilibili', 'YoStarEN', 'YoStarJP',
+                        'YoStarKR', 'txwy'))
+
+
+def resolve_client(spec):
+    """``spec`` → 这一趟该按哪个客户端跑（唯一入口，别在各处再猜一次）
+
+    2026-11-23 用户报障：「还是把我 b 服账号认成官服的，毫不犹豫启动了官服，
+    在一群数字里找我 b 服账号」。asst.log 实证：
+
+        append_task StartUp {"client_type": "Official", ...}
+        am start -n com.hypergryph.arknights/...      ← 官服包
+
+    根因不是判定逻辑写错，而是**呼叫方漏传**：``skill_fight`` 建 spec 时只从
+    :func:`skills._profile_kw` 里取了 ``profile``，把同一份字典里的
+    ``clientType`` 丢了，``core_tasks`` 拿不到就只能按 ``Official`` 兜底。
+    所以客户端类型必须在这一处收口，并且允许从账号文件回查：
+
+    1. ``spec['clientType']``：显式给的（``Bilibili`` 或 ``bilibili服`` 都吃）
+    2. ``spec['channel']``：渠道名
+    3. ``spec['accountFile']``：账号文件里的 ``account.channelName``
+    4. 都没有 → ``Official``
+
+    第 3 条是兜底：以后谁再加一条跑机入口忘了带 clientType，也不会再拿官服
+    包去开 b 服账号。
+    """
+    raw = str(spec.get('clientType') or '').strip()
+    if raw:
+        if raw in CLIENT_IDS:
+            return raw
+        mapped = client_type_of(raw)
+        if mapped in CLIENT_IDS:
+            return mapped
+    if str(spec.get('channel') or '').strip():
+        return client_type_of(spec.get('channel'))
+    f = str(spec.get('accountFile') or spec.get('account') or '').strip()
+    if f:
+        try:
+            from . import accounts
+            snap = accounts.get_account(f) or {}
+            a = snap.get('account')
+            ch = (a.get('channelName') if isinstance(a, dict) else '') \
+                or snap.get('channelName') or ''
+            if ch:
+                return client_type_of(ch)
+        except Exception:
+            pass
+    return 'Official'
+
+
 def _copilot_dir(maa_dir):
     return os.path.join(maa_dir, 'config', 'copilot')
 
@@ -619,7 +671,7 @@ def core_tasks(spec, maa_dir=None):
     acc = acctname.normalize(spec.get('accountName') or '')
     switch = spec.get('switchAccount')
     switch = bool(acc) if switch is None else bool(switch)
-    client = spec.get('clientType') or client_type_of(spec.get('channel'))
+    client = resolve_client(spec)
     form = (spec.get('copilot') or {})
     per_round = spec.get('stagesPerRound')
 
@@ -727,11 +779,20 @@ CLIENT_CN = {
 def _conn_for(spec):
     """跑机用的连接参数 = MAA 档案抄来的 + 账号点名的三件事
 
-    三件事都有明确优先级，缺一个就会「连到隔壁那台」或者「按官服启动」：
+    三件事各有各的坑，缺一个就会「连到隔壁那台」或者「按官服启动」：
 
     - ``address``：用户/账号绑定的模拟器地址 > MAA 档案里的地址
-    - ``config``：账号渠道（``clientType``）> ``Official``
-      **绝不**用档案里的 ``Config``（那是模拟器类型）
+    - ``config``：**连接配置名**（``General`` / ``LDPlayer`` / ``MuMuEmulator12``），
+      就是 ``AsstConnect`` 第四个参数。这里 2026-11-23 曾经写错成客户端类型，
+      asst.log 里每次连接都留一行
+        ConnectionInfo ... "why":"ConfigNotFound"
+        ERR config  Official not found
+      MAA 找不到这个连接配置，退回 ``General`` 才连上（能用，但每次都要先
+      报一次错，且丢了模拟器专属的 adb 调优）。连接配置名只能来自档案的
+      ``ConnectSettings.Config``。
+    - ``client``：客户端类型（``Official`` / ``Bilibili``…）。**只进任务参数**
+      （``StartUp.client_type``），不进 ``AsstConnect``——两个参数长得像，
+      但一个认模拟器、一个认客户端，混了就是「b 服账号开官服包」。
     - ``touch``：档案里的触摸模式，没写就 MiniTouch
     """
     d = spec.get('maaDir') or ''
@@ -739,8 +800,8 @@ def _conn_for(spec):
     addr = str(spec.get('adbAddress') or '').strip()
     if addr:
         conn = dict(conn, address=addr)
-    client = str(spec.get('clientType') or '').strip() or 'Official'
-    conn['config'] = client
+    client = resolve_client(spec)
+    conn['config'] = str(conn.get('emu_kind') or '').strip() or 'General'
     conn['client'] = client
     return conn
 
@@ -921,7 +982,8 @@ def run_core(spec, tid=None, timeout=None):
         state['last_log'] = time.time()
         log(msg)
 
-    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, evlog, tid, state))
+    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, evlog, tid, state),
+                          owner=spec.get('accountFile') or '')
     state['stop'] = eng.stop
     # MAA 自己写的 asst.log 里有些话不走回调（认不出关卡名、干员不存在、参数
     # 不合法…）。起一个轻量线程跟着读，翻成人话补进同一条任务日志——用户
@@ -1274,11 +1336,12 @@ def run_scatter(spec, tid=None, timeout=None):
     log('认到 %d 个关卡按钮：%s'
         % (len(cells), '、'.join('%s-S-%d' % (pre, i) for i in sorted(cells))))
 
-    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, log, tid, state))
+    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, log, tid, state),
+                          owner=spec.get('accountFile') or '')
     eng.open()
     try:
         if not eng.connect(conn['adb_path'], conn['address'],
-                           conn.get('config') or 'Official',
+                           conn.get('config') or 'General',
                            conn.get('touch') or 'MiniTouch'):
             log('MaaCore 连不上模拟器')
             return {'ok': False, 'error': 'MaaCore 连不上模拟器',
@@ -1445,7 +1508,8 @@ def run_custom(spec, tid=None, timeout=None):
         state['last'] = time.time()
         log(msg)
 
-    eng = maacore.Engine(d, on_event=lambda ev: _on_custom_event(ev, evlog, state))
+    eng = maacore.Engine(d, on_event=lambda ev: _on_custom_event(ev, evlog, state),
+                          owner=spec.get('accountFile') or '')
     try:
         tap = maalog.Tap(d)
     except Exception:
@@ -2544,7 +2608,9 @@ def _run_group(g, spec_base, tid, log):
             'maaDir': d,                    # 这个号的 MAA（run_core 按它连 adb）
             'accountName': r.get('accountName') or '',
             'switchAccount': True,
-            'clientType': client_type_of(r.get('channel')),
+            # 没拿到渠道就留空，别写死 Official —— resolve_client 会拿
+            # accountFile 回查账号的 channelName（b 服账号被按官服启动就死在这）
+            'clientType': client_type_of(r.get('channel')) if r.get('channel') else '',
             'copilotList': cp,
             # 重挂（_retry_failed）换作业时按同一账号练度做替换（#92）
             'accountFile': r.get('file') or '',
@@ -2593,11 +2659,19 @@ def run_plan(rows, spec_base, tid=None):
     def run_one_proc(idx, g):
         """多开：这台模拟器交给独立进程（同进程两个 MaaCore 会抢命名管道，
         见 multiproc 的模块注释——这是「说好并行、另一台不动」的真因）"""
-        _res, got = multiproc.run_group(
+        _res, got, stopped = multiproc.run_group(
             'plan', tid, idx, {'group': g, 'spec': spec_base}, log,
             who=g.get('address') or '默认模拟器')
         with _GROUPS_LOCK:
             report.extend(got or [])
+        if stopped:
+            # 用户点名停了这一台：不算失败，只是「没跑完」
+            with _GROUPS_LOCK:
+                for r in (g.get('rows') or []):
+                    report.append({'file': r.get('file'), 'name': r.get('name'),
+                                   'ok': False, 'stopped': True,
+                                   'error': '你手动停止了这一组'})
+            return
         if not got:
             with _GROUPS_LOCK:
                 for r in (g.get('rows') or []):
@@ -2638,8 +2712,9 @@ def _label_of(ttype):
 
 def _brief(ttype, params):
     if ttype == 'StartUp':
+        c = params.get('client_type') or 'Official'
         return '（%s%s）' % (
-            '官服' if params.get('client_type') == 'Official' else params.get('client_type'),
+            CLIENT_CN.get(c, c),
             '，切到 ' + params['account_name'] if params.get('account_name') else '')
     if ttype == 'Fight':
         t = params.get('times')

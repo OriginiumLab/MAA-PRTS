@@ -2180,6 +2180,20 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .chat-ico svg { width: 15px; height: 15px; }
 .chat-ico:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
 
+/* 右栏「停止」：只停**当前账号**正在跑的那一路。
+   用户 2026-11-23 报「停止不能指定，会一起停其他任务」，所以要有一个
+   就在账号日志旁边的按账号停止入口，而不是只能去聊天里说「停」。 */
+.chat-head-btn {
+  margin-left: auto;
+  height: 23px; padding: 0 9px; border-radius: 7px;
+  font-size: 11.5px; line-height: 21px; color: var(--text-2);
+  border: 1px solid var(--line-strong); background: transparent;
+  transition: color 0.14s, background 0.14s, border-color 0.14s;
+}
+.chat-head-btn:hover { color: var(--rose); border-color: var(--rose); }
+.chat-head-btn:disabled { opacity: 0.4; pointer-events: none; }
+.chat-head-btn.busy { color: var(--rose); border-color: var(--rose); }
+
 .chat-body {
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
   padding: 14px 16px 6px;

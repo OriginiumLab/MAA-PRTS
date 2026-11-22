@@ -133,6 +133,22 @@ def _addr_kw(file):
     return {'adbAddress': a} if a else {}
 
 
+def _spec_kw(file):
+    """跑机 spec 的公共三件套：``profile`` / ``clientType`` / ``adbAddress``
+
+    另外固定带一个 ``accountFile``：``maaplan.resolve_client`` 拿它回查账号的
+    ``channelName``。2026-11-23 的教训是**每多一条跑机入口就多一次漏传**——
+    ``skill_fight`` 当初只从 :func:`_profile_kw` 里取了 ``profile``，把
+    ``clientType`` 丢了，b 服账号就被按官服包启动。现在 spec 里一律带
+    ``accountFile``，漏传 clientType 也能兜回来（见 maaplan.resolve_client）。
+    """
+    out = dict(_profile_kw(file))
+    out.update(_addr_kw(file))
+    if file:
+        out['accountFile'] = file
+    return out
+
+
 def _profile_kw(file):
     """这个账号跑 MaaCore 要带的两件事：``profile`` / ``clientType``
 
@@ -513,7 +529,7 @@ def skill_wakeup(params, log, tid=None):
         # 自己换号——不读也不改用户的 MAA 配置档案
         spec = dict({'tasks': ['startup'], 'accountName': tail,
                      'maaDir': _maa_dir_of(file)},
-                    **_profile_kw(file), **_addr_kw(file))
+                    **_spec_kw(file))
         log('临时配置唤醒：只跑开始唤醒，切到 %s' % tail)
         maaplan.run_core(spec, tid=tid, timeout=360)
         return {'ok': True, 'how': 'maa-startup', 'account': file}
@@ -1042,7 +1058,7 @@ def skill_fight(params, log, tid=None):
             log('不补前置：%s 在游戏里要先通同分区前面的关；要一起补就说'
                 '「把前置一起补」' % '、'.join(need))
 
-    spec = {
+    spec = dict({
         'tasks': ['startup', 'copilot' if mode == 'copy' else 'fight'],
         'stages': stages,
         'accountName': tail,
@@ -1053,10 +1069,13 @@ def skill_fight(params, log, tid=None):
             'support': cop.get('support', True),            # 借助战（缺人时借）
             'sanityPotion': cop.get('sanityPotion', True),  # 理智不够吃药
         },
-        # 这个号绑的档案 + 用户点名的模拟器（多开时靠它们连各自的设备）
-        'profile': params.get('profile') or (_profile_kw(file) or {}).get('profile', ''),
-    }
-    spec.update(_addr_kw(file))
+    }, **_spec_kw(file))
+    # 显式点名的档案优先于账号绑的那份
+    # 2026-11-23 修：以前这里只把 `_profile_kw()['profile']` 抄进来，同一份字典
+    # 里的 clientType 被丢掉，于是 b 服账号的 StartUp 永远按 Official 跑——MAA
+    # 去启动官服包、在官服账号列表里找 b 服号，用户看到的就是「认成官服了」。
+    if params.get('profile'):
+        spec['profile'] = params['profile']
     # 抄作业必须有作业文件：按 stages 现搜（预检那轮已经拉过作业站，这里命中
     # 缓存，不再发请求）。**不能拿预检挑好的那一条直接用**——预检每关只挑
     # 一份，而且不看要打普通还是突袭（`@both` 那种要两条），得在这里按变体拆。
@@ -1217,7 +1236,7 @@ def skill_skip_story(params, log, tid=None):
     def probe():
         spec = dict({'tasks': ['startup', 'fight'], 'stages': [stage],
                      'accountName': tail, 'maaDir': d},
-                    **_profile_kw(file), **_addr_kw(file))
+                    **_spec_kw(file))
         try:
             maaplan.run_core(spec, tid=tid, timeout=900)
         except Exception as e:
@@ -1564,7 +1583,7 @@ def skill_train(params, log, tid=None):
         'switchAccount': switch,
         'noStartUp': not wakeup,
         'maaDir': _maa_dir_of(file),
-    }, **_profile_kw(file), **_addr_kw(file))
+    }, **_spec_kw(file))
     r = maaplan.run_core(spec, tid=tid,
                          timeout=params.get('timeout') or 3 * 60 * 60)
     done = r.get('trained') or {}
@@ -1839,12 +1858,12 @@ def skill_sweep(params, log, tid=None):
                 'noNav': True,          # 导航已经由上面做过
                 'maaDir': d,
                 'accountName': tail,
-                'clientType': _client_of(file),
                 'copilot': {'formation': params.get('formation', True),
                             'support': True, 'sanityPotion': True},
                 'retry': {'pool': pool, 'maxRounds': 3}}
-        spec.update(_profile_kw(file))
-        spec.update(_addr_kw(file))
+        # 渠道 / 档案 / 模拟器 / accountFile 一次带全（clientType 由
+        # _profile_kw 映射成 Bilibili 这种 MaaCore 认的写法）
+        spec.update(_spec_kw(file))
         # 每段分一份时间预算（段数不定，均分最稳；单段至少 10 分钟）
         share = max(600, int(total / max(1, len(segs))))
         try:
@@ -1945,10 +1964,13 @@ def skill_tool(params, log, tid=None):
     if ent.get('tutorial'):
         log('提醒：%s' % ent['tutorial'])
 
-    spec = {'maaDir': d, 'title': ent.get('name'),
-            'task': task, 'tutorial': ent.get('tutorial') or '',
-            # 连接参数按这个账号绑的档案走（多开时每份档案连各自的模拟器）
-            'profile': params.get('profile') or acctbind.profile_of(file)}
+    spec = dict({'maaDir': d, 'title': ent.get('name'),
+                 'task': task, 'tutorial': ent.get('tutorial') or '',
+                 # 连接参数按这个账号绑的档案走（多开时每份档案连各自的模拟器）
+                 'profile': params.get('profile') or acctbind.profile_of(file)},
+                **_spec_kw(file))
+    if params.get('profile'):
+        spec['profile'] = params['profile']      # 显式点名的档案优先
     r = maaplan.run_custom(spec, tid=tid, timeout=int(ent.get('timeout') or 1800))
 
     out = {'ok': bool(r.get('ok')),
@@ -2197,7 +2219,7 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
 
 def _run_group_proc(tid, idx, g, step_list, names, results, lock, log):
     """把一组账号丢进**独立进程**跑（同进程两个 MaaCore 会抢命名管道）"""
-    got, _rep = multiproc.run_group(
+    got, _rep, stopped = multiproc.run_group(
         'skill', tid, idx,
         {'group': {'dir': g.get('dir') or '',
                    'profile': g.get('profile') or '',
@@ -2210,6 +2232,13 @@ def _run_group_proc(tid, idx, g, step_list, names, results, lock, log):
     with lock:
         for f, v in (got or {}).items():
             results[f] = v
+    if stopped:
+        # 用户点名停了这一组：不是失败，别在汇总里记成「子进程异常」
+        with lock:
+            for f in g.get('files') or []:
+                results.setdefault(f, {'ok': False, 'name': f, 'stopped': True,
+                                       'error': '你手动停止了这一组'})
+        return
     if not got:
         with lock:
             for f in g.get('files') or []:
@@ -2440,3 +2469,63 @@ def run_skill(name, params=None):
     tid = tasks.create('skill:' + name, job,
                        owners=[owner] if owner else None)
     return tid
+
+
+# ---------------------------------------------------------------- 停止（按账号）
+
+def match_accounts(text):
+    """「文件名 / 昵称 / 别名」→ 账号文件名列表（停止这种破坏性动作用）
+
+    和 :func:`_account_file` 的区别：这边**允许多个命中**，而且子串命中不唯一
+    时直接报错。用户说「停灰」这种半个名字，把那三个灰开头的号全停掉是灾难，
+    宁可回一句「你说的是哪个」。
+    """
+    want = str(text or '').strip()
+    if not want:
+        return []
+    rows = accounts.list_accounts()
+    for r in rows:                                  # 1) 文件名完全相等
+        if r['file'] == want:
+            return [r['file']]
+    stem = want[:-5] if want.lower().endswith('.json') else want
+    low = stem.lower()
+    hit = [r for r in rows                       # 2) 昵称/别名完全相等
+           if (r.get('nickName') or '').lower() == low
+           or (r.get('alias') or '').lower() == low]
+    if len(hit) == 1:
+        return [hit[0]['file']]
+    if not hit:                                  # 3) 子串命中
+        hit = [r for r in rows
+               if low and (low in (r.get('nickName') or '').lower()
+                           or low in r['file'].lower())]
+    if len(hit) == 1:
+        return [hit[0]['file']]
+    if not hit:
+        raise ValueError('没有叫「%s」的账号（左边那列里的名字都行）' % want)
+    raise ValueError('「%s」对上了 %d 个账号（%s），说清楚停哪个'
+                     % (want, len(hit),
+                        '、'.join(str(r.get('nickName') or r['file'])
+                                 for r in hit)))
+
+
+def stop_accounts(files=None):
+    """停掉指定账号正在跑的活（``files`` 空 = 全停）
+
+    三处都要停，少一处就等于没停：
+      1. 本进程里的 MaaCore 实例（单账号 / 直连跑）→ ``maacore.stop_live``
+      2. 多开时每一组那个**独立子进程**（同进程两个 MaaCore 会抢命名管道，
+         所以多开一定是子进程）→ ``multiproc.stop_groups``
+      3. 用户没点名时，顺带把 MAA 本体关掉（``maa.close``）——那是旧的
+         「跑 MAA 自己的任务队列」模式，关进程就是停
+
+    用户 2026-11-23 的原话：「停止的话不能指定停止，会一起停其他任务」。
+    这条函数就是给他一个「只停这一路」的入口，agent 的 ``stop_run`` 和
+    界面上的「停止」按钮都走它。
+    """
+    wants = [str(x) for x in (files or []) if str(x).strip()]
+    from . import maacore, multiproc
+    engines = maacore.stop_live(wants or None)
+    procs = multiproc.stop_groups(wants or None)
+    out = {'accounts': wants, 'engines': engines, 'processes': procs,
+           'stopped': engines + procs}
+    return out

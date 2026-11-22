@@ -384,8 +384,13 @@ TOOLS = [
           '看 MAA 里现在有哪些配置档案、当前用的是哪个、各自挂了几个作业。'
           '用户问「现在跑的是哪个号」时用它。'),
     _tool('stop_run',
-          '停掉正在跑的 MAA（关进程）。用户说「停下来」时用。',
-          {'maa_dir': {'type': 'string', 'description': '留空用默认目录'}}),
+          '停挂机。**指定账号就只停那一个号**（account 传昵称或文件名，'
+          '如「示例昵称#0384」「b服那个」），不传才全部停。用户说'
+          '「停 b 服」「停那个号」时必须带 account，别把别人正在打的关一起砍了。',
+          {'account': {'type': 'string',
+                       'description': '要停哪个账号（昵称 / 文件名都行）；'
+                                      '留空=全停'},
+           'maa_dir': {'type': 'string', 'description': '留空用默认目录'}}),
     _tool('add_stages',
           '给**一个**账号挂一组关卡的快捷方式（等价于 mode=copy 的 build_run）。',
           {'account': _ACC, 'keyword': _STAGE,
@@ -1156,15 +1161,35 @@ def _tool_list_profiles(args, session=None):
 
 
 def _tool_stop_run(args, session=None):
-    watch.stop_all()
+    """停挂机：点名了账号就只停那一路，没点名才全停
+
+    2026-11-23 用户报障：「停止的话不能指定停止，会一起停其他任务」。他让停
+    b 服那个号，结果两台模拟器一起断，官服正在打的关白烧。现在按账号停：
+    本进程里的 MaaCore 实例（``stop_live``）+ 多开时的独立子进程
+    （``stop_groups``）都按账号筛，别的路继续跑。
+    """
+    from . import skills
+    want = str(args.get('account') or '').strip()
+    files = []
+    if want and want.lower() not in ('all', '全部', '所有', '*'):
+        files = skills.match_accounts(want)      # 认不出 / 对上多个会抛，别猜
+    res = skills.stop_accounts(files)
     d = args.get('maa_dir') or None
-    # 直连跑的时候机器上没有 MAA 进程，光关进程是关不掉的，得让引擎自己 AsstStop
-    from . import maacore
-    n = maacore.stop_all_live()
-    ok = maa.close(d)
-    return {'stopped': bool(ok) or bool(n),
-            'engines': n,
-            'note': '已经停下。没跑完的关卡不会自己续上，下次要重挂。'}
+    if not files:
+        # 全停才动 MAA 本体（那是「跑 MAA 自己的任务队列」那条路）
+        watch.stop_all()
+        try:
+            res['maaClosed'] = bool(maa.close(d))
+        except Exception:
+            res['maaClosed'] = False
+    res['stopped'] = bool(res.get('stopped')) or bool(res.get('maaClosed'))
+    if files:
+        res['note'] = ('停了 %s 这一路（引擎 %d / 子进程 %d），别的账号没动。'
+                       '没跑完的关不会自己续上，下次要重挂。'
+                       % ('、'.join(files), res['engines'], res['processes']))
+    else:
+        res['note'] = '全停了。没跑完的关卡不会自己续上，下次要重挂。'
+    return res
 
 
 # 官服「账号管理器」里显示的条目是打码手机号：181****5505。MAA 切号就是拿
@@ -1919,6 +1944,12 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 想看跑到第几个作业，用返回里的 stage / index / total。
 
 **「停下来」** → stop_run
+- 用户说清楚是哪个号（「停 b 服那个」「停示例昵称#0384」）**必须带 account**，
+  只停那一路；不说才全停。停之前先用一句话说清你要停谁。
+- 停完照实报：停了哪个号；**别把「停了一个号」说成「都停了」**。
+  用户 2026-11-23 就是被这句坑过（他说停 b 服，结果两台都断，官服那轮
+  正在打的关白烧）。工具返回里有 `accounts` / `engines` / `processes`，
+  按它说。
 
 ## 挂关 skill（2026-11-17 新增）：把流程拆开一步一步来
 八个 skill，各自独立跑后台、失败单独停：
@@ -1985,11 +2016,12 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   - 同一台模拟器的号排队切号，不同的号多开并行（每组一个独立进程）
 - **官服 / b 服是两个不同的包**：账号的渠道自动判定（b 服走
   `com.hypergryph.arknights.bilibili` + MaaCore 的 `Bilibili`），你**不用**
-  也别自己切客户端。2026-11-23 之前这里有个 bug：连接时把 MAA 档案里的
-  `Config`（那是**模拟器类型** LDPlayer/MuMu）当成客户端类型传了，MaaCore
-  按官服兜底，于是 b 服账号按官服包启动、卡在登录——现在改由账号渠道决定，
-  日志里会写「连接 emulator-5556（b服）」。看到日志写错渠道就是账号文件的
-  `channelName` 不对，让用户在设置里改，别自己瞎试。
+  也别自己切客户端。两个参数容易搞混，这里记清楚（2026-11-23 两次翻车）：
+  - `AsstConnect` 第 4 个参数是**模拟器连接配置名**（`General` / `LDPlayer`），
+    传客户端类型会报 `ConfigNotFound`（b 服账号仍按官服包启动）
+  - 客户端类型只走**任务参数** `StartUp.client_type`（`Official` / `Bilibili`）
+  - 日志里「连接 emulator-5556（b服）」这行就是实际生效的客户端；写错渠道
+    说明账号文件的 `channelName` 不对，让用户在设置里改，别自己瞎试.
 - 每组跑在**自己的进程**里（不是线程）：同一个进程里两个 MaaCore 会抢
   命名管道，第二台永远连不上（asst.log 里 `CreateOverlappablePipe failed,
   err 231`）——以前「说好并行，另一台一动不动」就是这个。现在多组=多进程，
