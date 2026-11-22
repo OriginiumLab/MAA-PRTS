@@ -454,8 +454,8 @@ def api_maa_probe(q, _body):
     """检测一个目录是不是 MAA / MAAEND 根目录（首次引导 / 设置里用）
 
     kind=endfield 时按 MAAEND 的主程序名去找：终末地那套是另一个程序，
-    主程序可能叫 MaaEnd.exe 或 mxu.exe（三月七脚本里两种都出现过）。这一步
-    只是把路径先管起来，MAAEND 的任务链还没接。
+    主程序不同版本分别叫 MaaEnd.exe 和 mxu.exe。这一步只是把路径先管起来，
+    MAAEND 的任务链还没接。
     """
     d = (q.get('dir') or '').strip()
     if not d:
@@ -896,6 +896,18 @@ def api_schedule_stop(_q, _body):
     return scheduler.stop_current()
 
 
+def api_schedule_presets(_q, _body):
+    """预设表（不含探测）：界面下拉用，纯数据，快"""
+    return {'ok': True, 'presets': scheduler.presets()}
+
+
+def api_schedule_detect(q, _body):
+    """选预设时回填 program / args / cwd；refresh=1 强制重新找"""
+    pid = q.get('id') or ''
+    refresh = str(q.get('refresh') or '') in ('1', 'true', 'yes')
+    return dict(scheduler.fill(pid, refresh=refresh), ok=True)
+
+
 ROUTES = {
     '/api/bootstrap': bootstrap,
     '/api/settings': api_settings,
@@ -972,6 +984,8 @@ ROUTES = {
     '/api/schedule/save': api_schedule_save,
     '/api/schedule/run': api_schedule_run,
     '/api/schedule/stop': api_schedule_stop,
+    '/api/schedule/presets': api_schedule_presets,
+    '/api/schedule/detect': api_schedule_detect,
     # 内置助手（M4）
     '/api/agent/status': api_agent_status,
     '/api/agent/config': api_agent_config,

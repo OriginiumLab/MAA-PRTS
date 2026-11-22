@@ -197,7 +197,7 @@ MAA 的多账号机制只有一条：**一个配置档案 = 一个账号**。
 3. 都没有 → 问用户（官服问后 4 位；用户主动给 `157****3635` 也照收）。
    用户一报尾号就调 `set_account_name` 存进设置，下次不用再问。
 
-`multiacct._match()` 还留了一条按昵称对档案的兜底（容忍 `小卡拉帕鲁灰#6408` ↔ `小卡拉帕鲁灰`），对不上的才进 `missing`。
+`multiacct._match()` 还留了一条按昵称对档案的兜底（容忍 `示例昵称#6408` ↔ `示例昵称`），对不上的才进 `missing`。
 
 问的时候**别让用户拼星号**，直接问「手机号后 4 位是多少」。用户给全号、带横线、星号数量不对、全角数字都行，`acctname.normalize()` 会统一成 `前3****后4`；给 3~4 位片段就原样保留交给 MAA 子串匹配。
 
@@ -232,7 +232,7 @@ list_accounts → plan_multi_account → 缺名字就问 → 用户确认 → ap
 所以**没有**写死「活动一条龙」这个流程，只给一个能自由拼的工具：
 
 ```json
-{"accounts": ["小卡.json", "灰bao.json"],
+{"accounts": ["主号.json", "abc示例.json"],
  "steps": ["wakeup", "navigate", "fight SV-EX-1~7", "claim", "tool 活动商店"]}
 ```
 
@@ -258,9 +258,9 @@ list_accounts → plan_multi_account → 缺名字就问 → 用户确认 → ap
 **要真的并行两台，光靠档案常常不够**（用户的档案可能全指向同一台）：
 
 ```json
-{"accounts": ["灰bao#7986 官服.json", "灰bao#0384 bilibili服.json"],
+{"accounts": ["abc示例#7986 官服.json", "abc示例#0384 bilibili服.json"],
  "steps": [...],
- "emulators": {"灰bao#0384 bilibili服": "emulator-5556"}}
+ "emulators": {"abc示例#0384 bilibili服": "emulator-5556"}}
 ```
 
 `list_accounts` 的 `devices` 是现在 adb 上真在线的设备。用户说「两台一起跑」
@@ -384,7 +384,7 @@ plan / apply / ask / doctor
 - 非数字 → 关卡关键词
 
 位置参数解析（`_positionals`）会跳过 `--opt value` 里的 value，否则
-`ops --account 小卡.json TL-5` 会把账号名当成关卡。踩过的坑：`plan --stages TL-5`
+`ops --account 主号.json TL-5` 会把账号名当成关卡。踩过的坑：`plan --stages TL-5`
 曾经直接 `int('TL-5')` 抛 `ValueError`，而那正是文档里写的示例。
 
 CLI 直接 import 后端模块，**不依赖 HTTP 服务在跑**。

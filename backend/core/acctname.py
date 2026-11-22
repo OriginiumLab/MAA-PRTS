@@ -113,7 +113,7 @@ def normalize(v) -> str:
     if not digits:
         return body
     if not re.fullmatch(r'[\d*]+', body):
-        # 数字和字母混着 → B 服用户名（灰bao#7986），不碰
+        # 数字和字母混着 → B 服用户名（abc示例#7986），不碰
         return body
     if len(digits) == 11 and digits.startswith('1'):
         return _mask(digits, 3, 4)          # 完整手机号
@@ -127,7 +127,7 @@ def looks_official(nm) -> bool:
     """长得像不像官服的切号名：只有数字和星号，且至少 3 位数字
 
     这样 ``5505`` / ``136`` / ``23****45`` / ``181****5505`` 都算，昵称
-    「小卡拉帕鲁灰」不算——官服拿昵称去匹配就是死循环几十次然后切号失败。
+    「示例昵称」不算——官服拿昵称去匹配就是死循环几十次然后切号失败。
 
     3 位也放行的依据：本机 MAA 里用户自己那几份档案写的就是 ``136`` /
     ``165``（纯数字片段，AccountSwitchEnabled=true），一直能切。

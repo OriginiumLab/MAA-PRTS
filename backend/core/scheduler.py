@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
-"""定时任务：按时间启动程序 + 链式启动
+"""定时任务：到点启动程序 + 链式启动
 
-语义照搬三月七助手的「定时任务配置」，只保留在我们这儿能落地、也确实是
-用户在用的那部分（朋友要搬的 autostart-138.exe / OneDragon-Launcher.exe /
-cmd 批处理都属于这一类）：
+这里只当「启动器」，不做别的（MAA 自己的任务链归 skills 那一层管）：
 
   - 触发两种：time（每周指定几天、某个 HH:MM）与 chain（上一条退出后接着跑）
-  - 动作一种：启动一个外部程序。三月七的「本体任务」我们不做——MAA 自己的
-    任务链由 skills 那一层负责，这里只当启动器
+  - 动作一种：启动一个外部程序（exe / bat / cmd）
+  - 程序可以从预设里挑：本程序自己、MAA 官方客户端，以及常见其它游戏的
+    自动化工具（原神 / 绝区零 / 鸣潮 / 终末地 / 重返未来 / MFA）。预设只
+    决定「先试哪几个 exe 名」和默认参数，路径一律现场探测、允许手改，探测
+    不到就让用户点「浏览」——各家装在哪差别太大，猜错比不猜更烦人。
+    config/schedule-presets.json 里还能补自己的预设，不用改代码
   - 同一时刻只跑一个任务。冲突策略 stop（停掉在跑的）/ skip（跳过本次）
   - 链式任务失败后 continue（继续后面的）/ stop（停掉整条链）
 
 为什么不用 Windows 计划任务：链式启动（等上一个进程退出）系统计划任务
-表达不了；而且时间触发只在程序运行时生效——跟三月七一致，要开机自启
-得用户把本程序放进启动项。
+表达不了；而且时间触发只在程序运行时生效，要开机自启得用户把本程序放进
+启动项。
 
 数据存 config/schedule.json（原子写）；日志写 debug/schedule.log，同时留
 一段内存环形缓冲给界面读（含 seq，供前端轮询拿「刚跑完」的通知）。
@@ -28,6 +30,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -51,6 +54,273 @@ _last = {}                 # task id -> {at,ok,code,text}
 _events = collections.deque(maxlen=400)
 _seq = 0
 _started = False
+_preset_cache = [None, None]   # [config/schedule-presets.json 的 mtime, 预设表]
+_scan_cache = {}               # preset id -> (探测时间, 找到的路径)
+_SCAN_TTL = 300                # 探测结果缓存 5 分钟：装完软件重开对话框够用了
+_SCAN_BUDGET = 1.5             # 一次扫盘最多 1.5 秒，宁可不找也别让界面卡住
+
+
+# ---------------------------------------------------------------- 程序预设
+# 预设只说「启动哪个程序、带什么参数」，不写死路径：
+#   exes —— 先按这些文件名去常见位置找，找不到留给用户手选
+#   args —— 界面上「参数」为空时的兜底
+# 想加自己的预设：config/schedule-presets.json 里写一条
+#   [{"id": "xx", "name": "显示名", "exes": ["xx.exe"], "args": "--foo"}]
+# 同 id 覆盖内置那条，不用改代码。
+PRESETS = (
+    {'id': 'custom', 'name': '自定义程序', 'exes': (), 'args': '',
+     'note': '自己填 exe / bat / cmd 的路径'},
+    {'id': 'self', 'name': 'MAA-PRTS 本体', 'exes': (), 'args': '',
+     'note': '把本程序自己拉起来（打包后是 MAA-PRTS.exe，源码模式是 python main.py）'},
+    {'id': 'maa', 'name': 'MAA 官方客户端', 'exes': ('MAA.exe',), 'args': '',
+     'note': '按设置里的 MAA 目录找 MAA.exe'},
+    {'id': 'bettergi', 'name': '原神 BetterGI', 'exes': ('BetterGI.exe',), 'args': '',
+     'note': 'BetterGI 主程序'},
+    {'id': 'onedragon', 'name': '绝区零 一条龙',
+     'exes': ('OneDragon-Launcher.exe', 'OneDragon.exe'), 'args': '',
+     'note': '一条龙启动器（OneDragon-Launcher.exe）'},
+    {'id': 'okww', 'name': '鸣潮 ok-ww',
+     'exes': ('ok-ww.exe', 'ok-script.exe'), 'args': '',
+     'note': 'ok-ww 主程序（ok-script 打包的版本）'},
+    {'id': 'maaend', 'name': '终末地 MaaEnd',
+     'exes': ('MaaEnd.exe', 'mxu.exe'), 'args': '',
+     'note': 'MaaEnd 主程序（有的版本叫 mxu.exe）'},
+    {'id': 'm9a', 'name': '重返未来 M9A', 'exes': ('M9A.exe',), 'args': '',
+     'note': 'M9A 主程序'},
+    {'id': 'mfaa', 'name': 'MFA Avalonia', 'exes': ('MFAAvalonia.exe',), 'args': '',
+     'note': 'MFAAvalonia 主程序'},
+)
+
+_PRESET_FILE = 'schedule-presets.json'
+# 扫盘时别往这些目录里钻（系统目录/包管理器缓存，翻下去只有噪音）
+_SKIP_DIRS = frozenset((
+    'windows', 'system32', 'winsxs', 'windows.old', '$recycle.bin',
+    'system volume information', 'recovery', 'perflogs', 'appdata',
+    'node_modules', '.git', '__pycache__', 'cache', 'temp',
+))
+
+
+def _preset_path() -> str:
+    return os.path.join(settings.CONFIG_DIR, _PRESET_FILE)
+
+
+def presets() -> list:
+    """内置预设 + config/schedule-presets.json（同 id 覆盖）；按文件 mtime 缓存"""
+    try:
+        mt = os.path.getmtime(_preset_path())
+    except OSError:
+        mt = 0.0
+    if _preset_cache[1] is not None and _preset_cache[0] == mt:
+        return [dict(p) for p in _preset_cache[1]]
+
+    out = [dict(p, builtin=True) for p in PRESETS]
+    idx = {p['id']: i for i, p in enumerate(out)}
+    extra = []
+    try:
+        import io
+        import json
+        with io.open(_preset_path(), encoding='utf-8') as f:
+            extra = json.load(f)
+    except Exception:
+        extra = []          # 没文件 / 写坏了都按内置表跑
+    for raw in (extra if isinstance(extra, list) else []):
+        if not isinstance(raw, dict):
+            continue
+        pid = str(raw.get('id') or '').strip().lower()[:24]
+        if not pid or pid == 'custom':
+            continue
+        exes = raw.get('exes')
+        if isinstance(exes, str):
+            exes = [exes]
+        row = {
+            'id': pid,
+            'name': str(raw.get('name') or pid)[:20],
+            'exes': tuple(str(x)[:64].strip() for x in (exes or []) if str(x).strip()),
+            'args': str(raw.get('args') or '')[:200],
+            'note': str(raw.get('note') or '')[:120],
+            'builtin': pid in idx,
+        }
+        if pid in idx:
+            out[idx[pid]] = row
+        else:
+            out.append(row)
+    _preset_cache[:] = [mt, out]
+    return [dict(p) for p in out]
+
+
+def preset_id(v) -> str:
+    """收一个预设 id；不认识的（含空值）一律当自定义"""
+    pid = str(v or '').strip().lower()
+    ids = {p['id'] for p in presets()}
+    return pid if pid in ids else 'custom'
+
+
+def _preset_of(pid):
+    return next((p for p in presets() if p['id'] == pid), None)
+
+
+# ---------------------------------------------------------------- 找程序
+def _self_defaults() -> dict:
+    """本体：打包后就是本进程的 exe；源码模式＝同一个 python 跑 main.py"""
+    if settings.FROZEN:
+        return {'program': sys.executable, 'args': '',
+                'cwd': os.path.dirname(os.path.abspath(sys.executable))}
+    main_py = os.path.join(settings.RES, 'backend', 'main.py')
+    if os.path.isfile(main_py):
+        # 带引号传：路径里有空格时 _split_args 才会当一个参数
+        return {'program': sys.executable, 'args': '"%s"' % main_py,
+                'cwd': settings.RES}
+    return {'program': '', 'args': '', 'cwd': ''}
+
+
+def _maa_dirs() -> list:
+    st = settings.load()
+    out = []
+    for d in [st.get('maaDir')] + list(st.get('maaDirs') or []):
+        d = settings.norm_dir(str(d or ''))
+        if d and d not in out:
+            out.append(d)
+    return out
+
+
+def _find_maa() -> str:
+    """先按设置里的 MAA 目录找，再问正在跑的 MAA 进程，最后才扫盘"""
+    for d in _maa_dirs():
+        p = os.path.join(d, 'MAA.exe')
+        if os.path.isfile(p):
+            return p
+    try:
+        from . import maa
+        for row in maa.list_running():
+            p = row.get('path') or ''
+            if p and os.path.isfile(p):
+                return p
+    except Exception:
+        pass
+    return _scan_exe(('MAA.exe',))
+
+
+def _scan_roots() -> list:
+    out = []
+    for letter in 'CDEFGH':
+        p = '%s:\\' % letter
+        if os.path.isdir(p):
+            out.append(p)
+    for key in ('LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMW6432',
+                'PROGRAMFILES(X86)', 'USERPROFILE'):
+        p = os.environ.get(key) or ''
+        if p and os.path.isdir(p):
+            out.append(p)
+    return out
+
+
+def _walk_files(root, depth=2, deadline=None, cap=4000):
+    """限深、限量、限时地走一遍目录，逐个吐出文件路径
+
+    「找程序」只值这么点代价：装在哪都有可能，但绝不能因为扫盘把界面卡死。
+    """
+    stack = [(root, 0)]
+    seen = 0
+    while stack:
+        d, lvl = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for ent in it:
+                if deadline and time.time() > deadline:
+                    return
+                seen += 1
+                if seen > cap:
+                    return
+                try:
+                    if ent.is_file(follow_symlinks=False):
+                        yield ent.path
+                    elif lvl < depth and ent.is_dir(follow_symlinks=False):
+                        if ent.name.lower() in _SKIP_DIRS:
+                            continue
+                        stack.append((ent.path, lvl + 1))
+                except OSError:
+                    continue
+
+
+def _scan_exe(names, roots=None, budget=_SCAN_BUDGET) -> str:
+    """按文件名在常见位置找 exe，找到就返回全路径，找不到返回空串
+
+    时间预算按根目录平分：C 盘文件多，独占整个预算的话 D 盘（游戏工具常装
+    在那儿）就永远轮不到。
+    """
+    want = {str(n).lower() for n in (names or ())}
+    if not want:
+        return ''
+    roots = list(roots if roots is not None else _scan_roots())
+    if not roots:
+        return ''
+    budget = max(0.2, float(budget or _SCAN_BUDGET))
+    end = time.time() + budget
+    per = budget / len(roots)
+    for root in roots:
+        left = end - time.time()
+        if left <= 0:
+            break
+        deadline = time.time() + min(per, left)
+        for path in _walk_files(root, 2, deadline):
+            if os.path.basename(path).lower() in want:
+                return path
+    return ''
+
+
+def detect(pid, refresh=False) -> str:
+    """某个预设在本机找到的程序路径（结果缓存几分钟，refresh 强制重找）"""
+    pid = preset_id(pid)
+    if pid == 'custom':
+        return ''
+    now = time.time()
+    hit = _scan_cache.get(pid)
+    if hit and not refresh and now - hit[0] < _SCAN_TTL:
+        return hit[1]
+    if pid == 'self':
+        path = _self_defaults().get('program') or ''
+    elif pid == 'maa':
+        path = _find_maa()
+    else:
+        row = _preset_of(pid) or {}
+        path = _scan_exe(row.get('exes') or ())
+    _scan_cache[pid] = (now, path)
+    return path
+
+
+def fill(pid, refresh=False) -> dict:
+    """选了某个预设时给界面回填的默认值；用户改过的一律以用户的为准"""
+    pid = preset_id(pid)
+    out = {'id': pid, 'program': '', 'args': '', 'cwd': ''}
+    if pid == 'custom':
+        return out
+    row = _preset_of(pid) or {}
+    out['args'] = row.get('args') or ''
+    if pid == 'self':
+        out.update(_self_defaults())
+        out['id'] = pid
+    else:
+        out['program'] = detect(pid, refresh=refresh)
+    return out
+
+
+def resolve(task) -> dict:
+    """把预设兜底进任务：program / args / cwd 只补空的
+
+    这样「本体」这种预设即使换台机器、换个安装位置也能跑；用户填了值就
+    绝不动他自己的。
+    """
+    out = dict(task)
+    d = fill(out.get('preset'))
+    if d['id'] == 'custom':
+        return out
+    for key in ('program', 'args', 'cwd'):
+        if not str(out.get(key) or '').strip():
+            out[key] = d.get(key) or ''
+    return out
 
 
 # ---------------------------------------------------------------- 存储
@@ -117,6 +387,7 @@ def normalize_task(raw) -> dict:
         'id': str(raw.get('id') or '').strip()[:24] or _new_id(),
         'enabled': raw.get('enabled') is not False,
         'name': name,
+        'preset': preset_id(raw.get('preset')),
         'mode': mode,
         'time': _norm_time(raw.get('time')) or '08:00',
         'weekdays': _norm_weekdays(raw.get('weekdays')),
@@ -321,9 +592,10 @@ def _split_args(s: str) -> list:
 
 
 def _argv(task) -> list:
+    task = resolve(task)
     program = settings.norm_dir(task.get('program') or '')
     if not program:
-        raise ValueError('没有填要运行的程序')
+        raise ValueError('没有填要运行的程序（预设里也没找到，点「浏览」选一下）')
     if not os.path.isabs(program):
         found = shutil.which(program)
         if found:
@@ -411,7 +683,7 @@ def _enqueue(task, reason, respect_conflict=True) -> bool:
 
 def _exec(job) -> None:
     global _running
-    task = job['task']
+    task = resolve(job['task'])
     name = task.get('name') or '未命名任务'
     try:
         argv = _argv(task)

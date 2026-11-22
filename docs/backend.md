@@ -1261,7 +1261,7 @@ MaaCore v6.20+ 有个 `OperProgress` 任务（GUI 里叫「干员培养」），
 清一色 `AttributeError: 'str' object has no attribute 'get'`。
 
 根因不在 skill，在 `accounts.list_accounts`：培养暂停时 `skills._save_train_plan`
-把 `config/train-plan.json` 落盘，里面 `"account": "灰bao#7986 官服.json"` 是
+把 `config/train-plan.json` 落盘，里面 `"account": "abc示例#7986 官服.json"` 是
 **文件名字符串**；账号扫描把这个文件当账号读，`(snap.get('account') or {}).get('uid')`
 撞上字符串 → 整个账号列表抛异常。所有 skill 开跑第一句都是 `_account_file('')`
 → 全部一起挂。这也解释了「突然」：文件是**上一次培养暂停时才生成**的，
@@ -1417,7 +1417,7 @@ core_tasks 的 Copilot 分支要求 spec['copilotList'] 非空否则 continue；
    `search_stages` 返回补 `prefix` / `activity`（EVENTS 反查），SYSTEM 硬规矩
    加「活动代号一律查，不许凭记忆换算（孤星=CW，覆潮之下=SV，愚人号=SN）」。
 
-真机验证（dev 环境、灰bao 官服、游戏停在主界面）：
+真机验证（dev 环境、abc示例 官服、游戏停在主界面）：
 `POST /api/skill/run {"skill":"navigate","params":{"stage":"孤星"}}` →
 `「孤星」→ CW-1（孤星（29 关））` → 走曲谱 → 第 9 屏命中（1.5 分）→ 进图，
 落图确认是孤星关卡地图（CW-1/CW-2/CW-ST-1 + 右下三个区域）。全程约 2.5 分钟。
@@ -1474,7 +1474,7 @@ break，循环后再调一次 `really_home()`——两次之间隔着几百毫�
 好端端在主界面（2026-11-18 RI 实测踩到）。现在循环结果存进 `home`，不成立时
 等 1.2 秒再复核一次。
 
-真机复验（dev 环境、灰bao 官服）：
+真机复验（dev 环境、abc示例 官服）：
 `RI-1` → 第 13 屏命中 4.4 分 → 进图；`IW-1` → 第 8 屏命中 2.6 分 → 进图
 （重裁模板前是翻到底 17.9 分 FAIL）；`CV-1`（靠底部）第 15 屏命中 1.1 分 →
 进图，全程 2 分 36 秒。走缓存的第二次 `RI-1`：回顶 → 直接翻到第 12 屏 → 第 14 屏
@@ -1859,16 +1859,39 @@ MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速�
 
 ## 定时任务（`scheduler.py`，2026-11-22）
 
-设置里的「定时任务」页：到点启动外部程序，支持链式启动。只做「把用户的脚本
-按时拉起来」这一件事——`autostart-*.exe`、`OneDragon-Launcher.exe`、cmd
-批处理这类现成脚本都能原样填进来（程序 + 参数照抄）。
+设置里的「定时任务」页：到点启动外部程序，支持链式启动。只做「把用户的程序
+按时拉起来」这一件事——挂机脚本、模拟器启动器、别的游戏的自动化工具、cmd
+批处理都能原样填进来（程序 + 参数照抄）。
 
 | 概念 | 实现 |
 |---|---|
 | 触发 | `mode=time`：`weekdays`（1=周一…7=周日）+ `time`（HH:MM）；`mode=chain`：接在上一条后面 |
 | 动作 | 启动一个程序（exe / bat / cmd）。bat/cmd 走 `cmd /d /c "<整条命令行>"`，路径带空格也不会拆错 |
+| 预设 | `preset`：`custom` / `self` / `maa` / 其它游戏，只决定「先试哪几个 exe 名」和默认参数 |
 | 冲突 | 同一时刻只跑一个：`conflict=stop` 停掉在跑的，`skip` 跳过本次 |
 | 链式失败 | `onChainFail=continue` 继续下一个，`stop` 停掉整条链 |
+
+### 程序预设（2026-11-23）
+
+预设解决「别让用户自己去找 exe 在哪」，但不写死路径——各家装在哪差别太大，
+猜错比不猜更烦人。预设只给 `exes`（按文件名去常见位置找）和 `args`（参数栏
+留空时的兜底）：找到就回填，找不到让用户点「浏览」。
+
+| id | 名称 | 怎么找 |
+|---|---|---|
+| `custom` | 自定义程序 | 不猜，必须自己填 |
+| `self` | MAA-PRTS 本体 | 打包＝本进程 exe；源码＝同一个 python + `backend/main.py` |
+| `maa` | MAA 官方客户端 | 设置里的 `maaDir` → `maaDirs` 历史 → 正在跑的 MAA 进程 → 扫盘 |
+| `bettergi` / `onedragon` / `okww` / `maaend` / `m9a` / `mfaa` | 原神 / 绝区零 / 鸣潮 / 终末地 / 重返未来 / MFA | 按 `exes` 名扫盘（限深 2 层、限时 1.5 秒、跳过系统目录） |
+
+- **预设只是「猜」，不是「覆盖」**：`resolve()` 只补空的 `program` / `args` /
+  `cwd`，用户填了的一律不动；任务里 `program` 空着也能存，跑的时候按预设再
+  找一次（换机器、挪目录都不用改任务）。
+- **想加自己的预设**：`config/schedule-presets.json` 写
+  `[{"id": "xx", "name": "显示名", "exes": ["xx.exe"], "args": "--foo"}]`，
+  同 id 覆盖内置那条，不用改代码。
+- **探测结果缓存 5 分钟**（`_scan_cache`）：界面每次打开对话框不必重扫全盘；
+  要强制重找用 `detect(id, refresh=True)` 或 `/api/schedule/detect?id=xx&refresh=1`。
 
 几个踩过的点：
 
@@ -1886,8 +1909,9 @@ MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速�
   `events`（带 seq，同一个事件不会弹两遍）。
 
 接口：`/api/schedule/status`（`?since=<seq>` 拿增量事件）、`/api/schedule/save`
-（整表）、`/api/schedule/run`、`/api/schedule/stop`。以后让 agent 帮用户写
-定时，直接调这四个就行，不需要另开一套。
+（整表）、`/api/schedule/run`、`/api/schedule/stop`、`/api/schedule/presets`
+（预设表）、`/api/schedule/detect`（选预设时回填 program/args/cwd）。以后让
+agent 帮用户写定时，直接调这些就行，不需要另开一套。
 
 线程在 `main()` 里起（`scheduler.start()`：tick + worker 两个守护线程），
 起不来只记一行警告，不影响主流程。

@@ -612,7 +612,7 @@ TOOLS = [
                      'description': '{账号文件名: 切号名}（缺的才要问用户）'},
            'emulators': {'type': 'object',
                          'description': '{账号文件名或昵称: adb 地址}，'
-                                        '如 {"灰bao#0384 bilibili服": '
+                                        '如 {"abc示例#0384 bilibili服": '
                                         '"emulator-5556"}。用户说「这个号用'
                                         '第二台」时传；不传按账号绑的 MAA 档案连'}},
           ['steps']),
@@ -1107,7 +1107,7 @@ def _tool_stop_run(args, session=None):
 # 官服「账号管理器」里显示的条目是打码手机号：181****5505。MAA 切号就是拿
 # AccountName 去 OCR 全匹配这一行，写昵称永远匹配不到 —— 表现是 select_account
 # 死循环几十次、最后 "Account switch failed after restart"（2026-11-17 实测，
-# 档案 moren 里 AccountName 存的是昵称「小卡拉帕鲁灰」，跑了 4 分钟没进去）。
+# 档案 moren 里 AccountName 存的是昵称，跑了 4 分钟没进去）。
 # B 服显示的是游戏内用户名，昵称才是对的。
 #
 # 但「必须 3+4 星+4」是错的：MAA 是子串匹配，官方说明写的是「可输入
@@ -1910,7 +1910,7 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   `emulator-5554`，而用户其实开着两台。`list_accounts` 的 `devices` 才是
   现在真在线的设备列表：
   - 用户说「两台一起跑」而 `devices` 比分组多 → **问一句**「哪个号用哪台」，
-    然后 `run_steps(..., emulators={"灰bao#0384 bilibili服": "emulator-5556"})`
+    然后 `run_steps(..., emulators={"abc示例#0384 bilibili服": "emulator-5556"})`
   - 不问也能跑，但会串行排队，用户看到的还是「只有一台在动」
   - 传了 emulators，程序会**严格**连那台：连不上就报错，不会偷偷换回 5554
 - 每组跑在**自己的进程**里（不是线程）：同一个进程里两个 MaaCore 会抢

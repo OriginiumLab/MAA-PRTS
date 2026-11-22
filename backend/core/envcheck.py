@@ -72,7 +72,7 @@ _KINDS = {
 
 # 从 adb 路径都反推不到目录时，按常见的安装位置猜一把（只用于提示，不启动）
 _GUESS_DIRS = [
-    r'D:\2.game\leidian\LDPlayer14',
+    r'D:\LDPlayer\LDPlayer14',
     r'C:\LDPlayer\LDPlayer9',
     r'D:\Program Files\Netease\MuMuPlayer-12.0',
 ]

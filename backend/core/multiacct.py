@@ -184,7 +184,7 @@ def plan(req):
             by_account.setdefault(an, pf)
 
     def _match(c):
-        """昵称 → MAA 档案：容忍「小卡拉帕鲁灰#6408」对上「小卡拉帕鲁灰」"""
+        """昵称 → MAA 档案：容忍「示例昵称#6408」对上「示例昵称」"""
         nick = (c.get('nickName') or '').strip()
         for key in (nick, nick.split('#')[0].strip(), (c.get('name') or '').strip()):
             if key and key in by_account:

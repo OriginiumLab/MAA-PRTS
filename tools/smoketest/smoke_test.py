@@ -1881,16 +1881,16 @@ def check_multiacct(tmp):
                       ('１２３＊５５０５', '123****5505'),
                       ('181****  5505', '181****5505')):
         assert M.norm_account_name(raw) == want, (raw, M.norm_account_name(raw))
-    assert M.norm_account_name('小卡拉帕鲁灰') == '小卡拉帕鲁灰'
-    assert M.norm_account_name('灰bao#0384') == '灰bao#0384', 'B 服用户名带 # 别被吃掉'
+    assert M.norm_account_name('示例昵称') == '示例昵称'
+    assert M.norm_account_name('abc示例#0384') == 'abc示例#0384', 'B 服用户名带 # 别被吃掉'
     assert M.norm_account_name('') == ''
     # 校验：官服只拦昵称，格式问题不归用户
     assert acctname.check('5505', '官服') == ('5505', '')
     assert acctname.check('136', '官服') == ('136', ''), '本机档案里就有 3 位片段'
     assert acctname.check('23****45', '官服')[0] == '23****45'
-    nm, why = acctname.check('小卡拉帕鲁灰', '官服')
+    nm, why = acctname.check('示例昵称', '官服')
     assert nm is None and '后 4 位' in why, (nm, why)
-    assert acctname.check('小卡拉帕鲁灰', 'bilibili服')[0] == '小卡拉帕鲁灰'
+    assert acctname.check('示例昵称', 'bilibili服')[0] == '示例昵称'
     assert acctname.is_official_channel('') is True, '渠道缺失按官服算'
     assert acctname.is_official_channel('B服') is False
     # 档案名撞了就加序号，不覆盖用户原来的档案
@@ -3509,8 +3509,8 @@ def check_settings_panel(tmp):
     snap['account']['channelName'] = 'B服'
     accounts.save_account('smoke-acc.json', snap)
     m = api.api_account_maa({}, {'file': 'smoke-acc.json',
-                                 'patch': {'accountName': '灰bao#7986'}})['maa']
-    assert m['accountName'] == '灰bao#7986', m
+                                 'patch': {'accountName': 'abc示例#7986'}})['maa']
+    assert m['accountName'] == 'abc示例#7986', m
 
     # 5) bootstrap 要把日志目录一起给界面（「数据与日志」页要用）
     boot = api.bootstrap({}, {})
@@ -5143,6 +5143,114 @@ def check_scheduler(tmp):
     assert isinstance(st['log'], list) and isinstance(st['seq'], int)
 
 
+def check_schedule_presets(tmp):
+    """B59 定时任务预设：预设表 / 找程序 / 缺路径按预设兜底 / 脱敏守卫
+
+    定时任务只干「到点启动一个程序」，程序从预设里挑：本程序自己、MAA 官方
+    客户端，以及常见其它游戏的自动化工具。预设只说「先试哪几个 exe 名」和
+    默认参数，路径一律现场探测 + 允许手改——所以这里钉四件事：
+
+    ① 探测优先看设置里的 MAA 目录，不靠扫盘运气；
+    ② 任务没填 program 时，运行时按预设再找一次（换机器/挪目录不用改任务）；
+    ③ 用户手填的值绝不被预设覆盖；
+    ④ 代码 / 文档 / 用例里不留三方项目名、真实昵称、本人机器路径。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from core import scheduler, settings
+
+    _reset_config(tmp)
+    scheduler._cache = None
+    scheduler._preset_cache[:] = [None, None]
+    scheduler._scan_cache.clear()
+
+    # 1) 预设表：自定义打头，本体 / MAA / 其它游戏都在
+    ids = [p['id'] for p in scheduler.presets()]
+    assert ids[0] == 'custom' and ids[1] == 'self', ids
+    for want in ('maa', 'bettergi', 'onedragon', 'okww', 'maaend', 'm9a', 'mfaa'):
+        assert want in ids, ids
+    assert all(p['name'] for p in scheduler.presets())
+    assert scheduler.preset_id('MAA') == 'maa', '预设 id 大小写不敏感'
+    assert scheduler.preset_id('不存在') == 'custom', '乱填的预设回落自定义'
+
+    # 2) 自定义预设不许「猜」：没填程序就是要报错
+    try:
+        scheduler._argv({'program': '', 'args': '', 'preset': 'custom'})
+        assert False, '自定义预设没填程序不该通过'
+    except ValueError:
+        pass
+
+    # 3) MAA 预设按设置里的 MAA 目录找
+    maa_dir = os.path.join(tmp, 'MAA-test')
+    os.makedirs(maa_dir)
+    open(os.path.join(maa_dir, 'MAA.exe'), 'w').close()
+    settings.save({'maaDir': maa_dir, 'maaDirs': [maa_dir]})
+    scheduler._scan_cache.clear()
+    hit = scheduler.detect('maa')
+    want = os.path.normcase(os.path.join(maa_dir, 'MAA.exe'))
+    assert os.path.normcase(hit) == want, hit
+    # 任务里没填 program：运行时按预设再找一次
+    argv = scheduler._argv({'program': '', 'args': '', 'preset': 'maa'})
+    assert os.path.normcase(argv[0]) == want, argv
+
+    # 4) 其它游戏按 exe 名找：只扫给定目录（不真的扫全盘）
+    games = os.path.join(tmp, 'games')
+    os.makedirs(os.path.join(games, 'BetterGI', 'bin'))
+    exe = os.path.join(games, 'BetterGI', 'bin', 'BetterGI.exe')
+    open(exe, 'w').close()
+    assert os.path.normcase(scheduler._scan_exe(('BetterGI.exe',), roots=[games])) == \
+        os.path.normcase(exe)
+    assert scheduler._scan_exe(('Nope.exe',), roots=[games]) == ''
+    assert scheduler._scan_exe((), roots=[games]) == '', '没有 exe 名就什么都别扫'
+
+    # 5) 本体：本进程的 python（源码）或 exe（打包）
+    d = scheduler.fill('self')
+    assert d['id'] == 'self' and d['program'] == sys.executable, d
+    if not settings.FROZEN:
+        assert 'main.py' in d['args'], d
+    keep = scheduler.resolve({'preset': 'self', 'program': 'C:/mine/x.exe', 'args': '--a'})
+    assert keep['program'] == 'C:/mine/x.exe' and keep['args'] == '--a', keep
+
+    # 6) 自己的预设：config/schedule-presets.json，同 id 覆盖内置那条
+    with open(os.path.join(tmp, 'config', 'schedule-presets.json'), 'w',
+              encoding='utf-8') as f:
+        json.dump([{'id': 'mygame', 'name': '我的游戏', 'exes': ['my.exe'], 'args': '--x'},
+                   {'id': 'maa', 'name': 'MAA（我改的）'}], f, ensure_ascii=False)
+    scheduler._preset_cache[:] = [None, None]
+    ps = {p['id']: p for p in scheduler.presets()}
+    assert ps['mygame']['name'] == '我的游戏' and ps['mygame']['builtin'] is False, ps.keys()
+    assert ps['maa']['name'] == 'MAA（我改的）', ps['maa']
+    assert ps['maa']['exes'] == (), '覆盖时不写 exes 就别把内置的 exe 名带回来'
+
+    # 7) 保存清洗：认识的预设留着，乱填的回落自定义，老配置没这字段也不报错
+    cfg = scheduler.save({'tasks': [
+        {'name': 'A', 'program': 'a.exe', 'preset': 'maa'},
+        {'name': 'B', 'program': 'b.exe', 'preset': '乱写'},
+        {'name': 'C', 'program': 'c.exe'},
+    ]})
+    assert [t['preset'] for t in cfg['tasks']] == ['maa', 'custom', 'custom']
+
+    # 8) 脱敏守卫：三方项目名 / 真实昵称 / 本人机器路径都不许往回长
+    #    关键词拆开写——本文件也在扫描范围里，整词写进来就成了「自己漏自己」
+    bad = ('三月' + '七', '小卡拉' + '帕鲁灰', '灰' + 'bao', '2.' + 'game',
+           '小卡' + '.json')
+    leaks = []
+    for part in ('backend', 'frontend', 'docs', 'tools'):
+        for dirpath, dirs, files in os.walk(os.path.join(REPO, part)):
+            dirs[:] = [x for x in dirs if x != '__pycache__']
+            for fn in files:
+                if not fn.lower().endswith(('.py', '.js', '.md', '.css', '.html', '.json')):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    txt = open(path, encoding='utf-8').read()
+                except Exception:
+                    continue
+                for word in bad:
+                    if word in txt:
+                        leaks.append('%s: %s' % (os.path.relpath(path, REPO), word))
+    assert not leaks, leaks
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -5758,11 +5866,11 @@ def check_task_log_isolation(tmp):
     _reset_config(tmp)
     from core import accounts, multiproc, tasks
 
-    p = '[灰bao#0384]'
+    p = '[abc示例#0384]'
     dec = tasks._decorate
     assert dec('MaaCore v6.23.0 已加载', p) == p + ' MaaCore v6.23.0 已加载'
     assert dec('[组 emulator-5556] 开始：MAA -1', p) == p + ' 开始：MAA -1'
-    assert dec('[小卡拉帕鲁灰#6408] 排队（官服）', p) == '[小卡拉帕鲁灰#6408] 排队（官服）'
+    assert dec('[示例昵称#6408] 排队（官服）', p) == '[示例昵称#6408] 排队（官服）'
     assert dec('[MAA] 事件', p) == '[MAA] 事件'
     assert dec('裸行', '') == '裸行'
 
@@ -5786,9 +5894,9 @@ def check_task_log_isolation(tmp):
 
     # 一组一个号 → tag 用昵称；多号组不硬塞（每行本来就有各自前缀）
     old = accounts.get_account
-    accounts.get_account = lambda f: {'account': {'nickName': '灰bao#0384'}}
+    accounts.get_account = lambda f: {'account': {'nickName': 'abc示例#0384'}}
     try:
-        assert multiproc.group_tag({'files': ['x.json']}) == '灰bao#0384'
+        assert multiproc.group_tag({'files': ['x.json']}) == 'abc示例#0384'
     finally:
         accounts.get_account = old
     assert multiproc.group_tag({'files': ['a.json', 'b.json']}) == ''
@@ -6632,6 +6740,8 @@ def main():
                 lambda: check_cross_zone_segments(tmp))
         r.check('B58 散点关卡（S 关）：认格子→点进编队→单作业模式一关一趟',
                 lambda: check_scatter_stages(tmp))
+        r.check('B59 定时任务预设（预设表/找程序/缺路径兜底/脱敏守卫）',
+                lambda: check_schedule_presets(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

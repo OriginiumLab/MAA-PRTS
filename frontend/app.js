@@ -2858,11 +2858,12 @@ function openSettings() {
           <div class="set-pane" data-pane="schedule">
             <div class="set-head">
               <h3>定时任务</h3>
-              <p>到点自动启动一个程序：<b>exe、bat、cmd 批处理</b>都行，参数照程序自己
-                的说明填。常见用法是定时跑挂机脚本、到点打开模拟器或别的工具；多条任务
-                还能<b>链式启动</b>——上一个程序退出后接着跑下一个。定时只在程序运行时
-                生效，要开机自启请把本程序放进系统启动项；「通知」是在程序里弹提示，
-                程序关着就收不到。</p>
+              <p>到点自动启动一个程序：<b>exe、bat、cmd 批处理</b>都行。程序可以从<b>预设</b>
+                里挑（本程序自己、MAA 官方客户端，以及原神 / 绝区零 / 鸣潮 / 终末地 /
+                重返未来这些工具的模板），预设会帮你把路径找好，找不到再点「浏览」；
+                参数照程序自己的说明填。多条任务还能<b>链式启动</b>——上一个程序退出后
+                接着跑下一个。定时只在程序运行时生效，要开机自启请把本程序放进系统启动项；
+                「通知」是在程序里弹提示，程序关着就收不到。</p>
             </div>
             <div class="sched-wrap">
               <div class="sched-head">
@@ -3524,11 +3525,26 @@ function openSettings() {
       }
 
       /* ---------------- 定时任务 ----------------
-         参照三月七助手那套：时间触发 / 链式启动、冲突策略、链式失败策略。
-         数据在后端 config/schedule.json，这里只负责展示与增删改；真正拉起
-         程序的线程在后端，所以关掉设置页也照跑。 */
+         时间触发 / 链式启动、冲突策略、链式失败策略。数据在后端
+         config/schedule.json，这里只负责展示与增删改；真正拉起程序的线程在
+         后端，所以关掉设置页也照跑。程序可以从预设里挑，预设表由后端给
+         （内置几条常见游戏工具，config/schedule-presets.json 还能自己加）。 */
       const WD = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
       const schedOf = () => S.schedule || { tasks: [], conflict: 'stop', onChainFail: 'continue' };
+      const schedPresetName = pid => {
+        const row = (S.schedPresets || []).find(p => p.id === pid);
+        return (row && row.name) || (pid === 'custom' || !pid ? '自定义程序' : pid);
+      };
+      const schedPresetsLoad = async () => {
+        if (S.schedPresets) return S.schedPresets;
+        try {
+          const d = await api('/api/schedule/presets');
+          S.schedPresets = (d && d.presets) || [];
+        } catch (e2) {
+          S.schedPresets = [{ id: 'custom', name: '自定义程序' }];
+        }
+        return S.schedPresets;
+      };
       const baseName = p => {
         const t = String(p || '').replace(/[\\/]+$/, '');
         return t.split(/[\\/]/).pop() || t;
@@ -3564,8 +3580,11 @@ function openSettings() {
             <span class="sched-name" title="${esc(t.name)}">${t.mode === 'chain' ? '→ ' : ''}${
               esc(t.name)}${live ? '<em class="sched-live">运行中</em>' : ''}</span>
             <span class="sched-plan">${plan}</span>
-            <span class="sched-prog" title="${esc(t.program || '')}">${
-              t.program ? esc(baseName(t.program)) : '<i class="sched-warn">未设置</i>'}</span>
+            <span class="sched-prog" title="${esc(t.program || schedPresetName(t.preset))}">${
+              t.program ? esc(baseName(t.program))
+                : (t.preset && t.preset !== 'custom'
+                  ? esc(schedPresetName(t.preset))
+                  : '<i class="sched-warn">未设置</i>')}</span>
             <span class="sched-args" title="${esc(t.args || '')}">${esc(t.args || '—')}</span>
             <span class="sched-nt">${t.notify ? '是' : '否'}</span>
           </div>`;
@@ -3605,6 +3624,9 @@ function openSettings() {
           const d = await api('/api/schedule/status');
           S.schedule = d;
           _schedSeq = d.seq || _schedSeq;   // 设置里看过的，全局轮询不再弹一遍
+          if (!S.schedPresets) {
+            try { await schedPresetsLoad(); } catch (e3) { /* 预设拿不到就显示 id */ }
+          }
           paintSched();
         } catch (e2) {
           if (quiet) return;
@@ -3628,13 +3650,14 @@ function openSettings() {
         return schedSel;
       };
 
-      function openSchedTask(task, idx) {
+      async function openSchedTask(task, idx) {
         const isNew = !task;
         const t = Object.assign({
           name: '', enabled: true, mode: 'time', time: '08:00',
-          weekdays: [1, 2, 3, 4, 5, 6, 7], program: '', args: '', cwd: '',
+          weekdays: [1, 2, 3, 4, 5, 6, 7], preset: 'custom', program: '', args: '', cwd: '',
           timeout: 0, notify: true,
         }, task || {});
+        const presets = await schedPresetsLoad();
         const picked = new Set((t.weekdays || []).map(Number));
         const m = modal(`
           <h3>${isNew ? '添加定时任务' : '编辑定时任务'}</h3>
@@ -3657,13 +3680,19 @@ function openSettings() {
                 <button type="button" class="wd-btn${picked.has(i + 1) ? ' on' : ''}"
                         data-wd="${i + 1}">${n}</button>`).join('')}</div></div>
           </div>
+          <label class="field"><span>程序预设</span>
+            <select id="st-preset">${presets.map(p =>
+              `<option value="${esc(p.id)}"${p.id === t.preset ? ' selected' : ''}>${
+                esc(p.name)}</option>`).join('')}</select></label>
+          <div class="onb-hint" id="st-preset-hint"></div>
           <label class="field"><span>程序（exe / bat / cmd）</span>
             <div class="path-row">
-              <input type="text" id="st-program" value="${esc(t.program)}" placeholder="D:\path\autostart-138.exe">
+              <input type="text" id="st-program" value="${esc(t.program)}"
+                     placeholder="D:\Tools\YourTool\YourTool.exe">
               <button class="btn-plain mini" id="st-pick">浏览</button>
             </div></label>
           <label class="field"><span>参数</span>
-            <input type="text" id="st-args" value="${esc(t.args)}" placeholder="--autostart --instance 138"></label>
+            <input type="text" id="st-args" value="${esc(t.args)}" placeholder="没有就留空"></label>
           <label class="field"><span>起始目录（留空 = 程序所在目录）</span>
             <div class="path-row">
               <input type="text" id="st-cwd" value="${esc(t.cwd)}">
@@ -3685,6 +3714,48 @@ function openSettings() {
             const state = $('#st-state', box);
             const modeSel = $('#st-mode', box);
             const timeBox = $('#st-time-box', box);
+            const presetSel = $('#st-preset', box);
+            const pHint = $('#st-preset-hint', box);
+            const progEl = $('#st-program', box);
+            const argsEl = $('#st-args', box);
+            const cwdEl = $('#st-cwd', box);
+            /* 预设只负责「猜」：把猜到的路径填进空栏位；用户自己填过或改过的
+               值一律不动（记下上次自动填的内容，只有还是它才覆盖） */
+            const auto = { program: '', args: '', cwd: '' };
+            const applyPreset = async pid => {
+              const row = presets.find(p => p.id === pid) || {};
+              auto.program = auto.args = auto.cwd = '';
+              if (!pid || pid === 'custom') {
+                pHint.className = 'onb-hint';
+                pHint.textContent = row.note || '';
+                return;
+              }
+              pHint.className = 'onb-hint';
+              pHint.textContent = '正在找…';
+              let d = {};
+              try {
+                d = await api('/api/schedule/detect?id=' + encodeURIComponent(pid));
+              } catch (e2) {
+                d = {};
+              }
+              const put = (el2, key, val) => {
+                const cur = el2.value.trim();
+                if (!cur || cur === auto[key]) el2.value = val || '';
+                auto[key] = val || '';
+              };
+              put(progEl, 'program', d.program);
+              put(argsEl, 'args', d.args);
+              put(cwdEl, 'cwd', d.cwd);
+              const note = row.note ? row.note + '。' : '';
+              pHint.className = 'onb-hint' + (d.program ? '' : ' bad');
+              pHint.title = d.program || '';
+              pHint.textContent = d.program
+                ? `${note}已找到：${baseName(d.program)}`
+                : `${note}本机没找到${(row.exes || []).length
+                  ? '（' + row.exes.join(' / ') + '）' : ''}，点「浏览」选一下`;
+            };
+            presetSel.addEventListener('change', () => applyPreset(presetSel.value));
+            applyPreset(presetSel.value);   // 打开就按当前预设看一眼能不能找到
             const syncMode = () => { timeBox.style.display = modeSel.value === 'chain' ? 'none' : ''; };
             modeSel.addEventListener('change', syncMode);
             syncMode();
@@ -3695,15 +3766,15 @@ function openSettings() {
               if (picked.has(n)) picked.delete(n); else picked.add(n);
               b.classList.toggle('on', picked.has(n));
             });
-            $('#st-pick', box).addEventListener('click', () => pickFile($('#st-program', box)));
+            $('#st-pick', box).addEventListener('click', () => pickFile(progEl));
             $('#st-pick-dir', box).addEventListener('click', () => pickFolder($('#st-cwd', box)));
             $('#st-save', box).addEventListener('click', async () => {
               const name = $('#st-name', box).value.trim();
               const mode = modeSel.value === 'chain' ? 'chain' : 'time';
               const time = $('#st-time', box).value.trim();
-              const program = $('#st-program', box).value.trim();
-              const args = $('#st-args', box).value.trim();
-              const cwd = $('#st-cwd', box).value.trim();
+              const program = progEl.value.trim();
+              const args = argsEl.value.trim();
+              const cwd = cwdEl.value.trim();
               const timeout = Math.max(0, parseInt($('#st-timeout', box).value, 10) || 0);
               if (!name) { state.className = 'onb-hint bad'; state.textContent = '先起个名字'; return; }
               if (!program) { state.className = 'onb-hint bad'; state.textContent = '先选要运行的程序'; return; }
@@ -3715,7 +3786,8 @@ function openSettings() {
               }
               const item = {
                 id: t.id || '', enabled: $('#st-enabled', box).checked, name, mode, time,
-                weekdays: [...picked].sort((a, b) => a - b), program, args, cwd, timeout,
+                weekdays: [...picked].sort((a, b) => a - b), preset: presetSel.value,
+                program, args, cwd, timeout,
                 notify: $('#st-notify', box).checked,
               };
               const tasks = (schedOf().tasks || []).slice();

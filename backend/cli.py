@@ -5,7 +5,7 @@
 
     python -m backend.cli accounts
     python -m backend.cli stages TL-
-    python -m backend.cli ops TL-5 --account 小卡.json
+    python -m backend.cli ops TL-5 --account 主号.json
     python -m backend.cli progress
     python -m backend.cli status
     python -m backend.cli runs
@@ -74,7 +74,7 @@ def _flag(argv, name):
 
 
 # 带取值的选项。算「位置参数」时必须跳过它们的值，否则
-# ``ops --account 小卡.json TL-5`` 会把账号名当成关卡关键词。
+# ``ops --account 主号.json TL-5`` 会把账号名当成关卡关键词。
 _VALUE_OPTS = ('--account', '--accounts', '--kind', '--limit', '--maa-dir',
                '--mode', '--names', '--stages')
 

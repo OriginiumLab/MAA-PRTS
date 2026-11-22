@@ -414,6 +414,27 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
   界面上没有的格子（未解锁）跳过不排作业；点开了但没进编队（理智不够）记进
   `stages_failed` 并接着跑下一关
 
+### B59 定时任务预设（2026-11-23）
+
+定时任务从「只能填路径」扩成「预设里挑」，预设只负责猜程序在哪。用例钉四件
+事，不碰真实安装位置（临时目录造假 exe）：
+
+- **预设表**：`custom` 打头、`self` 第二，`maa` 与六个其它游戏预设都在；
+  `preset_id('MAA')` 大小写不敏感，乱填的 id 回落 `custom`
+- **不猜的地方不猜**：`custom` 没填程序必须报错，不许偷偷换成别的 exe
+- **MAA 预设**：把 `maaDir` 指到临时目录里的假 `MAA.exe` → `detect('maa')`
+  命中的就是它；任务里 `program` 空着，`_argv` 跑时按预设补上同一个路径
+- **扫盘**：给定目录里造 `BetterGI/bin/BetterGI.exe` → 按文件名找到；换名字
+  找不到；没给 exe 名就一次都不扫
+- **本体**：`fill('self')` 给的是本进程 python（源码模式带 `main.py` 参数）；
+  用户手填的 `program`/`args` 不许被 `resolve()` 覆盖
+- **自己的预设**：`config/schedule-presets.json` 能新增、能同 id 覆盖内置
+  （覆盖时不写 `exes` 就为空，不把内置的 exe 名带回来）
+- **保存清洗**：认识的 `preset` 留着，乱写回落 `custom`，老配置没这字段也对
+- **脱敏守卫**：遍历 `backend/` `frontend/` `docs/` `tools/`，三方项目名、真实
+  账号昵称、本人机器路径一个都不许出现（关键词在用例里拆成两半写，否则本文件
+  自己就先违规）
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后
