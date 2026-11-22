@@ -645,13 +645,21 @@ def probe(touch):
     几乎没有；主题页再靠中部亮度（亮）和主界面（暗）分开。
     """
     try:
+        data = touch.shot()
+    except Exception:
+        return ''
+    return probe_bytes(data)
+
+
+def probe_bytes(data):
+    """同 :func:`probe`，但吃一张截图 bytes（调用方手里已经有帧时省一次截图）"""
+    if not data:
+        return ''
+    try:
         from PIL import Image
     except Exception:
         return ''
     try:
-        data = touch.shot()
-        if not data:
-            return ''
         im = Image.open(io.BytesIO(data)).convert('RGB')
         w, h = im.size
 
@@ -949,53 +957,72 @@ def find_card_bytes(data, tpl_file, max_score=_CARD_MAX_SCORE):
         if TW >= SW or TH >= SH:
             continue
 
-        # --- 1) 粗扫
-        coarse = (999.0, 0, 0)
+        # --- 1) 粗扫：**留前几名**，别只留冠军
+        # 只留冠军会整块锁错位置：细长低对比的模板（活动提示条那种 400×44 的
+        # 一行字）缩到 1/4 以后笔画几乎没了，背景渐变的谷底可能比字所在的
+        # 位置还低，后面「精修」只在冠军附近几十像素里找，再也回不来。
+        # 2026-11-22 实测（雪山降临导航偶发失败）：同一帧直接按标定位置比是
+        # 10 分，函数却报 22 分、坐标跑到下面别的行上——就是踩了这个。
         step = 4
+        cand = []
         for y in range(0, SH - TH, step):
             for x in range(0, SW - TW, step):
                 s = ImageStat.Stat(ImageChops.difference(
                     small.crop((x, y, x + TW, y + TH)), t)).mean[0]
-                if s < coarse[0]:
-                    coarse = (s, x, y)
+                cand.append((s, x, y))
+        if not cand:
+            continue
+        cand.sort()
 
         # 粗扫都明显不像就别做全分辨率精修了（那一步最贵，两轮上千次全图
         # 比对）。翻屏时 90% 的屏都是无关卡片，跳过能省一半时间。
-        if coarse[0] > _COARSE_SKIP:
+        if cand[0][0] > _COARSE_SKIP:
             continue
 
-        # --- 2) 精修
-        _, cx, cy = coarse
-        for y in range(max(0, cy - step), min(SH - TH, cy + step) + 1):
-            for x in range(max(0, cx - step), min(SW - TW, cx + step) + 1):
-                s = ImageStat.Stat(ImageChops.difference(
-                    small.crop((x, y, x + TW, y + TH)), t)).mean[0]
-                if s < coarse[0]:
-                    coarse = (s, x, y)
+        # 相距不到「半个模板」的算同一个位置；取前 3 个候选各自精修
+        picks = []
+        for s, x, y in cand:
+            if s > _COARSE_SKIP or len(picks) >= 3:
+                break
+            if all(abs(x - px) > TW // 2 or abs(y - py) > TH // 2
+                   for _, px, py in picks):
+                picks.append((s, x, y))
 
-        # --- 3) 全分辨率复核
-        # 1/4 尺度上「玛莉娅·临光」和隔壁「长夜临光」能同时拿到 10 分，
-        # 1/4 分不出来（实测：拿 MN 模板去认，跑到长夜临光那张卡上）。全分辨
-        # 率再比一次就拉开了：同一张卡 0~3 分，相邻卡 15 甚至 30 分。
-        fx = coarse[1] * S
-        fy = coarse[2] * S
-        fw, fh = tw, th
-        fine = (coarse[0], fx, fy)
-        # 两轮：先 ±16 走 4 步（补上 1/4 尺度 16 像素的粒度），再 ±4 走 1 步
-        for rng, st in ((16, 4), (4, 1)):
-            bx, by = fine[1], fine[2]
-            for dy in range(-rng, rng + 1, st):
-                for dx in range(-rng, rng + 1, st):
-                    px, py = bx + dx, by + dy
-                    if px < 0 or py < 0 or px + fw > screen.width or py + fh > screen.height:
-                        continue
-                    d = ImageStat.Stat(ImageChops.difference(
-                        screen.crop((px, py, px + fw, py + fh)), tpl0)).mean[0]
-                    if d < fine[0]:
-                        fine = (d, px, py)
+        zone_best = (999.0, 0, 0)
+        for cs, cx, cy in picks:
+            # --- 2) 精修
+            for y in range(max(0, cy - step), min(SH - TH, cy + step) + 1):
+                for x in range(max(0, cx - step), min(SW - TW, cx + step) + 1):
+                    s = ImageStat.Stat(ImageChops.difference(
+                        small.crop((x, y, x + TW, y + TH)), t)).mean[0]
+                    if s < cs:
+                        cs, cx, cy = s, x, y
 
-        if fine[0] < best[0]:
-            best = (fine[0], fine[1], fine[2], fw, fh)
+            # --- 3) 全分辨率复核
+            # 1/4 尺度上「玛莉娅·临光」和隔壁「长夜临光」能同时拿到 10 分，
+            # 1/4 分不出来（实测：拿 MN 模板去认，跑到长夜临光那张卡上）。全分辨
+            # 率再比一次就拉开了：同一张卡 0~3 分，相邻卡 15 甚至 30 分。
+            fw, fh = tw, th
+            fine = (cs, cx * S, cy * S)
+            # 两轮：先 ±16 走 4 步（补上 1/4 尺度 16 像素的粒度），再 ±4 走 1 步
+            for rng, st in ((16, 4), (4, 1)):
+                bx, by = fine[1], fine[2]
+                for dy in range(-rng, rng + 1, st):
+                    for dx in range(-rng, rng + 1, st):
+                        px, py = bx + dx, by + dy
+                        if px < 0 or py < 0 or px + fw > screen.width or py + fh > screen.height:
+                            continue
+                        d = ImageStat.Stat(ImageChops.difference(
+                            screen.crop((px, py, px + fw, py + fh)), tpl0)).mean[0]
+                        if d < fine[0]:
+                            fine = (d, px, py)
+            if fine[0] < zone_best[0]:
+                zone_best = fine
+            if zone_best[0] <= _EARLY_STOP:   # 已经板上钉钉，别再精修剩下两个
+                break
+
+        if zone_best[0] < best[0]:
+            best = (zone_best[0], zone_best[1], zone_best[2], tw, th)
         if best[0] <= _EARLY_STOP:
             break
 

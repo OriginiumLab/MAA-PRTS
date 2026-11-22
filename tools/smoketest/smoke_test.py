@@ -5530,6 +5530,142 @@ def check_multi_emu_address(tmp):
         skills.envcheck.ensure = old_ensure
 
 
+def _fake_screen(tmp, items):
+    """拼一张 1920×1080 的灰底假截图，把模板按 (x, y, 模板名) 贴上去
+
+    ``items`` 里的坐标是 **1920 口径左上角**。返回 PNG bytes。
+    """
+    from PIL import Image
+    im = Image.new('RGB', (1920, 1080), (58, 62, 74))
+    for x, y, name in items:
+        tpl = Image.open(eventnav_tpl(name)).convert('RGB')
+        im.paste(tpl, (int(x), int(y)))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def eventnav_tpl(name):
+    from core import eventnav
+    p = eventnav._tpl_path(name)
+    assert p and os.path.isfile(p), '模板丢了：%s' % name
+    return p
+
+
+def check_nav_from_stage_list(tmp):
+    """B54：导航的起点可能是任意一页——不盲点终端大卡、提示条走定点比对
+
+    2026-11-22 实测链：连跑多关 → 起点是上一关的关卡列表 → 盲点终端大卡戳到
+    关卡卡片上；同时活动提示条用整屏搜索会锁错位置，日志报「点了六次终端大卡
+    都看不到提示条」。这里全用合成图钉住，不碰真机。
+    """
+    _reset_config(tmp)
+    from core import eventnav, stagenav
+
+    # ---- ① 活动提示条：定点比对准，整块挪走就不认 ----
+    ok, sc, ex, ey = eventnav._entry_here(
+        _fake_screen(tmp, [(150, 805, 'OS_entry.png')]),
+        eventnav.ENTRIES['OS']['entry'])
+    assert ok and sc < 3, (ok, sc)
+    assert abs(ex - 350) <= 3 and abs(ey - 827) <= 3, (ex, ey)
+
+    ok, sc, _, _ = eventnav._entry_here(
+        _fake_screen(tmp, [(700, 300, 'OS_entry.png')]),
+        eventnav.ENTRIES['OS']['entry'])
+    assert not ok, '提示条挪到别处就不该认'
+
+    # 别的页面（关卡列表）拿同一片区域去比，分数要高得多
+    ok2, sc2, _, _ = eventnav._entry_here(
+        _fake_screen(tmp, [(150, 805, 'OS_z1.png')]),
+        eventnav.ENTRIES['OS']['entry'])
+    assert not ok2 and sc2 > eventnav._ENTRY_MAX, (ok2, sc2, sc)
+
+    # ---- ② 不在主界面系时不许点「终端」大卡，先退 ----
+    taps, backs = [], []
+
+    class FakeTouch:
+        def __init__(self, data):
+            self.data = data
+        def shot(self):
+            return self.data
+        def tap(self, x, y):
+            taps.append((x, y))
+            return True
+        def tap_px(self, px, py):
+            taps.append((px, py))
+            return True
+        def back(self):
+            backs.append(1)
+            return True
+        def esc(self):
+            backs.append('esc')
+            return True
+        def heal(self):
+            return True
+
+    on_map = _fake_screen(tmp, [(1303, 769, 'OS_z1.png')])   # 有分区节点 = 活动地图
+    old_at_home, old_to_home = stagenav.at_home, eventnav._to_home
+    stagenav.at_home = lambda t: False
+    logs = []
+    eventnav._to_home = lambda touch, log, rounds=5: (
+        backs.append('home') or log('B54：退主界面') or False)
+    try:
+        data, x, y, sc = eventnav._to_terminal(
+            FakeTouch(on_map), eventnav.ENTRIES['OS']['entry'], logs.append)
+        assert not data, '一直退不回主界面就该老实返回空'
+        assert not taps, ('不在主界面还点了坐标（会戳到关卡卡片）：%s' % taps)
+        assert backs.count('home') >= 1, backs
+        assert any('退回主界面' in x for x in logs), logs
+    finally:
+        stagenav.at_home, eventnav._to_home = old_at_home, old_to_home
+
+    # 在主界面系上：点一次终端大卡就到位（提示条一开始就可见时一次都不点）
+    home = _fake_screen(tmp, [(150, 805, 'OS_entry.png')])
+    del taps[:]
+    stagenav.at_home = lambda t: True
+    try:
+        data, x, y, sc = eventnav._to_terminal(
+            FakeTouch(home), eventnav.ENTRIES['OS']['entry'], lambda *_: None)
+        assert data and not taps, (len(data or b''), taps)
+    finally:
+        stagenav.at_home = old_at_home
+
+    # ---- ③ 已经在活动地图上 → 不要再回主界面 ----
+    del taps[:], backs[:]
+    stagenav.at_home = lambda t: False
+    try:
+        got = eventnav._near_map(FakeTouch(on_map),
+                                 eventnav.ENTRIES['OS'], lambda *_: None)
+        assert got, '基础区节点认得到，就该判定「已经在活动地图上」'
+        assert not backs, ('在地图上还按了返回键：%s' % backs)
+    finally:
+        stagenav.at_home = old_at_home
+
+    # 关卡列表（probe 也判 map，但认不到分区节点）→ 只允许按一下返回，不许点坐标
+    plain = _fake_screen(tmp, [])
+    del taps[:], backs[:]
+    got = eventnav._near_map(FakeTouch(plain), eventnav.ENTRIES['OS'],
+                             lambda *_: None)
+    assert not got, '认不到分区节点就不该当自己在活动地图上'
+    assert backs == [1], backs
+    assert not taps, taps
+
+    # ---- ④ probe_bytes 和 probe 同一套判定（调用方手上有帧时省一次截图）----
+    def fake_probe(data):
+        return stagenav.probe(FakeTouch(data))
+
+    for data in (on_map, home, plain):
+        assert stagenav.probe_bytes(data) == fake_probe(data)
+
+    # ---- ⑤ 整屏匹配仍认得出（粗扫留前 3 名以后别把单峰场景搞歪）----
+    x, y, sc = stagenav.find_card_bytes(
+        _fake_screen(tmp, [(1303, 769, 'OS_z1.png')]),
+        eventnav_tpl('OS_z1.png'))
+    assert sc < 3, sc
+    # 合成图的底色是纯灰、模板外沿也偏灰，允许几个像素的位置松弛
+    assert abs(x - 1388) <= 8 and abs(y - 894) <= 8, (x, y)
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5601,6 +5737,8 @@ def main():
                 lambda: check_multi_emu_batch(tmp))
         r.check('B53 多开三处硬伤（分区直点/地址传到 MaaCore/严格不换设备/日志落盘）',
                 lambda: check_multi_emu_address(tmp))
+        r.check('B54 导航从任意页起步（不盲点终端大卡/提示条定点比对/已在地图不绕路）',
+                lambda: check_nav_from_stage_list(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
