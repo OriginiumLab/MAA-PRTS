@@ -435,6 +435,25 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
   账号昵称、本人机器路径一个都不许出现（关键词在用例里拆成两半写，否则本文件
   自己就先违规）
 
+### B60 实例绑定与渠道（2026-11-23）
+
+用户报「指定 5554 却影响 5556」和「启动不看 b 服还是官服」，一个用例钉住两条
+链路，全程不动真模拟器（`_devices` / `read_config` 换成假数据）：
+
+- **客户端类型**：假档案返回 `Config: LDPlayer` + `clientType: Bilibili` →
+  `_conn_for` 出来的 `config` 必须是 `Bilibili`、`emu_kind` 才是 `LDPlayer`；
+  没渠道时兜底 `Official`
+- **地址校验**：`emulator-5556` / `127.0.0.1:16384` 收，`5556` 当场报错并提示
+  正确写法
+- **绑定落盘**：`/api/account/maa` 写 `adbAddress` → `acctbind.addr_of` /
+  `skills._addr_of` 都读到；本次点名（`_ADDR.map`）优先于绑定；`list_accounts`
+  带出 `maaAdbAddress`
+- **绝不换台**：钉的那台不在线 → `device_of` 返回空地址 + 「不会自动换」的原因，
+  并把在线设备列出来；解绑后按档案走
+- **档案过期**：档案地址不在线时，两台在线 → 拦下要用户指定；只剩一台 → 顶上；
+  一台都没开 → 返回空交给 `envcheck` 去启动
+- **设备下拉**：`/api/account/devices` 返回在线列表（地址 + 状态）和当前绑定
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

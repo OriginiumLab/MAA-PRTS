@@ -259,11 +259,19 @@ DOM 里（`.gamepane` 切 `active`），删号后四份列表一起重画。
 和账号卡上的徽标同一个颜色；正文里的「bilibili服」用 `.bili-word` 点出来——
 B 服的切号名规则跟官服不一样，填错 MAA 会死找账号。
 
-**配置文件 → 切号名（2026-11-22）**：账号卡第二行是「配置文件 + 切号名」两栏
-（`.set-maarow-two`，窄屏折成一列）。配置文件下拉的选项来自
-`/api/maa/profiles`（列表项带上各自档案里记的账号名，形如 `moren · 181****5505`），
-换目录或点「检测」会清缓存重拉（`pfCache`）。选了档案就把 StartUp 里的
-`AccountName` 填进切号名输入框、来源标 `profile`；用户一动手输入就标 `manual`。
+**配置文件 → 切号名 → 模拟器（2026-11-23 起三栏）**：账号卡第二行是
+「配置文件 + 切号名 + 模拟器」三栏（`.set-maarow-two` 三列 grid，窄屏折成一列）。
+配置文件下拉的选项来自 `/api/maa/profiles`（列表项带上各自档案里记的账号名，
+形如 `moren · 181****5505`），换目录或点「检测」会清缓存重拉（`pfCache`）。
+选了档案就把 StartUp 里的 `AccountName` 填进切号名输入框、来源标 `profile`；
+用户一动手输入就标 `manual`。
+
+模拟器下拉的选项来自 `/api/account/devices`（`adb devices` 在线列表，形如
+`emulator-5556 · 在线`，第一项是「不指定，按 MAA 档案」），旁边「刷新」重读一遍
+adb。保存走 `/api/account/maa` 的 `patch.adbAddress`，写进账号的 `maa.adbAddress`
+——它和助手的 `bind_emulator` 是同一个字段，钉住以后跑机只连这台，那台不在线
+就报错，不会自己换。卡片头部会多一个「模拟器 emulator-5556」小标签。
+
 打开设置页时 `autoFillMaa()` 只填空着的切号名，**不替用户选档案**——
 两个游戏账号对五份档案，猜错就是切号死循环 4 分钟，宁可只提示一句
 「MAA 当前档案里记着 xxx，在下拉里选它就能带出来」。

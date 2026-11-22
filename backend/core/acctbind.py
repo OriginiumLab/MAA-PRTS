@@ -68,6 +68,40 @@ def channel_of(snap) -> str:
     return str((a.get('channelName') if isinstance(a, dict) else '') or '')
 
 
+def addr_of(file='', snap=None) -> str:
+    """这个账号钉在哪台模拟器上（``emulator-5556`` / ``127.0.0.1:16384``）
+
+    为什么要有这一格（2026-11-23 用户报的「又忘了实例控制」）：
+    以前「哪个号用哪台」只能靠聊天里临时说一句，助手忘一次就串到另一台，
+    而 MAA 里八份档案又全写着 ``emulator-5554``——档案本身分不出来。绑到
+    账号上以后，跑机路径每次都读它，不依赖谁记得传参。
+    """
+    return str(_maa_of(_snap(file, snap)).get('adbAddress') or '').strip()
+
+
+_ADDR_RE = None
+
+
+def check_addr(raw) -> tuple:
+    """模拟器地址 → ``(规范值, 原因)``
+
+    只认 MAA / adb 的两种写法：``emulator-5554`` 与 ``ip:port``。填错的代价
+    很实在——地址写歪了 MaaCore 直接连不上，或者按前缀匹配到另一台实例。
+    留空是合法的（表示「不指定，按档案」）。
+    """
+    global _ADDR_RE
+    s = str(raw or '').strip()
+    if not s:
+        return '', ''
+    import re
+    if _ADDR_RE is None:
+        _ADDR_RE = re.compile(r'^(emulator-\d{1,5}|[A-Za-z0-9_.\-]+:\d{2,5})$')
+    if not _ADDR_RE.match(s):
+        return '', ('模拟器地址要写成 emulator-5554 或 127.0.0.1:16384 这种，'
+                    '收到的是「%s」' % s)
+    return s, ''
+
+
 def profile_name(profile, maa_dir=None) -> str:
     """档案里的 AccountName（读不到就给空串，绝不抛）"""
     try:

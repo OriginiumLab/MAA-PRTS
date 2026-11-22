@@ -164,6 +164,13 @@ def api_account_maa(_q, body):
     if 'accountNameFrom' in patch:
         v = str(patch.get('accountNameFrom') or '').strip().lower()
         patch['accountNameFrom'] = v if v in ('manual', 'profile') else ''
+    if 'adbAddress' in patch:
+        # 这个号钉在哪台模拟器上。写歪了会连到另一台实例，所以在这里就拦。
+        from . import acctbind
+        addr, why = acctbind.check_addr(patch.get('adbAddress'))
+        if why:
+            raise ValueError('模拟器地址不对：%s' % why)
+        patch['adbAddress'] = addr
     if 'accountName' in patch:
         # 切号名统一走 acctname：用户给「5505」「181 5505」「181****5505」
         # 「157****3635」都能吃下，官服填了昵称则当场拦下——这一格填错的
@@ -184,6 +191,31 @@ def api_account_maa(_q, body):
         else:
             patch['accountName'] = ''
     return {'maa': accounts.save_maa_meta(body['file'], patch)}
+
+
+def api_account_devices(q, _body):
+    """某个账号能选哪些模拟器：在线设备 + 现在钉的那台
+
+    设置里「模拟器」下拉用它。多开时地址必须是明示的（见 skills.device_of
+    的规则），所以这里把 adb 现在看到的都列出来，用户点一下就行，不用手抄。
+    """
+    file = ''
+    try:
+        file = _account_for(q.get('file'))
+    except Exception:
+        file = ''
+    from . import acctbind, envcheck
+    d = acctbind.dir_of(file) if file else None
+    prof = (acctbind.profile_of(file) or None) if file else None
+    try:
+        cfg = envcheck.read_config(d, prof)
+    except Exception:                           # noqa: BLE001
+        cfg = {}
+    devs = envcheck._devices(cfg.get('adb') or 'adb') or {}
+    return {'adb': cfg.get('adb') or '',
+            'bound': acctbind.addr_of(file) if file else '',
+            'devices': [{'address': a, 'state': s}
+                        for a, s in sorted(devs.items())]}
 
 
 def api_account_token(_q, body):
@@ -914,6 +946,7 @@ ROUTES = {
     '/api/accounts': api_accounts,
     '/api/account': api_account,
     '/api/account/maa': api_account_maa,
+    '/api/account/devices': api_account_devices,
     '/api/account/token': api_account_token,
     '/api/account/token/check': api_account_token_check,
     '/api/account/token/set': api_account_token_set,

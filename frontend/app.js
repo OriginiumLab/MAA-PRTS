@@ -2722,6 +2722,7 @@ function openSettings() {
         <span class="${/bilibili/i.test(a.channelName || '') ? 'acct-ch bili' : 'set-muted'}">${
           esc(a.channelName || '官服')}</span>
         ${a.maaProfile ? `<span class="set-chip">配置文件 ${esc(a.maaProfile)}</span>` : ''}
+        ${a.maaAdbAddress ? `<span class="set-chip">模拟器 ${esc(a.maaAdbAddress)}</span>` : ''}
       </div>
       <label class="field"><span>这个账号的 MAA 路径（留空 = 用上面的默认目录）</span>
         <div class="path-row">
@@ -2740,6 +2741,11 @@ function openSettings() {
           <input type="text" data-f="accountName" value="${esc(a.maaAccountName || '')}"
                  placeholder="后 4 位如 5505，或 157****3635"
                  spellcheck="false" autocomplete="off"></label>
+        <label class="field"><span title="多开时必选：钉住以后这个号只连这一台，档案地址过期也不会自己换">模拟器（多开必选）</span>
+          <div class="path-row">
+            <select data-f="adbAddress" data-addr="${esc(a.maaAdbAddress || '')}"></select>
+            <button class="btn-plain mini" data-act="devices" title="重新读一遍 adb devices">刷新</button>
+          </div></label>
       </div>`}
       <div class="set-maarow-foot">
         <span class="onb-hint" data-state></span>
@@ -3404,6 +3410,16 @@ function openSettings() {
         const state = $('[data-state]', card);
         const isEnd = card.dataset.game === 'endfield';
         if (btn.dataset.act === 'pick') { await pickFolder(input); return; }
+        if (btn.dataset.act === 'devices') {
+          btn.disabled = true;
+          try {
+            const d = await paintAddrSelect(card);
+            const n = ((d && d.devices) || []).filter(x => x.state === 'device').length;
+            state.className = 'onb-hint';
+            state.textContent = n ? `读到 ${n} 台在线模拟器` : '现在没有在线模拟器';
+          } finally { btn.disabled = false; }
+          return;
+        }
         if (btn.dataset.act === 'probe') {
           const dir = input.value.trim()
             || ((isEnd ? S.settings.maaEndDir : S.settings.maaDir) || '');
@@ -3444,6 +3460,8 @@ function openSettings() {
           try {
             const patch = { dir: input.value.trim(),
                             accountName: nameInput.value.trim() };
+            const addrSel = $('[data-f="adbAddress"]', card);
+            if (addrSel) patch.adbAddress = addrSel.value;
             const sel = $('[data-f="profile"]', card);
             if (sel) {
               patch.profile = sel.value;
@@ -3457,6 +3475,7 @@ function openSettings() {
               row.maaProfile = (r.maa || {}).profile || '';
               row.maaAccountName = (r.maa || {}).accountName || '';
               row.maaAccountNameFrom = (r.maa || {}).accountNameFrom || '';
+              row.maaAdbAddress = (r.maa || {}).adbAddress || '';
             }
             state.className = 'onb-hint ok';
             state.textContent = '✓ 已保存';
@@ -3499,8 +3518,31 @@ function openSettings() {
          绑了档案的账号，切号名直接从档案里填上（只改输入框，点保存才落盘）；
          没绑的只在档案恰好有账号名时提示一句——**不替用户猜**：两个游戏账号
          对 MAA 里五份档案，猜错就是切号死循环 4 分钟。 */
+      /* 这个号能选哪些模拟器：在线设备列表由后端读 adb devices 给。
+         多开时地址必须明示（后端 skills.device_of 的规则：钉死的地址不在线
+         就报错，绝不自作主张换一台），所以这里把能选的一次列全。 */
+      async function paintAddrSelect(card) {
+        const sel = $('[data-f="adbAddress"]', card);
+        if (!sel) return null;
+        const cur = sel.value || sel.dataset.addr || '';
+        let d = { devices: [] };
+        try { d = await api('/api/account/devices?file=' + encodeURIComponent(card.dataset.file)); }
+        catch (e2) { d = { devices: [] }; }
+        const rows = d.devices || [];
+        const one = (v, label) =>
+          `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label)}</option>`;
+        let html = one('', '（不指定，按 MAA 档案）');
+        html += rows.map(x => one(x.address,
+          x.address + (x.state === 'device' ? ' · 在线' : ' · ' + x.state))).join('');
+        if (cur && !rows.some(x => x.address === cur)) html += one(cur, cur + '（不在线）');
+        sel.innerHTML = html;
+        return d;
+      }
+
       async function autoFillMaa() {
         for (const card of $$('.set-maarow', el)) {
+          // 模拟器下拉与档案无关，两个游戏的卡片都要填
+          await paintAddrSelect(card);
           if (card.dataset.game === 'endfield') continue;   // MAAEND 档案格式不同
           if (card.dataset.pfTried) continue;
           card.dataset.pfTried = '1';

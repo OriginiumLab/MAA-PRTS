@@ -371,6 +371,15 @@ TOOLS = [
            'accountName': {'type': 'string',
                            'description': '用户给的尾号/切号名，**原样传**，别自己拼格式'}},
           ['accountName']),
+    _tool('bind_emulator',
+          '**把账号钉到某台模拟器**：用户说「这个号用第二台 / 用 5556 / 别和'
+          '那个号挤一台」时调用。存进那个账号的设置（设置 → 账号 → 模拟器），'
+          '以后每次跑机都连这一台，不靠聊天里临时指定——助手忘一次就不会串。'
+          '只改本程序自己的账号配置，不动 MAA。',
+          {'account': _ACC,
+           'address': {'type': 'string',
+                       'description': 'adb 地址，如 emulator-5556 或 127.0.0.1:16384'}},
+          ['account', 'address']),
     _tool('list_profiles',
           '看 MAA 里现在有哪些配置档案、当前用的是哪个、各自挂了几个作业。'
           '用户问「现在跑的是哪个号」时用它。'),
@@ -613,8 +622,10 @@ TOOLS = [
            'emulators': {'type': 'object',
                          'description': '{账号文件名或昵称: adb 地址}，'
                                         '如 {"abc示例#0384 bilibili服": '
-                                        '"emulator-5556"}。用户说「这个号用'
-                                        '第二台」时传；不传按账号绑的 MAA 档案连'}},
+                                        '"emulator-5556"}。**只覆盖这一次**；'
+                                        '用户说「这个号固定用第二台」时应该先'
+                                        '调 bind_emulator 钉进账号，别指望每次'
+                                        '都记得传这个参数'}},
           ['steps']),
 ]
 
@@ -687,12 +698,17 @@ def _tool_list_accounts(args):
         except Exception:
             d = ''
         addr = ''
+        pinned = ''
+        try:
+            pinned = acctbind.addr_of(c['file'])
+        except Exception:
+            pinned = ''
         try:
             from . import maaplan
-            addr = maaplan._connection(d, acctbind.profile_of(c['file'])
-                                       or None).get('address') or ''
+            addr = pinned or (maaplan._connection(d, acctbind.profile_of(c['file'])
+                                                  or None).get('address') or '')
         except Exception:
-            addr = ''
+            addr = pinned
         p = c.get('progress') or {}
         out.append({
             # 账号列表给的是 nickName / alias / channelName，没有 name / channel
@@ -714,6 +730,9 @@ def _tool_list_accounts(args):
             # 排队切号，不同的会同时跑（见 skills.run_batch / maaplan.run_plan）
             'maaDir': d,
             'emulator': addr,
+            # true = 这个号在设置里钉过模拟器（钉过的地址绝不自动换，
+            # 没钉的才可能按档案 / 在线设备去猜）
+            'emulatorPinned': bool(pinned),
             # 字段名对齐 progress.summary()：mainRemaining / activityLeft /
             # activityStages 才是真名（曾经写成 mainLeft / activityZones，
             # 结果每个账号都返回 null，模型只能挨个再问一遍 account_progress）
@@ -794,6 +813,50 @@ def _tool_set_account_name(args):
             'accountName': nm,
             'note': '已存进「设置 → MAA 路径 → %s 的切号名」，下次挂机直接用；'
                     '没改 MAA 里任何配置' % (row.get('nickName') or file)}
+
+
+def _tool_bind_emulator(args):
+    """把账号钉到某台模拟器：写账号 json 的 ``maa.adbAddress``
+
+    为什么要有这一步（2026-11-23 用户报「又忘了实例控制」）：之前「哪个号
+    用哪台」只在聊天里说一次，助手下一轮就忘了，两个号挤一台；MAA 里八份
+    档案又全写 ``emulator-5554``，档案本身分不出来。钉进账号以后，任何跑机
+    入口（skill / run_steps / 界面按钮）都读同一份，忘不忘都不影响。
+    """
+    addr, why = acctbind.check_addr(args.get('address') or '')
+    if why:
+        return {'error': why}
+    if not addr:
+        return {'error': '没给模拟器地址（emulator-5554 / 127.0.0.1:16384）'}
+    rows = [c for c in accounts.list_accounts()
+            if (c.get('game') or 'arknights') == 'arknights']
+    if not rows:
+        return {'error': '左侧还没有明日方舟账号'}
+    want = str(args.get('account') or '').strip()
+    file = ''
+    if want:
+        for c in rows:
+            if want in (c['file'], c.get('nickName') or '', c.get('alias') or ''):
+                file = c['file']
+                break
+        if not file:
+            return {'error': '找不到账号：%s' % want,
+                    'accounts': [{'file': c['file'], 'name': c.get('nickName')}
+                                 for c in rows],
+                    'hint': '按 list_accounts 的 file 或昵称再传一次'}
+    elif len(rows) == 1:
+        file = rows[0]['file']
+    else:
+        return {'need_info': 'account',
+                'accounts': [{'file': c['file'], 'name': c.get('nickName')}
+                             for c in rows],
+                'note': '有多个账号，问用户这个模拟器是给哪个号的'}
+    accounts.save_maa_meta(file, {'adbAddress': addr})
+    row = next((c for c in rows if c['file'] == file), {})
+    return {'ok': True, 'account': file,
+            'name': row.get('nickName') or file, 'address': addr,
+            'note': '已钉进「设置 → 账号 → %s 的模拟器」，以后跑这个号只连 %s；'
+                    '没改 MAA 里任何配置' % (row.get('nickName') or file, addr)}
 
 
 def _tool_list_activities(args):
@@ -1662,6 +1725,7 @@ def _tool_run_steps(args, session=None):
 _HANDLERS = {
     'list_accounts': _tool_list_accounts,
     'set_account_name': _tool_set_account_name,
+    'bind_emulator': _tool_bind_emulator,
     'list_activities': _tool_list_activities,
     'search_stages': _tool_search_stages,
     'find_ops': _tool_find_ops,
@@ -1907,19 +1971,29 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 - 每个号用的是**它自己绑的 MAA 目录和配置文件**（设置 → MAA 路径），
   不需要你传 maaDir
 - **但要并行两台，光靠档案常常不够**：MAA 里好几份档案可能全写着
-  `emulator-5554`，而用户其实开着两台。`list_accounts` 的 `devices` 才是
-  现在真在线的设备列表：
-  - 用户说「两台一起跑」而 `devices` 比分组多 → **问一句**「哪个号用哪台」，
-    然后 `run_steps(..., emulators={"abc示例#0384 bilibili服": "emulator-5556"})`
-  - 不问也能跑，但会串行排队，用户看到的还是「只有一台在动」
-  - 传了 emulators，程序会**严格**连那台：连不上就报错，不会偷偷换回 5554
+  `emulator-5554`，而用户其实开着两台。`list_accounts` 里看两个字段：
+  `emulator` 是这个号实际会连的那台，`emulatorPinned` 是「用户钉过没有」。
+  - **用户说「这个号用第二台 / 用 5556 / 别挤一台」→ 先调
+    `bind_emulator(account=..., address="emulator-5556")`**。这一步把地址
+    写进账号设置，以后每轮跑机都连这台——不做这一步，下一轮你就忘了，
+    两个号又挤到同一台上（2026-11-23 用户报的正是这个）。
+  - 绑定后再说 `run_steps(accounts=[...], steps=[...])` 就行，不用每次传
+    `emulators`；临时改某一次也可以传，优先级最高。
+  - 钉过的地址**绝不自动换**：那台不在线就报错让你重跑，不会偷偷换成
+    在线的那台。没钉过、档案地址又过期时，只有**一台**在线才会顶上；
+    两台都在线会直接拦下要用户指定——这是故意的，别绕过。
+  - 同一台模拟器的号排队切号，不同的号多开并行（每组一个独立进程）
+- **官服 / b 服是两个不同的包**：账号的渠道自动判定（b 服走
+  `com.hypergryph.arknights.bilibili` + MaaCore 的 `Bilibili`），你**不用**
+  也别自己切客户端。2026-11-23 之前这里有个 bug：连接时把 MAA 档案里的
+  `Config`（那是**模拟器类型** LDPlayer/MuMu）当成客户端类型传了，MaaCore
+  按官服兜底，于是 b 服账号按官服包启动、卡在登录——现在改由账号渠道决定，
+  日志里会写「连接 emulator-5556（b服）」。看到日志写错渠道就是账号文件的
+  `channelName` 不对，让用户在设置里改，别自己瞎试。
 - 每组跑在**自己的进程**里（不是线程）：同一个进程里两个 MaaCore 会抢
   命名管道，第二台永远连不上（asst.log 里 `CreateOverlappablePipe failed,
   err 231`）——以前「说好并行，另一台一动不动」就是这个。现在多组=多进程，
   两台会真的同时动
-- **官服 / b 服是两个不同的包**：账号的渠道自动判定（b 服走
-  `com.hypergryph.arknights.bilibili` + MaaCore 的 `Bilibili`），你**不用**
-  也别自己切客户端；同一个模拟器上装了两个包时，按账号自己的渠道来
 - 日志每行带 `[账号名]`，右栏按账号分栏（切到哪个号只看那个号的日志）；
   完整日志另存在 `debug/tasks/<任务号>.log`，出问题让用户把这个文件发你
 

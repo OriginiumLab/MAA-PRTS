@@ -80,6 +80,7 @@ Copilot 参数按用户在 MAA「自动战斗」页常勾的三项给：`formati
 | `apply_plan` | 把 plan_multi_account 的方案跑起来 | **写**，需确认 |
 | `add_stages` | 单账号挂一组关卡（`build_run` 的快捷方式） | **写**，需确认 |
 | `set_account_name` | 存切号名（用户报的手机号尾号） | 写（不碰 MAA） |
+| `bind_emulator` | 把账号钉到某台模拟器（`maa.adbAddress`） | 写（不碰 MAA） |
 | `stop_run` | 停掉正在跑的 MAA | **写**，需确认 |
 
 **skill 类**（逐个能力直连驱动，见 `skills.py`；`SKILLS` 里每个都有一项）：
@@ -255,20 +256,38 @@ list_accounts → plan_multi_account → 缺名字就问 → 用户确认 → ap
 不动」。现在每个 spec 都带 `profile`，`run_core` 还认 `spec['adbAddress']`；
 `Touch(strict=True)` 连不上就报错，绝不自作主张换设备。
 
-**要真的并行两台，光靠档案常常不够**（用户的档案可能全指向同一台）：
+**要真的并行两台，光靠档案常常不够**（用户的档案可能全指向同一台）。用户说
+「这个号用第二台 / 用 5556 / 别和那个号挤一台」时，**先调 `bind_emulator`**：
+
+```json
+{"account": "abc示例#0384 bilibili服.json", "address": "emulator-5556"}
+```
+
+它把地址写进账号设置（`maa.adbAddress`），以后每轮跑机都连这台。只传一次
+`emulators` 是**临时**的——下一轮助手忘了，两个号又挤回同一台，这就是
+2026-11-23 用户报的「又忘了实例控制」。钉住之后再跑就不用带 `emulators`：
 
 ```json
 {"accounts": ["abc示例#7986 官服.json", "abc示例#0384 bilibili服.json"],
- "steps": [...],
- "emulators": {"abc示例#0384 bilibili服": "emulator-5556"}}
+ "steps": [...]}
 ```
 
-`list_accounts` 的 `devices` 是现在 adb 上真在线的设备。用户说「两台一起跑」
-而 `devices` 比分组多时，助手要先问「哪个号用哪台」，再用 `emulators` 传进去；
-不传就只能串行排队。传了之后 `envcheck` 只查点名的设备，连不上直接报错。
+`list_accounts` 里 `emulator` 是这个号实际会连的那台，`emulatorPinned` 表示
+用户钉过没有。规则（`skills.device_of`）：
+
+- 钉过的地址**绝不自愈**：那台不在线就报错停下，不会换一台在线设备顶上；
+- 没钉过、档案地址过期时，只有**一台**在线才顶上；两台在线会直接拦下，
+  这时要问用户「哪个号用哪台」，问清了就 `bind_emulator` 钉住；
+- `emulators` 仍然可以传，优先级最高，但只作用于这一次。
 
 `run_steps` 是写操作，确认卡会列「几号 / 几台模拟器 / 每步做什么」，用户点头
 才动模拟器。
+
+**官服 / b 服不用你操心**：连接时的客户端类型由账号的 `channelName` 决定
+（`Official` / `Bilibili`）。2026-11-23 之前这里有个 bug，把 MAA 档案里的
+模拟器类型（`LDPlayer`）当成客户端类型传了，b 服账号按官服包启动卡在登录。
+现在日志会写「连接 emulator-5556（b服）」；看到渠道写错说明账号文件的
+`channelName` 不对，让用户在设置里改。
 
 ## 多账号时默认走导航（2026-11-22）
 

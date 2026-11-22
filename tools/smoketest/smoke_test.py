@@ -5254,6 +5254,117 @@ def check_schedule_presets(tmp):
 # ---------------------------------------------------------------- 入口
 
 
+def check_emu_binding(tmp):
+    """B60 实例绑定与渠道：地址钉在账号上 / 钉死的不许换台 / b 服按 Bilibili 连
+
+    2026-11-23 用户报两件事：①「明明指定 5554 挂活动，却会影响 5556 那台」；
+    ②「启动账号不看 b 服还是官服」。根因各一个：
+
+    - 「地址对不上就挑一台在线的顶上」——档案里写着过期的 5554、实际开着
+      5556 时，程序悄悄改连 5556。现在钉死的地址不在线就停手。
+    - ``ConnectSettings.Config`` 是**模拟器类型**（LDPlayer），被当成
+      ``AsstConnect`` 的客户端类型传下去，MaaCore 按官服兜底，b 服账号就按
+      官服包启动。现在客户端类型只认账号渠道。
+    """
+    _reset_config(tmp)
+    import json
+    from core import acctbind, api, envcheck, maaplan, settings, skills
+
+    # ---- ① 客户端类型：档案里的 Config(LDPlayer) 绝不能当客户端类型 ----
+    old_conn = maaplan._connection
+    maaplan._connection = lambda d, p=None: {
+        'adb_path': 'adb', 'address': 'emulator-5554', 'emu_kind': 'LDPlayer',
+        'config': 'LDPlayer', 'touch': 'MiniTouch', 'maa_dir': d}
+    try:
+        c = maaplan._conn_for({'maaDir': r'D://M', 'profile': 'moren',
+                               'clientType': 'Bilibili'})
+        assert c['config'] == 'Bilibili', c
+        assert c['client'] == 'Bilibili' and c['emu_kind'] == 'LDPlayer', c
+        c2 = maaplan._conn_for({'maaDir': r'D://M', 'clientType': 'Official',
+                                'adbAddress': 'emulator-5556'})
+        assert c2['address'] == 'emulator-5556' and c2['config'] == 'Official', c2
+        c3 = maaplan._conn_for({'maaDir': r'D://M'})   # 没渠道 → 官服兜底
+        assert c3['config'] == 'Official', c3
+        assert maaplan._client_cn(c) == 'b服', maaplan._client_cn(c)
+    finally:
+        maaplan._connection = old_conn
+
+    # ---- ② 地址格式：写歪了当场拦，别等到连不上 ----
+    assert acctbind.check_addr('emulator-5556') == ('emulator-5556', '')
+    assert acctbind.check_addr('127.0.0.1:16384')[0] == '127.0.0.1:16384'
+    assert acctbind.check_addr('')[0] == ''
+    bad_addr = acctbind.check_addr('5556')
+    assert bad_addr[0] == '' and 'emulator-5554' in bad_addr[1], bad_addr
+
+    # ---- ③ 绑定落盘 → 所有入口都读同一份 ----
+    file = '测试号 bilibili服.json'
+    with io.open(os.path.join(settings.CONFIG_DIR, file), 'w',
+                 encoding='utf-8', newline='') as f:
+        json.dump({'account': {'uid': '1', 'nickName': '测试号',
+                               'channelName': 'bilibili服'}, 'maa': {}},
+                  f, ensure_ascii=False)
+    r = api.api_account_maa({}, {'file': file,
+                                 'patch': {'adbAddress': 'emulator-5556'}})
+    assert r['maa']['adbAddress'] == 'emulator-5556', r
+    assert acctbind.addr_of(file) == 'emulator-5556'
+    skills._ADDR.map = {}
+    try:
+        assert skills._addr_of(file) == 'emulator-5556'
+        # 本次点名优先于绑定（临时换一次不用改设置）
+        skills._ADDR.map = {file: 'emulator-5554'}
+        assert skills._addr_of(file) == 'emulator-5554'
+        assert skills._strict_addr(file) is True
+    finally:
+        skills._ADDR.map = {}
+    try:
+        api.api_account_maa({}, {'file': file, 'patch': {'adbAddress': '5556'}})
+    except ValueError as e:
+        assert '模拟器地址' in str(e), e
+    else:
+        raise AssertionError('写歪的地址应该被拦下')
+    row = next((x for x in api.api_accounts({}, {})['accounts']
+                if x['file'] == file), {})
+    assert row.get('maaAdbAddress') == 'emulator-5556', row
+
+    # ---- ④ device_of：钉死的不换台；档案过期只在单台在线时顶上 ----
+    old_rc, old_dev = envcheck.read_config, envcheck._devices
+    envcheck.read_config = lambda d=None, p=None: {'adb': 'adb',
+                                                   'address': 'emulator-5554'}
+    envcheck._devices = lambda adb: {'emulator-5554': 'device',
+                                     'emulator-5556': 'device'}
+    try:
+        skills._ADDR.map = {}
+        assert skills.device_of(file)[:2] == ('emulator-5556', '指定')
+        # 钉的那台没在线 → 拦下，列出在线设备，**绝不**自己换
+        api.api_account_maa({}, {'file': file,
+                                 'patch': {'adbAddress': 'emulator-9999'}})
+        addr, src, why = skills.device_of(file)
+        assert not addr and '不会自动换' in why, (addr, why)
+        assert 'emulator-5554' in why and src == '指定', why
+        # 解绑 → 按档案；档案那台在线就用它
+        api.api_account_maa({}, {'file': file, 'patch': {'adbAddress': ''}})
+        assert skills.device_of(file)[:2] == ('emulator-5554', '档案')
+        # 档案地址不在线 + 两台在线 → 分不清，拦下要用户指定
+        envcheck.read_config = lambda d=None, p=None: {'adb': 'adb',
+                                                       'address': 'emulator-9999'}
+        addr, _src, why = skills.device_of(file)
+        assert not addr and '分不清' in why and 'emulator-5556' in why, why
+        # 只剩一台在线 → 无歧义，顶上
+        envcheck._devices = lambda adb: {'emulator-5556': 'device'}
+        assert skills.device_of(file)[0] == 'emulator-5556'
+        # 一台都没开 → 返回空，交给 envcheck 按档案去启动
+        envcheck._devices = lambda adb: {}
+        assert skills.device_of(file)[0] == ''
+        # 设备下拉：在线列表 + 现在钉的那台
+        envcheck._devices = lambda adb: {'emulator-5556': 'device'}
+        dev = api.api_account_devices({'file': file}, {})
+        assert dev['devices'] == [{'address': 'emulator-5556',
+                                   'state': 'device'}], dev
+    finally:
+        envcheck.read_config, envcheck._devices = old_rc, old_dev
+        skills._ADDR.map = {}
+
+
 def check_account_bind(tmp):
     """B50：切号名绑定（配置文件优先 / 手填优先 / 助手存尾号）
 
@@ -6742,6 +6853,8 @@ def main():
                 lambda: check_scatter_stages(tmp))
         r.check('B59 定时任务预设（预设表/找程序/缺路径兜底/脱敏守卫）',
                 lambda: check_schedule_presets(tmp))
+        r.check('B60 实例绑定与渠道（地址钉在账号上/钉死不换台/b服按Bilibili）',
+                lambda: check_emu_binding(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

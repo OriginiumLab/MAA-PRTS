@@ -51,7 +51,80 @@ _ADDR = threading.local()
 
 
 def _addr_of(file):
-    return (getattr(_ADDR, 'map', None) or {}).get(file, '')
+    """这个号这次连哪台：本次点名 > 账号绑定 > 空
+
+    绑定（``maa.adbAddress``）是 2026-11-23 加的：以前只有聊天里临时点名这
+    一条路，助手忘一次就把两个号挤到同一台模拟器上。现在钉在账号里，任何
+    入口（单个 skill / run_steps / 界面按钮）都读同一份。
+    """
+    a = (getattr(_ADDR, 'map', None) or {}).get(file, '')
+    if a:
+        return a
+    try:
+        from . import acctbind
+        return acctbind.addr_of(file)
+    except Exception:
+        return ''
+
+
+def _set_addr(file, addr):
+    """把「解析后实际要连的那台」钉到本线程，run_core 就照它连"""
+    if not file or not addr:
+        return
+    m = dict(getattr(_ADDR, 'map', None) or {})
+    if m.get(file) == addr:
+        return
+    m[file] = addr
+    _ADDR.map = m
+
+
+def device_of(file, maa_dir=None, profile=None):
+    """这个号该连哪台模拟器 → ``(地址, 来源, 拦下原因)``
+
+    2026-11-23 用户报「明明指定 5554 挂活动，结果影响 5556 的」，根因是
+    「地址对不上就挑一台在线的」这条兜底：档案里写过期的 5554、实际开着
+    5556 时，程序会**悄悄**改连 5556，用户看到的就是任务跑去动了另一台。
+
+    所以这里把「能不能自己改主意」定死：
+
+    ==================  ============================================
+    地址来源            那台不在线时
+    ==================  ============================================
+    点名 / 账号绑定      **绝不自愈**，直接拦下并列出在线设备
+     MAA 档案            只有一台在线才顶上（地址过期很常见，无歧义）
+     ==================  ============================================
+
+    返回的 ``原因`` 非空且 ``地址`` 为空时，调用方必须停下任务，别再往下跑。
+    """
+    from . import acctbind
+    d = maa_dir if maa_dir is not None else acctbind.dir_of(file)
+    prof = profile if profile is not None else (acctbind.profile_of(file) or None)
+    try:
+        cfg = envcheck.read_config(d or None, prof)
+    except Exception:                           # noqa: BLE001
+        cfg = {}
+    adb = cfg.get('adb') or 'adb'
+    devs = envcheck._devices(adb) or {}
+    live = sorted(a for a, s in devs.items() if s == 'device')
+    pinned = _addr_of(file)
+    from_cfg = str(cfg.get('address') or '')
+    want = pinned or from_cfg
+    src = '指定' if pinned else ('档案' if from_cfg else '')
+    if want and devs.get(want) == 'device':
+        return want, src, ''
+    if not live:
+        # 一台都没开：交给 envcheck 按档案里的实例去启动，启动的正是 want
+        return '', src, ''
+    if pinned:
+        return '', src, ('这个号钉的是「%s」，但它不在线（现在在线：%s）。'
+                         '不会自动换成别的模拟器——开好它再重跑，或者把设置里'
+                         '这个号的模拟器改成在线的那台'
+                         % (pinned, '、'.join(live)))
+    if len(live) == 1:
+        return live[0], '自动', ''
+    return '', src, ('档案里写的是「%s」，它不在线；现在有 %d 台在线（%s），'
+                     '分不清这个号该用哪台。请先在设置 → 账号里给它指定一台'
+                     % (want or '未填', len(live), '、'.join(live)))
 
 
 def _addr_kw(file):
@@ -2004,7 +2077,8 @@ def _emulator_key(file, address=''):
     """
     d = _maa_dir_of(file)
     conn = _conn_of(file, d)
-    addr = str(address or conn.get('address') or '')
+    # 「这台号用哪台」的优先级：批量点名 > 账号绑定 > 档案
+    addr = str(address or _addr_of(file) or conn.get('address') or '')
     key = (os.path.normcase(os.path.abspath(d or '.')), addr)
     return key, d, dict(conn, address=addr)
 
@@ -2076,11 +2150,23 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
                 ('切号 ' + tail) if tail else '不切号'))
         if any(n in _NEEDS_GAME for n, _ in step_list):
             # 按这个号自己的档案判断模拟器开没开（多开时每份档案
-            # 连的是不同的模拟器，不能一律看全局那份）
+            # 连的是不同的模拟器，不能一律看全局那份）。
+            # 地址先按「绑定 > 点名 > 档案」定下来：钉死的地址不在线直接
+            # 判这个号失败，**不许**换成在线的那台（否则会串到隔壁那台）。
+            addr, _src, bad = device_of(f, g['dir'], g.get('profile') or None)
+            if bad:
+                with lock:
+                    results[f] = {'ok': False, 'name': nm,
+                                  'error': '模拟器不对：%s' % bad}
+                plog('跳过这个号：%s' % bad)
+                continue
+            _set_addr(f, addr)
+            if addr:
+                plog('模拟器 %s' % addr)
             ok, why = envcheck.ensure(
                 plog, maa_dir=g['dir'],
                 profile=g.get('profile') or None,
-                address=(g['address'] or None) if g.get('override') else None)
+                address=addr or None)
             if not ok:
                 with lock:
                     results[f] = {'ok': False, 'name': nm,
@@ -2182,11 +2268,13 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
             prof = ''
         g = groups.setdefault(key, {'dir': d, 'conn': conn, 'profile': prof,
                                     'address': conn.get('address') or '',
-                                    'override': bool(emus.get(f)),
+                                    # 「钉死的地址」= 批量点名或账号里绑定过；
+                                    # 这两种都不许 adb 自检自己换一台
+                                    'override': bool(emus.get(f) or _addr_of(f)),
                                     'files': []})
         g['files'].append(f)
-        if emus.get(f):
-            g['address'] = emus[f]
+        if emus.get(f) or _addr_of(f):
+            g['address'] = emus.get(f) or _addr_of(f)
 
     plan = ', '.join('%s（%s 个号）' % (g['address'] or '默认',
                                         len(g['files'])) for g in groups.values())
@@ -2329,8 +2417,16 @@ def run_skill(name, params=None):
                 prof = acctbind.profile_of(f) or None
             except Exception:
                 pass
+            # 先定「这台号连哪台」：钉死的地址不在线就停下，**绝不**自己换
+            # 一台在线的顶上——那正是「指定 5554 却动了 5556」的来源
+            addr, src, bad = device_of(f, d, prof)
+            if bad:
+                raise RuntimeError('模拟器不对：%s' % bad)
+            _set_addr(f, addr)
+            if addr:
+                log('模拟器 %s（%s）' % (addr, src or '档案'))
             ok, why = envcheck.ensure(log, maa_dir=d, profile=prof,
-                                      address=_addr_of(f) or None)
+                                      address=addr or None)
             if not ok:
                 raise RuntimeError('环境没准备好：%s' % why)
         return _call_skill(name, params, log, tid)

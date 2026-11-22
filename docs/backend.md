@@ -751,12 +751,43 @@ adb 路径；不同就多开并行；同一台就切号 → 普通 → 突袭 �
 |---|---|---|
 | `dir` | 这个号归哪份 MAA 目录管 | 回落 `settings.maaDir` |
 | `profile` | 用哪份配置档案（`moren` / `136`…） | 回落 MAA `gui.new.json` 的 `Current` |
+| `adbAddress` | 这个号钉在哪台模拟器（`emulator-5556`） | 回落档案里的 `Address` |
 
-解析只有一处：`acctbind.dir_of(file)` / `acctbind.profile_of(file)`。
-`skills._maa_dir_of(file)` / `_conn_of(file, d)` 都走它，所以唤醒、导航、
-战斗、培养、扫图、牛杂**每一项**都会连到「这个号自己那台模拟器」上，不再一律
-用全局那台。`envcheck.ensure(..., maa_dir=, profile=)` 也跟着改，判断模拟器开没
-开、要不要替用户启动，看的都是这个号的那份配置。
+解析只有一处：`acctbind.dir_of(file)` / `acctbind.profile_of(file)` /
+`acctbind.addr_of(file)`。`skills._maa_dir_of(file)` / `_conn_of(file, d)` 都走它，
+所以唤醒、导航、战斗、培养、扫图、牛杂**每一项**都会连到「这个号自己那台模拟器」
+上，不再一律用全局那台。`envcheck.ensure(..., maa_dir=, profile=)` 也跟着改，
+判断模拟器开没开、要不要替用户启动，看的都是这个号的那份配置。
+
+**①b 地址钉死 + 客户端类型（2026-11-23 两个「不听命令」的根因）**
+
+用户报「明明指定 5554 挂活动，却会影响 5556 那台」和「启动账号不看 b 服还是官服」，
+查下来是两处独立的问题，都出在连接这一段：
+
+1. **地址兜底会偷偷换台**。`envcheck.adb_now` / `stagenav.Touch.ready` 原来都是
+   「档案地址连不上就挑 `adb devices` 里第一台在线的」。档案里写着过期的 5554、
+   实际开着 5556 时，任务就自己跑去连 5556——在用户看来就是「串台了」。
+   现在按**地址来源**决定能不能改主意（`skills.device_of`）：
+
+   | 来源 | 那台不在线时 |
+   |---|---|
+   | 聊天里点名 / 账号 `adbAddress` | **绝不自愈**，直接停下并列在线设备 |
+   | MAA 档案 `Address` | 只有一台在线才顶上（地址过期很常见，无歧义） |
+   | 都没写 | 一台在线用它；多台在线停下要用户指定 |
+
+   `skills.run_skill` 和 `_run_group` 起跑前都会先过这一层，把解析结果用
+   `_set_addr` 钉到线程上，`run_core` / `run_scatter` / `run_custom` 全按它连。
+2. **客户端类型被模拟器类型顶掉了**。MAA 5.x/6.x 的 `Gui.ConnectSettings.Config`
+   已经改成**模拟器类型**（`LDPlayer` / `MuMuEmulator12` / `General`），而
+   `AsstConnect` 的第四个参数要的是**客户端类型**（`Official` / `Bilibili`）。
+   以前原样传 `LDPlayer`，MaaCore 不认识就按 `Official` 兜底——b 服账号在 b 服
+   模拟器上找官服包，启动不起来。现在 `maaplan._conn_for(spec)` 统一组装连接参数：
+   `config` 只认账号渠道（`spec['clientType']`，来自 `account.channelName`），
+   档案的 `Config` 只留作 `emu_kind`（给 `envcheck` 认模拟器用）。日志会写
+   `连接 emulator-5556（b服）`，串台/串渠道一眼可见。
+
+设置界面对应「账号 → 模拟器」下拉（`/api/account/devices` 列在线设备），助手侧对应
+`bind_emulator` 工具——两边写的是同一个 `maa.adbAddress`，不靠谁记得传参。
 
 **② 分组：同模拟器串行，不同模拟器并行**
 

@@ -690,9 +690,17 @@ def core_tasks(spec, maa_dir=None):
 
 
 def _connection(maa_dir, profile=None):
-    """从 MAA 配置里抄连接参数（ADB 路径 / 地址 / 连接方式）
+    """从 MAA 配置里抄连接参数（ADB 路径 / 地址 / 模拟器类型）
 
     用户已经在 MAA 里调通过一次连接的，直接复用，不用再问一遍。
+
+    **``config`` 是模拟器类型，不是客户端类型**（2026-11-23 查清的）：MAA
+    5.x/6.x 把 ``Gui.ConnectSettings.Config`` 换成了 ``LDPlayer`` /
+    ``MuMuEmulator12`` / ``General`` 这些「你用什么模拟器」，用来给自动检测
+    挑实例。以前这里把它原样喂给 ``AsstConnect`` 的第四个参数，而那个参数
+    是**客户端类型**（Official / Bilibili）——MaaCore 不认识 ``LDPlayer``，
+    按官服兜底，于是 b 服账号永远按官服包启动，表现就是「不看 b 服还是官服」。
+    客户端类型现在由账号渠道决定，见 :func:`_conn_for`。
     """
     cfg = maa._load_cfg(maa_dir)
     configs = cfg.get('Configurations') or {}
@@ -702,10 +710,45 @@ def _connection(maa_dir, profile=None):
     return {
         'adb_path': cs.get('AdbPath') or 'adb',
         'address': cs.get('Address') or '127.0.0.1:5555',
-        'config': cs.get('Config') or 'General',
+        'emu_kind': cs.get('Config') or '',      # LDPlayer / MuMuEmulator12 …
+        'config': cs.get('Config') or '',        # 老字段名，别直接喂给 AsstConnect
         'touch': cs.get('TouchMode') or 'MiniTouch',
         'maa_dir': maa_dir,          # 导航失败时往它的 debug/ 存现场截图
     }
+
+
+#: MaaCore 认的客户端类型。账号渠道才是权威来源（官服 / b 服是两个包）
+CLIENT_CN = {
+    'Official': '官服', 'Bilibili': 'b服', 'txwy': '台服',
+    'YoStarEN': '国际服', 'YoStarJP': '日服', 'YoStarKR': '韩服',
+}
+
+
+def _conn_for(spec):
+    """跑机用的连接参数 = MAA 档案抄来的 + 账号点名的三件事
+
+    三件事都有明确优先级，缺一个就会「连到隔壁那台」或者「按官服启动」：
+
+    - ``address``：用户/账号绑定的模拟器地址 > MAA 档案里的地址
+    - ``config``：账号渠道（``clientType``）> ``Official``
+      **绝不**用档案里的 ``Config``（那是模拟器类型）
+    - ``touch``：档案里的触摸模式，没写就 MiniTouch
+    """
+    d = spec.get('maaDir') or ''
+    conn = _connection(d, spec.get('profile'))
+    addr = str(spec.get('adbAddress') or '').strip()
+    if addr:
+        conn = dict(conn, address=addr)
+    client = str(spec.get('clientType') or '').strip() or 'Official'
+    conn['config'] = client
+    conn['client'] = client
+    return conn
+
+
+def _client_cn(conn):
+    """日志里说人话：``b服`` / ``官服``，别只丢一个 Bilibili"""
+    c = str((conn or {}).get('client') or 'Official')
+    return CLIENT_CN.get(c, c)
 
 
 # ---------------------------------------------------------------- 分段导航
@@ -842,11 +885,8 @@ def run_core(spec, tid=None, timeout=None):
         if not maa.close(d):
             raise RuntimeError('MAA 关不掉，请手动退出后重试')
 
-    conn = _connection(d, spec.get('profile'))
-    # 多开：用户/批量任务点名的模拟器地址优先（账号档案里可能写着同一台）
-    if spec.get('adbAddress'):
-        conn = dict(conn, address=spec['adbAddress'])
-    log('连接 %s（%s）…' % (conn['address'], conn['config']))
+    conn = _conn_for(spec)
+    log('连接 %s（%s）…' % (conn['address'], _client_cn(conn)))
     # 抄作业时 MAA 每换一份作业就发一条 CopilotListLoadTaskFileSuccess，
     # 文件名是我们自己按代号存的（BB-S-3_10531.json）。记下来就能知道
     # 「跑到第几关、卡在哪一关」——预检说打不了的和实际卡住的才能对上。
@@ -1178,10 +1218,8 @@ def run_scatter(spec, tid=None, timeout=None):
         if not maa.close(d):
             raise RuntimeError('MAA 关不掉，请手动退出后重试')
 
-    conn = _connection(d, spec.get('profile'))
-    if spec.get('adbAddress'):
-        conn = dict(conn, address=spec['adbAddress'])
-    log('连接 %s（%s）…' % (conn['address'], conn['config']))
+    conn = _conn_for(spec)
+    log('连接 %s（%s）…' % (conn['address'], _client_cn(conn)))
 
     total = timeout or (2 * 60 * 60)
     deadline = time.time() + total
@@ -1191,7 +1229,11 @@ def run_scatter(spec, tid=None, timeout=None):
     touched = 0
 
     touch = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                           package=stagenav.game_package(spec.get('clientType')))
+                           package=stagenav.game_package(spec.get('clientType')),
+                           # 地址是钉死的（账号绑定 / 档案指定）就不许 adb 自检
+                           # 自己换一台——换了就是动了另一个号/另一台模拟器
+                           strict=bool(spec.get('profile')
+                                       or spec.get('adbAddress')))
     alive, detail = touch.ready()
     if not alive:
         log('连不上模拟器：%s' % detail)
@@ -1236,7 +1278,7 @@ def run_scatter(spec, tid=None, timeout=None):
     eng.open()
     try:
         if not eng.connect(conn['adb_path'], conn['address'],
-                           conn.get('config') or 'General',
+                           conn.get('config') or 'Official',
                            conn.get('touch') or 'MiniTouch'):
             log('MaaCore 连不上模拟器')
             return {'ok': False, 'error': 'MaaCore 连不上模拟器',
@@ -1393,11 +1435,8 @@ def run_custom(spec, tid=None, timeout=None):
         if not maa.close(d):
             raise RuntimeError('MAA 关不掉，请手动退出后重试')
 
-    conn = _connection(d, spec.get('profile'))
-    # 多开：用户/批量任务点名的模拟器地址优先（账号档案里可能写着同一台）
-    if spec.get('adbAddress'):
-        conn = dict(conn, address=spec['adbAddress'])
-    log('连接 %s（%s）…' % (conn['address'], conn['config']))
+    conn = _conn_for(spec)
+    log('连接 %s（%s）…' % (conn['address'], _client_cn(conn)))
 
     state = {'last': time.time(), 'node': '', 'node_log': 0.0, 'warned': 0,
              'stuck': ''}
@@ -2219,7 +2258,9 @@ def _leave_result(conn, spec, stage, log):
         return False
     try:
         touch = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                               package=stagenav.game_package(spec.get('clientType')))
+                               package=stagenav.game_package(spec.get('clientType')),
+                               strict=bool(spec.get('profile')
+                                           or spec.get('adbAddress')))
         alive, detail = touch.ready()
         if not alive:
             log('点结算页失败：adb 不可用（%s）' % detail)

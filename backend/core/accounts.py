@@ -80,6 +80,9 @@ def list_accounts():
             # （读那份档案 StartUp 的 AccountName）。规则在 acctbind.py。
             'maaAccountNameFrom': _dict(snap.get('maa')).get('accountNameFrom') or '',
             'maaDir': _dict(snap.get('maa')).get('dir') or '',
+            # 这个号钉在哪台模拟器（emulator-5556）：多开时靠它分流，不靠
+            # 聊天里临时点名——助手忘一次就会串到隔壁那台（2026-11-23 用户报）
+            'maaAdbAddress': _dict(snap.get('maa')).get('adbAddress') or '',
             'syncedAt': _dict(snap.get('sync')).get('syncedAt'),
             # 关卡进度摘要（主线还差几关、活动几个区、剿灭几张没满）；
             # 明细在 account_detail 里，列表页只放这几个数字
