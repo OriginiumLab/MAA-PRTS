@@ -1172,7 +1172,16 @@ def _tool_stop_run(args, session=None):
     want = str(args.get('account') or '').strip()
     files = []
     if want and want.lower() not in ('all', '全部', '所有', '*'):
-        files = skills.match_accounts(want)      # 认不出 / 对上多个会抛，别猜
+        try:
+            files = skills.match_accounts(want)
+        except ValueError as e:
+            # 「对上多个账号」是用户/模型给的信息不够，不是程序 bug：
+            # 别让外层包成「内部错误」，直接把候选列表回给模型去问
+            return {'error': str(e), 'need_info': 'account',
+                    'candidates': [{'file': r['file'],
+                                    'nickName': r.get('nickName') or ''}
+                                   for r in accounts.list_accounts()
+                                   if want.lower() in (r.get('nickName') or r['file']).lower()]}
     res = skills.stop_accounts(files)
     d = args.get('maa_dir') or None
     if not files:
