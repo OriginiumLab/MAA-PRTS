@@ -350,12 +350,16 @@ class Touch:
     adb 每一下都是独立进程，稳。
     """
 
-    def __init__(self, adb_path, address, log=None, package=None):
+    def __init__(self, adb_path, address, log=None, package=None, strict=False):
         self.adb = adb_path or 'adb'
         self.address = address or '127.0.0.1:5555'
         self.log = log or (lambda *_: None)
         self.package = package or 'com.hypergryph.arknights'
         self._size = None
+        # strict=True：地址是这个号**指定**的那一台（多开），连不上就报错，
+        # 绝不悄悄换成第一台在线设备——换了就等于两个组同时戳同一台，
+        # 表现是「另一台模拟器一动不动」（2026-11-22 用户实测）
+        self.strict = bool(strict)
 
     def game_alive(self):
         """游戏进程在不在运行
@@ -595,17 +599,26 @@ class Touch:
 
         out = self._run(['devices'], timeout=15)
         text = (out or b'').decode('utf-8', 'ignore')
+        online = []
         for line in text.splitlines():
             parts = line.split('\t')
             if len(parts) >= 2 and parts[1].strip().startswith('device'):
                 cand = parts[0].strip()
-                if not cand or cand == self.address:
-                    continue
-                self.address = cand
-                self._size = None
-                out = self._run(['get-state'], timeout=15)
-                if (out or b'').decode('utf-8', 'ignore').strip() == 'device':
-                    return True, 'adb 正常（地址换成 %s）' % cand
+                if cand:
+                    online.append(cand)
+        if self.strict:
+            # 多开时不允许「自动挑一台」：把在线设备列出来，让日志说清连的是谁
+            return False, ('adb 连不上设备「%s」（在线：%s）——多开时不会自动'
+                           '换成别的模拟器，先确认它开着了'
+                           % (self.address, '、'.join(online) or '无'))
+        for cand in online:
+            if cand == self.address:
+                continue
+            self.address = cand
+            self._size = None
+            out = self._run(['get-state'], timeout=15)
+            if (out or b'').decode('utf-8', 'ignore').strip() == 'device':
+                return True, 'adb 正常（地址换成 %s）' % cand
         return False, ('adb 连不上设备「%s」（adb: %s）'
                        % (self.address, self.adb))
 
@@ -1982,17 +1995,20 @@ def goto_stage_list(touch, stage_code, log=None):
                            '先换成真实关卡代号再导航' % stage_code)
 
     # 当期活动：用户 2026-11-19 逐屏标注的那套入口（终端页活动提示条 → 活动
-    # 地图 → 右下区域按钮）。**排在老路径前面**：新活动的 UI 上「主界面大图 →
-    # 主题页 → 区域列表」已经点不到了（区域是散点，分区靠关卡列表右下角切）。
+    # 地图 → 直接点分区节点）。**排在老路径前面**，而且这里**不再退回老路径**
+    # （2026-11-22 用户报「雪山降临用的还是老导航」）：新活动的 UI 上「主界面
+    # 大图 → 主题页 → 区域列表」已经点不到，退化过去只会白点几下再报一个更
+    # 难懂的错，还会让人以为程序在用旧逻辑。失败就把原因说清楚。
     try:
         from . import eventnav
         if eventnav.has(stage_code):
             ok, why = eventnav.run(touch, stage_code, log)
             if ok:
                 return True, why
-            log('当期活动导航没成功（%s），退回老路径再试一次' % why)
+            return False, ('当期活动导航没到位：%s。这条活动的入口模板要重新标定'
+                           '（日志里有现场截图），别用老路径硬试' % why)
     except Exception as e:                       # noqa: BLE001 别把人卡在这
-        log('当期活动导航出错（%s: %s），退回老路径' % (type(e).__name__, e))
+        return False, ('当期活动导航出错（%s: %s）' % (type(e).__name__, e))
 
     # 有卡片模板、或者代号在活动总表（EVENTS）里，就先走「曲谱」：这是显式
     # 配置过的意图。**两道闸都要在**——打包环境里模板目录偶尔解析不到

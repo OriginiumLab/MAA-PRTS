@@ -707,7 +707,7 @@ def _connection(maa_dir, profile=None):
     }
 
 
-def _navigate(conn, stage, log, client=None):
+def _navigate(conn, stage, log, client=None, strict=False):
     """把界面带到关卡列表，返回 ``(ok, 说明)``
 
     导航要连点好几下，而 MaaCore 的 ``AsstAsyncClick`` 一次连接只能点中第一下
@@ -720,7 +720,8 @@ def _navigate(conn, stage, log, client=None):
     try:
         from . import stagenav
         touch = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                               package=stagenav.game_package(client))
+                               package=stagenav.game_package(client),
+                               strict=strict)
         # 先打一发 get-state：打包版里子进程没带 CREATE_NO_WINDOW 时 adb 会开出
         # 一串黑框、命令还静默失败（2026-11-17 用户报的），不先自检就会一路点空，
         # 最后误报「翻了几十屏没找到这张卡片」。
@@ -767,6 +768,9 @@ def run_core(spec, tid=None, timeout=None):
             raise RuntimeError('MAA 关不掉，请手动退出后重试')
 
     conn = _connection(d, spec.get('profile'))
+    # 多开：用户/批量任务点名的模拟器地址优先（账号档案里可能写着同一台）
+    if spec.get('adbAddress'):
+        conn = dict(conn, address=spec['adbAddress'])
     log('连接 %s（%s）…' % (conn['address'], conn['config']))
     # 抄作业时 MAA 每换一份作业就发一条 CopilotListLoadTaskFileSuccess，
     # 文件名是我们自己按代号存的（BB-S-3_10531.json）。记下来就能知道
@@ -913,8 +917,9 @@ def run_core(spec, tid=None, timeout=None):
                 eng.stop()
                 time.sleep(1.0)
                 log('MAA 已停下，开始我们的导航')
-                nav_ok, nav_why = _navigate(conn, first, log,
-                                            client=spec.get('clientType'))
+                nav_ok, nav_why = _navigate(
+                    conn, first, log, client=spec.get('clientType'),
+                    strict=bool(spec.get('profile') or spec.get('adbAddress')))
                 if not nav_ok:
                     # 老故事集/自建模板的关卡，MAA 自己 100% 找不到（它的入口
                     # 模板在当前 UI 上全失效，只会横向滑主线）。这种情况宁可
@@ -936,8 +941,9 @@ def run_core(spec, tid=None, timeout=None):
             # 没有 StartUp 的任务链（core_tasks 会强制补，正常走不到）：
             # 先导航再跑，结果必须检查——游戏没开时导航失败要立刻暴露。
             # noNav 直跑模式例外：不导航，Copilot 从当前位置自己接手。
-            nav_ok, nav_why = _navigate(conn, first, log,
-                                        client=spec.get('clientType'))
+            nav_ok, nav_why = _navigate(
+                conn, first, log, client=spec.get('clientType'),
+                strict=bool(spec.get('profile') or spec.get('adbAddress')))
             if not nav_ok:
                 from . import stagenav, eventnav
                 if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
@@ -1050,6 +1056,9 @@ def run_custom(spec, tid=None, timeout=None):
             raise RuntimeError('MAA 关不掉，请手动退出后重试')
 
     conn = _connection(d, spec.get('profile'))
+    # 多开：用户/批量任务点名的模拟器地址优先（账号档案里可能写着同一台）
+    if spec.get('adbAddress'):
+        conn = dict(conn, address=spec['adbAddress'])
     log('连接 %s（%s）…' % (conn['address'], conn['config']))
 
     state = {'last': time.time(), 'node': '', 'node_log': 0.0, 'warned': 0,
@@ -1857,6 +1866,9 @@ def plan_groups(rows, spec_base=None):
       只能登一个号）。
 
     返回 ``[(key, {'dir','address','rows'})]``，顺序按账号出现顺序。
+
+    ``r['address']``（用户点名的模拟器）优先于档案里的地址：MAA 里八份档案
+    可能全指向同一台，光看档案分不出两台（2026-11-22 用户实测）。
     """
     spec_base = spec_base or {}
     groups = {}
@@ -1866,9 +1878,9 @@ def plan_groups(rows, spec_base=None):
             conn = _connection(d, r.get('profile') or None)
         except Exception:
             conn = {'address': '', 'adb_path': ''}
-        key = (os.path.normcase(os.path.abspath(d or '.')),
-               str(conn.get('address') or ''))
-        g = groups.setdefault(key, {'dir': d, 'address': conn.get('address') or '',
+        addr = str(r.get('address') or conn.get('address') or '')
+        key = (os.path.normcase(os.path.abspath(d or '.')), addr)
+        g = groups.setdefault(key, {'dir': d, 'address': addr,
                                     'rows': []})
         g['rows'].append(r)
     return list(groups.items())

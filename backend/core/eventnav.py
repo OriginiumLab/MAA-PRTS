@@ -397,29 +397,31 @@ def run(touch, stage_code, log=None):
     if not ok:
         return False, why
 
-    # ---- 3) 活动地图 → 基础区（普通关卡界面）----
-    base = (ent.get('zones') or {}).get('base')
+    # ---- 3) 活动地图 → 目标分区 ----
+    # **直接点目标那个节点**，别再绕一遍基础区（2026-11-22 用户实测报「用的还是
+    # 老导航」）：OS 这种新地图上「圣巡之旅 / 变革之路 / 喀兰之心」是同一屏上的
+    # 三个节点，点了基础区就进关卡列表了，EX/S 的模板根本不在那一页上——`_find`
+    # 认不到就按标定坐标兜底点，那一戳可能正好点在某张关卡卡片上。
+    zones = ent.get('zones') or {}
+    base = zones.get('base')
     if not base:
         return False, '这条导航没写基础区（zones.base）'
-    _tap(touch, after, base, log, '基础区「%s」' % (base.get('label') or ''))
-    time.sleep(stagenav.MAP_DELAY)
-    if kind == 'base':
-        return True, '已到基础关卡列表（%s）' % (base.get('label') or '')
-
-    # ---- 4/5) 关卡列表右下角的区域按钮：切 EX / S ----
-    tgt = (ent.get('zones') or {}).get(kind)
+    tgt = base if kind == 'base' else zones.get(kind)
     if not tgt:
         return False, '「%s」这条导航没写 %s 分区（只有 %s）' % (
             ent.get('name') or pre, kind.upper(),
-            '、'.join((ent.get('zones') or {}).keys()))
-    cur = touch.shot()
-    _tap(touch, cur, tgt, log, '%s 分区「%s」' % (kind.upper(),
-                                                tgt.get('label') or ''))
+            '、'.join(zones.keys()))
+    before = after
+    _tap(touch, after, tgt, log, '%s 分区「%s」'
+         % (kind.upper() if kind != 'base' else '基础区', tgt.get('label') or ''))
     time.sleep(stagenav.MAP_DELAY)
-    if cur and not stagenav._moved(cur, touch.shot()):
-        log('点了「%s」画面没变，判定本来就停在这个分区'
+    if before and not stagenav._moved(before, touch.shot()):
+        log('点了「%s」画面没变，可能没切过去（模板过期要重新标定）'
             % (tgt.get('label') or ''))
-    return True, '已切到 %s 分区（%s）' % (kind.upper(), tgt.get('label') or '')
+        return False, ('点了「%s」之后画面没变，没进 %s 关卡列表'
+                       % (tgt.get('label') or '', kind.upper()))
+    return True, '已到 %s 关卡列表（%s）' % (
+        kind.upper(), tgt.get('label') or '')
 
 
 def run_tool(touch, tool, prefix=None, log=None):

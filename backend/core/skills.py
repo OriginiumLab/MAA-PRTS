@@ -44,6 +44,44 @@ from . import stageplan
 from . import stagenav
 from . import tasks
 
+#: 用户点名的模拟器地址：``{账号文件名: 'emulator-5556'}``，按线程隔离
+#: （多开时每个组一条线程，各连各的）。见 :func:`run_batch`。
+_ADDR = threading.local()
+
+
+def _addr_of(file):
+    return (getattr(_ADDR, 'map', None) or {}).get(file, '')
+
+
+def _addr_kw(file):
+    """``{'adbAddress': ...}`` —— 用户点名了模拟器才带这个键"""
+    a = _addr_of(file)
+    return {'adbAddress': a} if a else {}
+
+
+def _profile_kw(file):
+    """``{'profile': ...}`` —— 让 run_core 按这个账号的档案连模拟器
+
+    不给的话 MaaCore 用的是 MAA 里「当前档案」（``Current``）：多开时八份档案
+    可能全指向同一台，b 服那份却在另一台，不点名就永远连错设备
+    （2026-11-22 用户实测：5556 那组一行日志都没有）。
+    """
+    try:
+        from . import acctbind
+        p = acctbind.profile_of(file)
+    except Exception:
+        p = ''
+    return {'profile': p} if p else {}
+
+
+def _strict_addr(file):
+    """这个号的模拟器是「指定过的」吗
+
+    绑了档案或用户点了名 → 地址就是硬要求，连不上就报错，不能让 adb 自检
+    自动换成第一台在线设备（那样两个组会同时戳同一台，另一台一动不动）。
+    """
+    return bool(_addr_of(file) or _profile_kw(file))
+
 
 # ---------------------------------------------------------------- 工具
 
@@ -71,7 +109,12 @@ def _maa_dir_of(file=''):
 
 
 def _conn_of(file='', maa_dir=None):
-    """这个账号的 adb 连接参数（从它自己那份 MAA 的配置档案里抄）"""
+    """这个账号的 adb 连接参数（从它自己那份 MAA 的配置档案里抄）
+
+    如果用户在批量任务里点名了模拟器（``run_batch(emulators=...)``），这里
+    用点名的那个地址覆盖档案里的 —— 他那八份档案全指向同一台模拟器时，
+    只有这样才能真的多开。
+    """
     d = maa_dir or _maa_dir_of(file)
     prof = ''
     try:
@@ -79,7 +122,17 @@ def _conn_of(file='', maa_dir=None):
         prof = acctbind.profile_of(file)
     except Exception:
         prof = ''
-    return maaplan._connection(d, prof or None)
+    try:
+        conn = maaplan._connection(d, prof or None)
+    except Exception:
+        # 这个账号绑的 MAA 目录没了 / 档案坏了：别让整批任务崩在这里，
+        # 给个空地址让它按目录单独成组，日志里自然会说连不上
+        conn = {'adb_path': '', 'address': '', 'config': 'General',
+                'touch': 'MiniTouch', 'maa_dir': d}
+    addr = _addr_of(file)
+    if addr:
+        conn = dict(conn, address=addr)
+    return conn
 
 
 def _account_file(name):
@@ -256,8 +309,9 @@ def skill_wakeup(params, log, tid=None):
     if tail:
         # 临时配置：StartUp 任务参数只有「开始唤醒 + 切号名」，MaaCore 按参数
         # 自己换号——不读也不改用户的 MAA 配置档案
-        spec = {'tasks': ['startup'], 'accountName': tail,
-                'maaDir': _maa_dir_of(file)}
+        spec = dict({'tasks': ['startup'], 'accountName': tail,
+                     'maaDir': _maa_dir_of(file)},
+                    **_profile_kw(file), **_addr_kw(file))
         log('临时配置唤醒：只跑开始唤醒，切到 %s' % tail)
         maaplan.run_core(spec, tid=tid, timeout=360)
         return {'ok': True, 'how': 'maa-startup', 'account': file}
@@ -266,7 +320,8 @@ def skill_wakeup(params, log, tid=None):
     conn = _conn_of(file, d)
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                       package=stagenav.game_package(client))
+                       package=stagenav.game_package(client),
+                       strict=_strict_addr(file))
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -303,7 +358,8 @@ def skill_navigate(params, log, tid=None):
     conn = _conn_of(file, d)
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                       package=stagenav.game_package(client))
+                       package=stagenav.game_package(client),
+                       strict=_strict_addr(file))
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -775,8 +831,10 @@ def skill_fight(params, log, tid=None):
             'support': cop.get('support', True),            # 借助战（缺人时借）
             'sanityPotion': cop.get('sanityPotion', True),  # 理智不够吃药
         },
-        'profile': params.get('profile') or '',
+        # 这个号绑的档案 + 用户点名的模拟器（多开时靠它们连各自的设备）
+        'profile': params.get('profile') or (_profile_kw(file) or {}).get('profile', ''),
     }
+    spec.update(_addr_kw(file))
     # 抄作业必须有作业文件：按 stages 现搜（预检那轮已经拉过作业站，这里命中
     # 缓存，不再发请求）。**不能拿预检挑好的那一条直接用**——预检每关只挑
     # 一份，而且不看要打普通还是突袭（`@both` 那种要两条），得在这里按变体拆。
@@ -896,8 +954,9 @@ def skill_skip_story(params, log, tid=None):
     probe_done = threading.Event()
 
     def probe():
-        spec = {'tasks': ['startup', 'fight'], 'stages': [stage],
-                'accountName': tail, 'maaDir': d}
+        spec = dict({'tasks': ['startup', 'fight'], 'stages': [stage],
+                     'accountName': tail, 'maaDir': d},
+                    **_profile_kw(file), **_addr_kw(file))
         try:
             maaplan.run_core(spec, tid=tid, timeout=900)
         except Exception as e:
@@ -909,7 +968,8 @@ def skill_skip_story(params, log, tid=None):
 
     # 第 3) 步：等剧情页出现（最多 8 分钟），然后连续跳幕
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                       package=stagenav.game_package(client))
+                       package=stagenav.game_package(client),
+                       strict=_strict_addr(file))
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -1235,14 +1295,14 @@ def skill_train(params, log, tid=None):
         log('先开始唤醒（不切号%s）' % ('；要切号去设置 → MAA 路径里给账号'
             '填手机号后 4 位' if not tail else ''))
 
-    spec = {
+    spec = dict({
         'tasks': (['startup', 'operprogress'] if wakeup else ['operprogress']),
         'plans': plans,
         'accountName': tail,
         'switchAccount': switch,
         'noStartUp': not wakeup,
         'maaDir': _maa_dir_of(file),
-    }
+    }, **_profile_kw(file), **_addr_kw(file))
     r = maaplan.run_core(spec, tid=tid,
                          timeout=params.get('timeout') or 3 * 60 * 60)
     done = r.get('trained') or {}
@@ -1517,6 +1577,8 @@ def skill_sweep(params, log, tid=None):
                 'copilot': {'formation': params.get('formation', True),
                             'support': True, 'sanityPotion': True},
                 'retry': {'pool': pool, 'maxRounds': 3}}
+        spec.update(_profile_kw(file))
+        spec.update(_addr_kw(file))
         # 每段分一份时间预算（段数不定，均分最稳；单段至少 10 分钟）
         share = max(600, int(total / max(1, len(segs))))
         try:
@@ -1587,7 +1649,8 @@ def skill_tool(params, log, tid=None):
     conn = _conn_of(file, d)
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                       package=stagenav.game_package(client))
+                       package=stagenav.game_package(client),
+                       strict=_strict_addr(file))
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -1666,7 +1729,8 @@ def skill_claim(params, log, tid=None):
     conn = _conn_of(file, d)
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                       package=stagenav.game_package(client))
+                       package=stagenav.game_package(client),
+                       strict=_strict_addr(file))
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -1709,20 +1773,40 @@ def _norm_steps(steps):
     return out
 
 
-def _emulator_key(file):
+def _emulator_key(file, address=''):
     """账号 → 它在哪台模拟器上 ``((maa目录, 地址), MAA目录, 连接参数)``
 
     同一台模拟器同一时间只能登一个号，所以同 key 的账号只能串行；不同 key
     的可以并行（各连各的 adb，互不抢截图）。
+
+    ``address`` 是**用户点名的模拟器**（``emulator-5556`` / ``127.0.0.1:16384``），
+    给了就用它覆盖档案里的地址——用户的 MAA 里八份档案全指向 ''emulator-5554''
+    （2026-11-22 实测），光看档案永远分不出两台，得让他能直接说「这个号用
+    第二台」。
     """
     d = _maa_dir_of(file)
     conn = _conn_of(file, d)
-    key = (os.path.normcase(os.path.abspath(d or '.')),
-           str(conn.get('address') or ''))
-    return key, d, conn
+    addr = str(address or conn.get('address') or '')
+    key = (os.path.normcase(os.path.abspath(d or '.')), addr)
+    return key, d, dict(conn, address=addr)
 
 
-def run_batch(accounts_list, steps, names=None):
+def online_devices(maa_dir=None):
+    """现在 adb 上有哪些设备在线（``['emulator-5554', 'emulator-5556']``）
+
+    给助手用：两个号都被算成同一台时，它得知道「其实还有第二台在线」，
+    才能问用户「哪个号用哪台」。读不到就返回空列表，不抛。
+    """
+    try:
+        from . import envcheck
+        cfg = envcheck.read_config(maa_dir or None)
+        devs = envcheck._devices(cfg.get('adb') or 'adb')
+        return sorted(a for a, s in (devs or {}).items() if s == 'device')
+    except Exception:
+        return []
+
+
+def run_batch(accounts_list, steps, names=None, emulators=None):
     """按账号跑同一组 skill：**同一模拟器串行，不同模拟器并行**
 
     用户 2026-11-22 的口径：
@@ -1734,10 +1818,14 @@ def run_batch(accounts_list, steps, names=None):
     每步都复用 :data:`SKILLS` 里的实现（不重写业务），日志统一加
     ``[账号名]`` 前缀，多开时也能看出哪一行是哪个号。
 
+    ``emulators`` 是 ``{账号文件名: 'emulator-5556'}``：用户说「这个号用第二台」
+    时传进来，覆盖档案里的地址（分组和实际连接都用它）。不传就看档案。
+
     返回 taskId（后台跑，进度进任务日志）。
     """
     step_list = _norm_steps(steps)
     names = {str(k): v for k, v in (names or {}).items()}
+    emus = {str(k): str(v or '').strip() for k, v in (emulators or {}).items()}
     files = []
     for x in (accounts_list or []):
         f = _account_file(str(x))
@@ -1752,19 +1840,24 @@ def run_batch(accounts_list, steps, names=None):
     # 分组：同模拟器的号必须排队
     groups = {}
     for f in files:
-        key, d, conn = _emulator_key(f)
+        key, d, conn = _emulator_key(f, emus.get(f) or '')
         prof = ''
         try:
             from . import acctbind
             prof = acctbind.profile_of(f)
         except Exception:
             prof = ''
-        groups.setdefault(key, {'dir': d, 'conn': conn, 'profile': prof,
-                                'address': conn.get('address') or '',
-                                'files': []})['files'].append(f)
+        g = groups.setdefault(key, {'dir': d, 'conn': conn, 'profile': prof,
+                                    'address': conn.get('address') or '',
+                                    'override': bool(emus.get(f)),
+                                    'files': []})
+        g['files'].append(f)
+        if emus.get(f):
+            g['address'] = emus[f]
 
     plan = ', '.join('%s（%s 个号）' % (g['address'] or '默认',
                                         len(g['files'])) for g in groups.values())
+
 
     def job():
         tid2 = threading.current_thread().name.replace('task-', '', 1)
@@ -1775,6 +1868,17 @@ def run_batch(accounts_list, steps, names=None):
         lock = threading.Lock()
 
         def run_group(g):
+            # 这个组里的号都连同一台模拟器：把地址钉在线程上，skill 里的
+            # _conn_of / run_core 都按它连（用户点名覆盖时才有值）
+            if g.get('override'):
+                _ADDR.map = {f: g['address'] for f in g['files']}
+            # 组一开跑就把「连的是谁」写清楚：以前第二组不动时，日志里连它是
+            # 哪份 MAA、哪个档案、哪台设备都查不到
+            log('[组 %s] 开始：MAA %s / 档案 %s / %d 个号%s'
+                % (g.get('address') or '默认模拟器',
+                   g.get('dir') or '默认', g.get('profile') or '当前档案',
+                   len(g['files']),
+                   '（用户点名）' if g.get('override') else ''))
             for i, f in enumerate(g['files'], 1):
                 nm = ''
                 try:
@@ -1799,8 +1903,10 @@ def run_batch(accounts_list, steps, names=None):
                 if any(n in _NEEDS_GAME for n, _ in step_list):
                     # 按这个号自己的档案判断模拟器开没开（多开时每份档案
                     # 连的是不同的模拟器，不能一律看全局那份）
-                    ok, why = envcheck.ensure(plog, maa_dir=g['dir'],
-                                              profile=g.get('profile') or None)
+                    ok, why = envcheck.ensure(
+                        plog, maa_dir=g['dir'],
+                        profile=g.get('profile') or None,
+                        address=(g['address'] or None) if g.get('override') else None)
                     if not ok:
                         with lock:
                             results[f] = {'ok': False, 'name': nm,
@@ -1828,12 +1934,30 @@ def run_batch(accounts_list, steps, names=None):
                     results[f] = {'ok': all(x['ok'] for x in acc_res),
                                   'name': nm, 'steps': acc_res}
 
+        def safe_group(g):
+            """线程里抛的异常必须落进日志（daemon 线程静默死掉就是「没动静」）"""
+            who = g.get('address') or '默认模拟器'
+            try:
+                run_group(g)
+            except Exception as e:                  # noqa: BLE001
+                log('[%s] 这一组出错，后面的号没跑：%s: %s'
+                    % (who, type(e).__name__, e))
+                with lock:
+                    for f in g.get('files') or []:
+                        results.setdefault(f, {'ok': False, 'name': f,
+                                               'error': '%s: %s'
+                                               % (type(e).__name__, e)})
+
         if len(groups) == 1:
-            run_group(next(iter(groups.values())))
+            g = next(iter(groups.values()))
+            log('只有一组（%s）：%d 个号排队切号'
+                % (g.get('address') or '默认模拟器', len(g['files'])))
+            safe_group(g)
         else:
+            log('分 %d 组并行：%s' % (len(groups), plan))
             ths = []
             for g in groups.values():
-                th = threading.Thread(target=run_group, args=(g,), daemon=True,
+                th = threading.Thread(target=safe_group, args=(g,), daemon=True,
                                       name='batch-g')
                 th.start()
                 ths.append(th)
@@ -1921,6 +2045,7 @@ def run_skill(name, params=None):
         if name in _NEEDS_GAME:
             # 多开：模拟器按**这个账号**绑的 MAA 配置来判断，别拿全局默认那份
             d = prof = None
+            f = ''
             try:
                 from . import acctbind
                 f = _account_file((params or {}).get('account') or '')
@@ -1928,7 +2053,8 @@ def run_skill(name, params=None):
                 prof = acctbind.profile_of(f) or None
             except Exception:
                 pass
-            ok, why = envcheck.ensure(log, maa_dir=d, profile=prof)
+            ok, why = envcheck.ensure(log, maa_dir=d, profile=prof,
+                                      address=_addr_of(f) or None)
             if not ok:
                 raise RuntimeError('环境没准备好：%s' % why)
         return fn(params or {}, log, tid=tid)

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import inspect
+import io
 import json
 import os
 import py_compile
@@ -5352,6 +5353,183 @@ def check_multi_emu_batch(tmp):
     assert 'skill_claim' in agent._HANDLERS and 'run_steps' in agent._WRITE_HANDLERS
 
 
+def check_multi_emu_address(tmp):
+    """B53：多开的三处硬伤——导航只点目标分区、地址必须真的传下去、
+    点名设备时不许自动换成别台
+
+    2026-11-22 用户实测两条：
+    ① 雪山降临走了老导航；
+    ② 说好两台并行，第二台（5556）一动不动。
+    这里把背后的判定全钉住（不动真模拟器）。
+    """
+    _reset_config(tmp)
+    from core import eventnav, maaplan, settings, skills, stagenav, tasks
+
+    # ---- ① 导航：直接点目标分区，不再「先基础区再切 EX」----
+    taps = []
+    ok_steps = []
+
+    class FakeTouch:
+        def __init__(self):
+            self.n = 0
+        def shot(self):
+            self.n += 1
+            return b'shot%d' % self.n
+
+    old_map, old_tap = eventnav._to_map, eventnav._tap
+    old_moved = stagenav._moved
+    eventnav._to_map = lambda *a, **k: (True, b'map', '活动地图')
+    eventnav._tap = lambda touch, data, spec, log, what: taps.append(
+        spec.get('label')) or True
+    stagenav._moved = lambda a, b: True
+    try:
+        for code, want in [('OS-1', ['圣巡之旅']),
+                           ('OS-EX-1', ['变革之路']),
+                           ('OS-S-1', ['喀兰之心'])]:
+            del taps[:]
+            ok, why = eventnav.run(FakeTouch(), code, lambda *_: None)
+            ok_steps.append((code, ok, list(taps), why))
+            assert ok, (code, why)
+            # 只点目标那一个节点：绕一遍基础区会让 EX/S 的模板落到关卡列表上
+            assert taps == want, (code, taps)
+    finally:
+        eventnav._to_map, eventnav._tap = old_map, old_tap
+        stagenav._moved = old_moved
+
+    # 新活动导航失败时不再悄悄退回老路径（老 UI 早就点不到了）
+    old_run, old_story = eventnav.run, stagenav.goto_story_activity
+    eventnav.run = lambda *a, **k: (False, '测试：认不到活动横幅')
+    stagenav.goto_story_activity = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('不该退回老路径'))
+    try:
+        ok, why = stagenav.goto_stage_list(FakeTouch(), 'OS-EX-2', lambda *_: None)
+        assert not ok and '老路径' in why, (ok, why)
+    finally:
+        eventnav.run, stagenav.goto_story_activity = old_run, old_story
+
+    # ---- ② 地址真的传进 MaaCore：run_core / run_custom 都认 adbAddress ----
+    old_conn = maaplan._connection
+    seen = []
+    maaplan._connection = lambda d, p=None: dict(
+        seen.append((d, p)) or {'adb_path': 'adb', 'address': 'emulator-5554',
+                                'config': 'General', 'touch': 'MiniTouch',
+                                'maa_dir': d})
+    try:
+        # 只看「取连接」这一段：把 Engine 换成假的，一进去就抛，验证 spec 的
+        # profile / adbAddress 有没有被用上
+        import core.maacore as maacore
+        old_eng = maacore.Engine
+
+        class Boom(Exception):
+            pass
+
+        class FakeEng:
+            def __init__(self, d, on_event=None):
+                raise Boom(d)
+
+        maacore.Engine = FakeEng
+        try:
+            try:
+                maaplan.run_core({'maaDir': r'D://MAA-B', 'profile': 'b服',
+                                  'adbAddress': 'emulator-5556',
+                                  'tasks': ['startup']}, tid=None, timeout=5)
+            except Boom:
+                pass
+            except Exception:
+                pass
+        finally:
+            maacore.Engine = old_eng
+        assert seen and seen[0][1] == 'b服', seen
+    finally:
+        maaplan._connection = old_conn
+
+    # skills 侧：每个 spec 都带 profile / adbAddress
+    assert skills._profile_kw('nope.json') == {}, skills._profile_kw('nope.json')
+    assert skills._addr_kw('nope.json') == {}
+    skills._ADDR.map = {'x.json': 'emulator-5556'}
+    try:
+        assert skills._addr_kw('x.json') == {'adbAddress': 'emulator-5556'}
+        assert skills._strict_addr('x.json') is True
+        assert skills._strict_addr('nope.json') is False
+    finally:
+        skills._ADDR.map = {}
+
+    # ---- ③ 点名了设备就不许 adb 自检偷偷换一台 ----
+    def fake_adb(touch):
+        def run(args, timeout=20):
+            if args[0] == 'get-state':
+                # 只有 5554 那台真的通：5556 连不上时，严格模式必须停手
+                return b'device' if touch.address == 'emulator-5554' else b''
+            return b'List of devices\nemulator-5554\tdevice\n'
+        return run
+
+    t = stagenav.Touch('adb', 'emulator-5556', strict=True)
+    t._run = fake_adb(t)
+    ok, why = t.ready()
+    assert not ok and t.address == 'emulator-5556', (ok, why, t.address)
+    assert 'emulator-5554' in why, why          # 把在线设备列出来，便于排查
+    t2 = stagenav.Touch('adb', 'emulator-5556')
+    t2._run = fake_adb(t2)
+    ok2, why2 = t2.ready()
+    assert ok2 and t2.address == 'emulator-5554', (ok2, why2, t2.address)
+
+    # ---- ④ 点名地址参与分组：plan_groups 认 r['address'] ----
+    rows = [{'file': 'a.json', 'name': 'A', 'maaDir': r'D://MAA-A',
+             'address': 'emulator-5556'},
+            {'file': 'b.json', 'name': 'B', 'maaDir': r'D://MAA-A'}]
+    old_conn2 = maaplan._connection
+    maaplan._connection = lambda d, p=None: {'adb_path': 'adb',
+                                            'address': 'emulator-5554',
+                                            'config': 'General', 'touch': 'MiniTouch',
+                                            'maa_dir': d}
+    try:
+        groups = maaplan.plan_groups(rows, {'maaDir': r'D://MAA-A'})
+        assert len(groups) == 2, groups
+        assert sorted(g['address'] for _k, g in groups) == ['emulator-5554',
+                                                            'emulator-5556'], groups
+    finally:
+        maaplan._connection = old_conn2
+
+    # ---- ⑤ 任务日志落盘：窗口关了也能查「第二组到底跑没跑」----
+    tid = tasks.create('B53 落盘测试', lambda: tasks.log(
+        threading.current_thread().name.replace('task-', '', 1), 'hello-5556'))
+    for _ in range(200):
+        s = tasks.get(tid)
+        if s and s['status'] != 'running':
+            break
+        time.sleep(0.02)
+    path = os.path.join(settings.DEBUG_DIR, 'tasks', '%s.log' % tid)
+    assert os.path.isfile(path), path
+    text = io.open(path, encoding='utf-8').read()
+    assert 'hello-5556' in text and 'B53 落盘测试' in text, text
+
+    # ---- ⑥ 组线程崩了要留痕（daemon 线程静默死掉＝用户看到的「没动静」）----
+    from core import accounts
+    accounts.save_account('b53.json', {
+        'account': {'uid': 'b53', 'nickName': '落盘号',
+                    'channelName': '官服', 'game': 'arknights'},
+        'maa': {'dir': r'D://MAA-B', 'profile': ''}})
+    old_skills = dict(skills.SKILLS)
+    old_ensure = skills.envcheck.ensure
+    skills.SKILLS['wakeup'] = ('唤醒', lambda p, log, tid=None: {'ok': True})
+    skills.envcheck.ensure = lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError('B53 故意让这一组炸'))
+    try:
+        tid2 = skills.run_batch(['b53.json'], [{'skill': 'wakeup'}],
+                                emulators={'b53.json': 'emulator-5556'})
+        for _ in range(300):
+            s = tasks.get(tid2)
+            if s and s['status'] != 'running':
+                break
+            time.sleep(0.02)
+        logs = (s or {}).get('logs') or []
+        assert any('出错' in x for x in logs), logs
+    finally:
+        skills.SKILLS.clear()
+        skills.SKILLS.update(old_skills)
+        skills.envcheck.ensure = old_ensure
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5421,6 +5599,8 @@ def main():
         r.check('B51 复刻活动 OS + TL 收尾（只留商店/复刻标记/最新活动指向 OS）', lambda: check_event_os(tmp))
         r.check('B52 多 MAA 多模拟器编排 + 领奖 skill + 默认用当前账号',
                 lambda: check_multi_emu_batch(tmp))
+        r.check('B53 多开三处硬伤（分区直点/地址传到 MaaCore/严格不换设备/日志落盘）',
+                lambda: check_multi_emu_address(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

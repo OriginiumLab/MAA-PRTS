@@ -244,10 +244,28 @@ list_accounts → plan_multi_account → 缺名字就问 → 用户确认 → ap
   模拟器不能两条 adb 同时戳，表现是「点了没反应」），键不同的**并行走**——
   这就是「多开」。
 - 每个账号的所有 step 在同一个后台任务里跑，日志以 `[昵称]` 开头，
-  右侧面板能分清是谁。
+  右侧面板能分清是谁；完整日志另存 `debug/tasks/<任务号>.log`。
 - 切号不是单独一步：`wakeup` 带 `accountName` 就在 StartUp 里换号。所以
   「同一模拟器 5 个号」的写法是给每个账号各排一份 steps，每份的第一步都是
   带自己切号名的 `wakeup`。
+
+**分组对了不等于连得对**（2026-11-22 第二次修）：`run_core` 原来不认账号的
+档案，永远用 MAA 的 `Current`——八份档案全写 `emulator-5554` 时，b 服那条
+虽然在另一台 MAA 目录里也会被拉回 5554，用户看到的就是「一台在跑、另一台
+不动」。现在每个 spec 都带 `profile`，`run_core` 还认 `spec['adbAddress']`；
+`Touch(strict=True)` 连不上就报错，绝不自作主张换设备。
+
+**要真的并行两台，光靠档案常常不够**（用户的档案可能全指向同一台）：
+
+```json
+{"accounts": ["灰bao#7986 官服.json", "灰bao#0384 bilibili服.json"],
+ "steps": [...],
+ "emulators": {"灰bao#0384 bilibili服": "emulator-5556"}}
+```
+
+`list_accounts` 的 `devices` 是现在 adb 上真在线的设备。用户说「两台一起跑」
+而 `devices` 比分组多时，助手要先问「哪个号用哪台」，再用 `emulators` 传进去；
+不传就只能串行排队。传了之后 `envcheck` 只查点名的设备，连不上直接报错。
 
 `run_steps` 是写操作，确认卡会列「几号 / 几台模拟器 / 每步做什么」，用户点头
 才动模拟器。

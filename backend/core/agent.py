@@ -595,7 +595,12 @@ TOOLS = [
                                },
                                'required': ['skill']}},
            'names': {'type': 'object',
-                     'description': '{账号文件名: 切号名}（缺的才要问用户）'}},
+                     'description': '{账号文件名: 切号名}（缺的才要问用户）'},
+           'emulators': {'type': 'object',
+                         'description': '{账号文件名或昵称: adb 地址}，'
+                                        '如 {"灰bao#0384 bilibili服": '
+                                        '"emulator-5556"}。用户说「这个号用'
+                                        '第二台」时传；不传按账号绑的 MAA 档案连'}},
           ['steps']),
 ]
 
@@ -707,16 +712,28 @@ def _tool_list_accounts(args):
         })
     cur = next((c['file'] for c in out if c['current']), '')
     emus = sorted({c['emulator'] for c in out if c['emulator']})
+    # 实际在线的设备（adb devices）：它才是「现在有几台模拟器能同时跑」的真相。
+    # 账号绑的档案可能全指向同一台，而用户其实开着两三台——这时助手要能问
+    # 「哪个号用哪台」，再通过 run_steps 的 emulators 传进来。
+    devs = []
+    try:
+        devs = skills.online_devices()
+    except Exception:
+        devs = []
     return {'accounts': out, 'count': len(out),
             'current': cur,
             'emulators': emus,
+            'devices': devs,
             'hint': 'accountName 就是已绑定的切号名（手机号后 4 位 / 前 3 位 + 后 4 位）'
                     '：**非空的直接按它跑，不要再问用户**；只有为空的账号才问'
                     '「手机号后 4 位」（B 服问游戏内用户名）。用户报了尾号就顺手用'
                     ' set_account_name 存下来，下次不用再问。'
                     '**用户没点名账号时用 current 那个**（他刚在左侧点开的）；'
                     'current 为空才用第一个。emulator 相同 = 同一台模拟器，'
-                    '那几个号只能排队切号；不同 = 可以多开同时跑'}
+                    '那几个号只能排队切号；不同 = 可以多开同时跑。'
+                    'devices 是现在 adb 上真在线的设备：emulator 值和它对不上、'
+                    '又说要「两台一起跑」时，问用户哪个号用哪台，再在 run_steps 的'
+                    ' emulators 里指定（MAA 里八份档案常常全指向同一台）'}
 
 
 def _tool_set_account_name(args):
@@ -1561,6 +1578,8 @@ def _tool_run_steps(args, session=None):
 
     accounts = [str(x) for x in (args.get('accounts') or []) if str(x).strip()]
     names = {str(k): v for k, v in (args.get('names') or {}).items()}
+    emus_raw = {str(k): str(v or '').strip()
+                for k, v in (args.get('emulators') or {}).items() if str(v or '').strip()}
     d = multiacct._maa_dir({}) or (settings.load().get('maaDir') or '')
     rows, missing, err = _roster(accounts, names, d)
     if err:
@@ -1570,6 +1589,19 @@ def _tool_run_steps(args, session=None):
                 'note': '一次性把所有缺的账号问用户，补齐后带 names 再调一次'}
     if not rows:
         return {'error': '没有能跑的账号'}
+
+    # 用户点名的模拟器：键可以是账号文件名，也可以是昵称（模型两种都爱写）
+    by_name = {r['name']: r['file'] for r in rows}
+    emus = {}
+    for k, v in emus_raw.items():
+        f = by_name.get(k) or next((r['file'] for r in rows
+                                    if r['file'] == k or r['file'].startswith(k)), '')
+        if f:
+            emus[f] = v
+    if emus:
+        for r in rows:
+            if emus.get(r['file']):
+                r['address'] = emus[r['file']]
 
     groups = maaplan.plan_groups(rows, {'maaDir': d})
     desc = ' → '.join(skills.SKILLS[n][0].split('：')[0]
@@ -1581,18 +1613,32 @@ def _tool_run_steps(args, session=None):
         lines.append('· %s ← %s（%s）'
                      % (g['address'] or '默认模拟器', who,
                         '排队切号' if len(g['rows']) > 1 else '单独跑'))
-    summary = '\n'.join(lines)
+    same = [g for _k, g in groups if len(g['rows']) > 1]
+    devs = [x for x in skills.online_devices(d) if x]
+    hint = ''
+    if same and len(devs) > len(groups):
+        hint = ('\n注：%d 个号被算成同一台模拟器，但这台机器上还有别的设备在线'
+                '（%s）。要并行的话告诉我「哪个号用哪台」，我用 emulators 传进去。'
+                % (sum(len(g['rows']) for g in same), '、'.join(devs)))
+    summary = '\n'.join(lines) + hint
 
     payload = {'accounts': [r['file'] for r in rows], 'steps': steps,
-               'names': {r['file']: r['accountName'] for r in rows}}
+               'names': {r['file']: r['accountName'] for r in rows},
+               'emulators': emus}
     blocked = _guard(session, 'run_steps', dict(payload, _confirmed=True), summary)
     if blocked:
         return blocked
-    tid = skills.run_batch(payload['accounts'], steps, names=payload['names'])
-    return {'started': True, 'taskId': tid, 'accounts': len(rows),
-            'emulators': len(groups),
-            'note': '已在后台跑：同一台模拟器的号排队切号，不同模拟器同时开跑。'
-                    '进度看右栏日志（每行带 [账号名] 前缀）。'}
+    tid = skills.run_batch(payload['accounts'], steps, names=payload['names'],
+                           emulators=emus)
+    out = {'started': True, 'taskId': tid, 'accounts': len(rows),
+           'emulators': len(groups),
+           'note': '已在后台跑：同一台模拟器的号排队切号，不同模拟器同时开跑。'
+                   '每行日志带 [账号名]，整份日志还会落到 debug/tasks/<任务号>.log。'}
+    if hint:
+        out['hint'] = hint.strip()
+    if devs:
+        out['devices'] = devs
+    return out
 
 
 _HANDLERS = {
@@ -1796,7 +1842,11 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
 八个 skill，各自独立跑后台、失败单独停：
 - skill_wakeup：唤醒游戏到主界面（可按尾号切号）
 - skill_navigate：导航到活动（老活动 / 当期 / EX 都行）。stage 优先传**中文
-  活动名**（「孤星」），代号/活动 id 也行——内部统一换，别自己换算
+  活动名**（「孤星」），代号/活动 id 也行——内部统一换，别自己换算。
+  当期活动（ENTRIES 里有的，如 OS / TL）走的是「终端页 → 活动横幅 → 地图上
+  直接点分区节点」，**失败时不会退回老路径**（老 UI 早就点不到了）：报的是
+  「当期活动导航没到位：…」。照实告诉用户是入口认不出、要重新标定导航，
+  别建议他「用老办法再点一次」
 - skill_skip_story：过剧情关（ST 关自动点开 + 跳剧情）
 - skill_fight：自动战斗（编队 / 借助战 / 吃理智药）。**默认不唤醒不导航**，
   界面在哪就从哪直接开打；要全套（唤醒+导航）得用户明说或传 wakeup=true。
@@ -1837,6 +1887,15 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   不同的可以并行
 - 每个号用的是**它自己绑的 MAA 目录和配置文件**（设置 → MAA 路径），
   不需要你传 maaDir
+- **但要并行两台，光靠档案常常不够**：MAA 里好几份档案可能全写着
+  `emulator-5554`，而用户其实开着两台。`list_accounts` 的 `devices` 才是
+  现在真在线的设备列表：
+  - 用户说「两台一起跑」而 `devices` 比分组多 → **问一句**「哪个号用哪台」，
+    然后 `run_steps(..., emulators={"灰bao#0384 bilibili服": "emulator-5556"})`
+  - 不问也能跑，但会串行排队，用户看到的还是「只有一台在动」
+  - 传了 emulators，程序会**严格**连那台：连不上就报错，不会偷偷换回 5554
+- 每组都跑在自己的线程里，日志每行带 `[账号名]`；完整日志另存在
+  `debug/tasks/<任务号>.log`，出问题让用户把这个文件发你
 
 **什么时候用 skill 而不是 build_run**：
 - 用户要「从唤醒开始，剧情关也帮我过，一口气打完」→ skill_weekly。

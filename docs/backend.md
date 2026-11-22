@@ -670,7 +670,29 @@ key = (os.path.normcase(os.path.abspath(d or '.')), str(conn.get('address') or '
 - 日志前缀 `[昵称]`（昵称取 `snap['account']['nickName']`，不是文件名——
   第一版写错了，日志里全是 `.json`）。
 - 外层由 `tasks.create('批量任务（N 个账号 / M 台模拟器）')` 挂成一条任务，
-  前端右侧进度栏只有一个进度条。
+  前端右侧进度栏只有一个进度条。每组线程包了 try/except，崩了往日志写
+  「这一组出错」——daemon 线程静默死掉，用户看到的就是「另一台没动静」。
+- 每个任务的日志**同时落盘** `debug/tasks/<tid>.log`（`tasks.py`）：以前只在
+  内存里，窗口一关现场就没了，用户报「只有一台在跑」时连哪组没启动都查不出。
+
+**③b 地址要真的传进 MaaCore（2026-11-22 修，这是「第二台不动」的根因）**
+
+分组对了不等于连得对：`run_core` / `run_custom` 原来只用
+`_connection(maaDir, spec['profile'])`，而各 skill 的 spec **没写 profile**，
+于是永远拿 MAA 的 `Current`。用户八份档案全指向 `emulator-5554`，b 服那份在
+另一台 MAA 目录里（`...-win-x64-1`，`Current` 指向 5556）——只有 b 服那组碰巧
+连对，别的全挤到同一台。
+
+现在：
+
+- 每个 skill 的 spec 都带 `'profile': acctbind.profile_of(file)`（`_profile_kw`）
+- `run_core` / `run_custom` 认 `spec['adbAddress']`，覆盖档案里的地址
+- `run_batch(..., emulators={账号: 'emulator-5556'})` 用线程局部 `_ADDR` 把地址
+  钉在组上，`_conn_of` / `_addr_kw` 都读它
+- `stagenav.Touch(strict=...)`：指定过地址的号，adb 自检连不上就**报错**，
+  不再「自动换第一台在线设备」——换了等于两组同时戳一台，另一台一动不动
+- `envcheck.ensure(address=...)`：多开时只查点名那台在不在线，不在就直说，
+  不会去启动档案里那台
 
 **④ 领奖 skill（`skill_claim`）**
 
@@ -698,6 +720,15 @@ skill_claim({'account': ..., 'stage': 'OS', 'wakeup': False})
     活动主页 --节点（喀兰之心）--------> S 关卡界面
 
 到关卡列表就交给 Copilot 的 `ClickStageName` 自己 OCR 找关卡名。
+
+**分区是地图上的节点，必须直点**（2026-11-22 修）：`run()` 现在只点目标那一个
+节点（`OS-1` → 圣巡之旅、`OS-EX-1` → 变革之路、`OS-S-1` → 喀兰之心）。以前是
+「先点基础区进关卡列表、再点右下角区域按钮切 EX/S」——那是**上一代 UI** 的
+做法，在新地图上第一步就离开地图了，EX/S 的模板根本不在关卡列表那一页，
+`_find` 认不到就按标定坐标兜底点，那一戳可能正好点在关卡卡片上。
+`goto_stage_list` 也**不再退回老路径**：ENTRIES 里的活动，eventnav 失败就
+直接返回「当期活动导航没到位：…」，因为老 UI（主界面大图 → 主题页 → 区域
+列表）对新活动根本点不到，退化过去只会白点几下再报个更难懂的错。
 
 **两种入口并存**（2026-11-22 用户实测）：正在开的活动在终端页**左下横幅**上
 （`<雪山降临1101>活动已开放`）；活动结束之后横幅会被下一个活动占走，旧活动
