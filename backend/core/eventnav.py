@@ -350,27 +350,15 @@ def _tap(touch, data, spec, log, what):
     return False
 
 
-def _to_home(touch, log, rounds=5):
-    """不管现在在哪一页，退回主界面（每轮先判定，确认到了才停手）"""
-    for i in range(rounds):
-        if (stagenav.at_home(touch) and not stagenav.in_story_dialog(touch)
-                and not stagenav.on_login_page(touch)):
-            return True
-        touch.heal()
-        if stagenav.in_story_dialog(touch):
-            log('剧情 / CG 回放页，先跳幕')
-            stagenav._skip_story_replay(touch, log)
-        elif i < 2:
-            log('不在主界面，按返回键')
-            touch.back()
-        elif i < 4:
-            log('返回键没反应，按 ESC')
-            touch.esc()
-        else:
-            log('点左上角「<」')
-            touch.tap(*stagenav.points()['backCorner'])
-        time.sleep(1.6)
-    return bool(stagenav.at_home(touch))
+def _to_home(touch, log, rounds=8):
+    """不管现在在哪一页，退回主界面
+
+    交给 :func:`pages.to_home`：它认得主页图标、认得基建「离开确认」弹窗
+    （点红条，不然按多少次返回都退不出来），剩下的才盲按返回 / ESC
+    （2026-11-22 用户实测：基建界面按 ESC 会被确认框卡住）。
+    """
+    from . import pages
+    return pages.to_home(touch, log, rounds=rounds)
 
 
 def _fail_shot(touch, name, log):

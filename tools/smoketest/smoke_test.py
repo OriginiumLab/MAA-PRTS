@@ -3670,7 +3670,7 @@ def check_oper_train(tmp):
 
     # 6) 战斗过程要有日志：编队 / 部署 / 开技能各一条，重复的部署不刷屏
     out = []
-    st2 = {'actions': {}, 'deployed': []}
+    st2 = {'actions': {}, 'deployed': {}}
     for ev in ({'kind': 'extra', 'what': 'BattleFormation',
                 'data': {'formation': ['银灰', '泥岩']}},
                {'kind': 'extra', 'what': 'CopilotAction',
@@ -3680,7 +3680,8 @@ def check_oper_train(tmp):
                {'kind': 'extra', 'what': 'CopilotAction',
                 'data': {'action': 'UseSkill'}}):
         maaplan._on_core_event(ev, out.append, 't', st2)
-    assert out == ['编队：银灰、泥岩', '部署 银灰', '开技能'], out
+    assert out == ['[银灰, 泥岩]', '当前步骤: 部署 银灰',
+                   '当前步骤: 使用技能'], out
     # Output / SkillUsage 这类内部记账不该把英文原文写进面板
     out = []
     maaplan._on_core_event({'kind': 'extra', 'what': 'CopilotAction',
@@ -3700,7 +3701,7 @@ def check_oper_train(tmp):
         ({'first': ['Copilot@FullStageNavigation'], 'taskchain': 'Copilot'}, '找关卡'),
         ({'first': ['Copilot@StageNavigationSlowlySwipeLeft'],
           'taskchain': 'Copilot'}, '滑动找关卡'),
-        ({'first': ['BattleStartAll'], 'taskchain': 'Copilot'}, '开始行动'),
+        ({'first': ['BattleStartAll'], 'taskchain': 'Copilot'}, '已开始行动'),
         ({'first': ['BattleQuickFormation'], 'taskchain': 'Copilot'}, '快速编队'),
         ({'first': ['UseMedicine'], 'taskchain': 'Fight'}, '吃理智药'),
         ({'first': ['OperProgress@EliteUp'], 'taskchain': 'OperProgress'}, '精英化'),
@@ -3710,7 +3711,7 @@ def check_oper_train(tmp):
         assert ev and ev.get('kind') == 'node', (d, ev)
         out = []
         maaplan._on_core_event(ev, out.append, 't', {'nodes': {}})
-        assert out == ['· ' + want], (d, out)
+        assert out == [want], (d, out)   # MAA 面板里阶段就是单独一行，没有前缀
     # 插件类名节点（不是用户能看懂的阶段）静默
     ev = eng._translate(maacore.MSG_SUBTASK_START,
                         {'first': ['BattleProcessTask'], 'taskchain': 'Copilot'})
@@ -5744,6 +5745,169 @@ def check_task_log_isolation(tmp):
     assert '--skill-worker' in src and 'skillworker' in src
 
 
+def check_pages_skills_logs(tmp):
+    """B56：页面识别 + 基建确认框 + 多账号默认导航 + MAA 风格日志
+
+    2026-11-22 用户报的四件事：
+      ① 判断不出游戏停在哪（主页/设置页/基建确认框都分不清）
+      ② 多账号时「已经在关卡列表」以外的场景都要走导航
+      ③ 日志不像 MAA（缺「选择干员 / 当前步骤 / 每关完成」）
+      ④ skill 架构太散，加一个要改好几处
+
+    这里全用合成图 + 假 Touch，不碰真机、不连模拟器。
+    """
+    _reset_config(tmp)
+    from core import pages, skills, maaplan
+
+    # ---- ① 主页识别：齿轮 + 邮件同时命中才算（设置页只有齿轮） ----
+    gear = os.path.join(pages._TPL_DIR, 'home_gear.png')
+    mail = os.path.join(pages._TPL_DIR, 'home_mail.png')
+    assert os.path.isfile(gear) and os.path.isfile(mail)
+
+    def compose(items, size=(1920, 1080), bg=(58, 62, 74)):
+        from PIL import Image
+        im = Image.new('RGB', size, bg)
+        for p, xy in items:
+            im.paste(Image.open(p).convert('RGB'), xy)
+        buf = io.BytesIO()
+        im.save(buf, 'PNG')
+        return buf.getvalue()
+
+    home = compose([(gear, (20, 4)), (mail, (160, 4))])
+    only_gear = compose([(gear, (20, 4))])
+    only_mail = compose([(mail, (160, 4))])
+    assert pages.is_home_bytes(home), '两个图标都在还不认主页'
+    assert not pages.is_home_bytes(only_gear), '只认到齿轮就当主页（设置页会误判）'
+    assert not pages.is_home_bytes(only_mail), only_mail
+    assert pages.has_templates()
+
+    # ---- ② 基建退出确认框：左「✕」右「✓」两个白圆钮同时定点命中 ----
+    ok_btn = os.path.join(pages._TPL_DIR, 'confirm_ok.png')
+    cancel_btn = os.path.join(pages._TPL_DIR, 'confirm_cancel.png')
+    assert os.path.isfile(ok_btn) and os.path.isfile(cancel_btn)
+
+    def compose_confirm(icons):
+        """按模板自带的相对坐标贴回去，造一张「就是这个弹窗」的帧"""
+        from PIL import Image
+        im = Image.new('RGB', (1920, 1080), (44, 20, 22))
+        for name, (fx, fy) in icons:
+            t = Image.open(os.path.join(pages._TPL_DIR, name)).convert('RGB')
+            im.paste(t, (int(1920 * fx) - t.width // 2,
+                         int(1080 * fy) - t.height // 2))
+        buf = io.BytesIO()
+        im.save(buf, 'PNG')
+        return buf.getvalue()
+
+    confirm = compose_confirm(pages._CONFIRM_ICONS)
+    pt = pages.confirm_leave_bytes(confirm)
+    assert pt, '两个圆钮都在还不认基建确认框'
+    assert abs(pt[0] - round(1920 * pages._CONFIRM_TAP[0])) <= 3, pt
+    assert abs(pt[1] - round(1080 * pages._CONFIRM_TAP[1])) <= 3, pt
+
+    assert pages.confirm_leave_bytes(
+        compose_confirm(pages._CONFIRM_ICONS[:1])) is None, '只有一个圆钮就认了'
+    assert pages.confirm_leave_bytes(home) is None, '主页被当成基建确认框'
+
+    # 老坑回归：一整块红色（关卡列表 / 主页红角标那种）绝不能当确认框。
+    # 2026-11-22 真机就是从关卡列表误判过一次，日志里冒出假弹窗。
+    from PIL import Image, ImageDraw
+    red = Image.new('RGB', (1920, 1080), (40, 44, 52))
+    ImageDraw.Draw(red).rectangle([960, 700, 1919, 770], fill=(150, 30, 35))
+    buf = io.BytesIO()
+    red.save(buf, 'PNG')
+    assert pages.confirm_leave_bytes(buf.getvalue()) is None, '整块红色被当成确认框'
+
+    # 兜底路径（打包漏模板时走色彩签名）也要能用
+    bar = Image.new('RGB', (1920, 1080), (120, 120, 120))
+    dr = ImageDraw.Draw(bar)
+    dr.rectangle([0, 682, 959, 800], fill=(30, 30, 30))
+    dr.rectangle([960, 682, 1919, 800], fill=(120, 30, 34))
+    buf = io.BytesIO()
+    bar.save(buf, 'PNG')
+    fb = pages._bar_bytes(buf.getvalue())
+    assert fb and 960 < fb[0] < 1919 and 700 < fb[1] < 790, fb
+    assert pages._bar_bytes(home) is None, '主页触发了兜底签名'
+
+    # ---- ③ to_home：认到主页就停手，先按返回；确认框要点红条不是按返回 ----
+    class FakeTouch:
+        def __init__(self, frames):
+            self.frames = frames
+            self.i = 0
+            self.backs = 0
+            self.taps = []
+
+        def shot(self):
+            return self.frames[min(self.i, len(self.frames) - 1)]
+
+        def back(self):
+            self.backs += 1
+            self.i += 1
+
+        def esc(self):
+            self.i += 1
+
+        def tap(self, *a):
+            self.taps.append(a)
+
+        def tap_px(self, *a):
+            self.taps.append(a)
+            self.i += 1
+
+        def heal(self):
+            pass
+
+    t = FakeTouch([only_gear, home])
+    assert pages.to_home(t, lambda *_: None)
+    assert t.backs == 1, ('认到主页后还在按返回', t.backs)
+
+    t2 = FakeTouch([confirm, home])
+    assert pages.to_home(t2, lambda *_: None)
+    assert t2.backs == 0 and len(t2.taps) == 1, (t2.backs, t2.taps)
+    assert abs(t2.taps[0][0] - round(1920 * pages._CONFIRM_TAP[0])) <= 3, t2.taps
+
+    # ---- ④ 多账号默认走导航（两种例外才直跑） ----
+    one = skills._nav_first([('fight', {'stages': ['1-7']})], False)[0][1]
+    assert not one.get('wakeup'), '单个号不该被强制唤醒'
+    many = skills._nav_first([('fight', {'stages': ['1-7']})], True)[0][1]
+    assert many.get('wakeup') and many.get('navigate'), many
+    for flag in ('assumeStageList', 'noSwitch'):
+        keep = skills._nav_first(
+            [('fight', {'stages': ['1-7'], flag: True})], True)[0][1]
+        assert not keep.get('wakeup'), (flag, keep)
+
+    # ---- ⑤ 注册表：装饰器登记的都在 SKILLS；别名/环境闸自动派生 ----
+    assert 'claim' in skills.SKILLS and 'claim' in skills._NEEDS_GAME
+    assert 'signin' not in skills._NEEDS_GAME, '签到不该要求开模拟器'
+    assert skills.ALIASES.get('扫图') == 'sweep'
+    assert [n for n, _ in skills._norm_steps([{'skill': '扫图', 'stage': 'OS'}])] \
+        == ['sweep']
+
+    # ---- ⑥ MAA 风格日志：编队 / 选干员 / 当前步骤 / 换关即上一关完成 ----
+    logs = []
+    state = {'stage': '', 'trail': [], 'nodes': {}, 'deployed': {},
+             'actions': {}, 'by_file': {}}
+
+    def ev(what, data):
+        maaplan._on_core_event({'kind': 'extra', 'what': what, 'data': data},
+                               logs.append, None, state)
+
+    ev('BattleFormation', {'formation': ['芬', '斑点', '黑角']})
+    assert '[芬, 斑点, 黑角]' in logs, logs
+    ev('BattleFormationSelected', {'selected': '芬'})
+    assert '选择干员: 芬' in logs, logs
+    ev('CopilotAction', {'action': 'SwitchSpeed'})
+    assert '当前步骤: 切换倍速' in logs, logs
+    ev('CopilotAction', {'action': 'Deploy', 'target': '黑角'})
+    assert '当前步骤: 部署 黑角' in logs, logs
+    ev('CopilotAction', {'action': 'SkillDaemon'})
+    assert '当前步骤: 开始挂机' in logs, logs
+
+    state['stage'] = 'OS-1'
+    ev('CopilotListLoadTaskFileSuccess', {'file_name': 'OS-2_123.json'})
+    assert '✓ OS-1 完成' in logs, logs
+    assert state['stage'] == 'OS-2', state
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5819,6 +5983,8 @@ def main():
                 lambda: check_nav_from_stage_list(tmp))
         r.check('B55 右栏日志按账号分栏（序列化不带句柄/前缀补齐/owners 过滤/子进程入口）',
                 lambda: check_task_log_isolation(tmp))
+        r.check('B56 页面识别+基建确认框+多账号默认导航+MAA 风格日志',
+                lambda: check_pages_skills_logs(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

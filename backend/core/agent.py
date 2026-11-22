@@ -592,6 +592,16 @@ TOOLS = [
                                                             'fight / skip_story / '
                                                             'sweep / tool / claim / '
                                                             'weekly / train / signin'},
+                                   'assumeStageList': {
+                                       'type': 'boolean',
+                                       'description': '仅 fight：用户明确说'
+                                                      '「我已经在关卡列表了」'
+                                                      '才传 true（直跑，不导航）'},
+                                   'noSwitch': {
+                                       'type': 'boolean',
+                                       'description': '仅 fight：用户明确说'
+                                                      '「不要切号，直接开始」'
+                                                      '才传 true（直跑，不导航）'},
                                },
                                'required': ['skill']}},
            'names': {'type': 'object',
@@ -1912,8 +1922,11 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   遇 ST 自动过剧情、连续战斗关合并成批。build_run 遇到剧情关会卡死，用不了。
 - 只想导航到某活动看看 / 手动接管 → skill_navigate
 - 游戏没开、卡登录页 → skill_wakeup
-- **单独打一组关**（界面已在关卡列表 / 用户自己导航好了）→ skill_fight，
-  不要再补导航；游戏没开或还在主界面才需要先 skill_wakeup / skill_navigate
+- **单独打一组关**（用户明说「我已经在关卡列表」/「别切号，直接开始」）→
+  skill_fight 并传 `assumeStageList=true`（或 `noSwitch=true`），不要补导航。
+- **多账号批量**：除非用户明确上面两句之一，`fight` **一律先唤醒 + 导航**
+  （程序在 run_steps 里自动加，不用你手动写）。因为上一个号可能停在关卡
+  列表、主页、基建或结算页，界面状态无从判断（2026-11-22 用户口径）。
 - **把一个活动的普通关、EX（含突袭）、S 全清一遍** → skill_sweep。它自己
   分段导航、每关失败换作业重挂，不用一段段手动调 skill_navigate + skill_fight
 - 签到 → skill_signin

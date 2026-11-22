@@ -242,18 +242,18 @@ class Engine:
             self._cur_chain = chain
             self._chain_starts += 1
             return {'t': t, 'kind': 'chain_start', 'chain': chain,
-                    'text': '开始：%s' % _chain_cn(chain)}
+                    'text': '开始任务：%s' % _chain_cn(chain)}
         if msg == MSG_TASK_COMPLETED:
             self.chains.append({'chain': chain, 'ok': True, 'stopped': False})
             return {'t': t, 'kind': 'chain_done', 'chain': chain,
-                    'text': '完成：%s' % _chain_cn(chain)}
+                    'text': '完成任务：%s' % _chain_cn(chain)}
         if msg == MSG_TASK_STOPPED:
             # Stopped 不是失败：次数打满、理智不足、我方 AsstStop 都会走这里。
             # 真正的失败只有 TaskChainError。把两者混起来，用户就会看到
             # 「打完了却报失败」——这一条踩过。
             self.chains.append({'chain': chain, 'ok': True, 'stopped': True})
             return {'t': t, 'kind': 'chain_stop', 'chain': chain,
-                    'text': '结束：%s' % _chain_cn(chain)}
+                    'text': '结束任务：%s' % _chain_cn(chain)}
         if msg == MSG_TASK_ERROR:
             why = (data.get('why') or data.get('details') or '')
             self.chains.append({'chain': chain, 'ok': False, 'stopped': False,
@@ -263,7 +263,7 @@ class Engine:
             # why 要带上：run_core 靠它说出「哪一关翻车、为什么」
             # （2026-11-19 用户要求：作业翻车时日志要看得出是哪关）
             return {'t': t, 'kind': 'chain_failed', 'chain': chain,
-                    'why': why, 'text': '失败：%s' % _chain_cn(chain)}
+                    'why': why, 'text': '任务失败：%s' % _chain_cn(chain)}
         if msg == MSG_SUBTASK_START:
             # ``subtask`` 是插件类名（ProcessTask / BattleProcessTask），不是
             # 用户看得懂的阶段；真正的 pipeline 名在 ``first[0]``，形如
@@ -283,7 +283,8 @@ class Engine:
             # 培养两条：以前只有换作业和掉落，一场战斗 3 分钟日志里一个字
             # 都没有，用户报「自动战斗没有日志」。
             if what in ('StageDrops', 'CopilotListLoadTaskFileSuccess',
-                        'BattleFormation', 'StageInfo',
+                        'BattleFormation', 'BattleFormationSelected',
+                        'StageInfo',
                         'SanityBeforeStage', 'FightTimes', 'CopilotAction',
                         'ExceededLimit', 'OperProgressDetail',
                         'OperProgressSummary'):

@@ -330,6 +330,96 @@ def _remember_tail(file, raw):
         return ''
 
 
+# ---------------------------------------------------------------- skill 注册
+# 加一个新 skill 只要三步（2026-11-22 重构，用户要求「后续添加很方便」）：
+#
+#   1. 写一个函数，第一个参数叫 ``ctx``（:class:`Ctx` 里有账号、连接、Touch）
+#      ```python
+#      @skill('fishing', '钓鱼：自动打完今天的鱼')
+#      def skill_fishing(ctx):
+#          t = ctx.touch()          # 已经按这个号绑的 MAA / 模拟器建好
+#          ...
+#          ctx.log('钓到了')
+#          return {'ok': True}
+#      ```
+#   2. 不用改 ``SKILLS`` 表、不用改 ``_NEEDS_GAME``、不用碰 /api/skill/list
+#      —— 装饰器把描述、要不要环境闸、别名都登记进 :data:`REGISTRY`
+#   3. 需要在前端/助手暴露时它会自动出现（/api/skill/list 读 SKILLS）
+#
+# 老签名 ``(params, log, tid=None)`` 继续支持：:func:`_call_skill` 会看第一个
+# 参数名决定怎么调，现有 10 个 skill 不需要重写。
+
+class Skill:
+    """一个 skill 的声明：名字、一句话描述、要不要先过环境闸、别名"""
+
+    __slots__ = ('name', 'desc', 'fn', 'needs_game', 'aliases')
+
+    def __init__(self, name, desc, fn=None, needs_game=True, aliases=()):
+        self.name = name
+        self.desc = desc
+        self.fn = fn
+        self.needs_game = bool(needs_game)
+        self.aliases = tuple(aliases or ())
+
+
+#: 名字 → Skill。别直接改它，用 :func:`skill` 装饰器登记
+REGISTRY = {}
+
+#: 中文/口语别名 → 正式名（_norm_steps 用）
+ALIASES = {}
+
+
+def skill(name, desc, needs_game=True, aliases=()):
+    """登记一个 skill（装饰器）
+
+    ``needs_game=False``：跑之前不检查模拟器（签到这种走网页的）。
+    ``aliases``：助手/步骤里可能出现的口语名，如 ``('战斗', 'fight')``。
+    """
+    def deco(fn):
+        s = Skill(name, desc, fn, needs_game, aliases)
+        REGISTRY[name] = s
+        for a in s.aliases:
+            ALIASES[str(a).lower()] = name
+        return fn
+    return deco
+
+
+class Ctx:
+    """一个 skill 跑一次需要的上下文
+
+    把以前每个 skill 开头都抄一遍的四行收敛到这里：账号 → MAA 目录 →
+    连接参数 → Touch。多开时 ``_ADDR`` 的线程局部地址也在这里生效。
+    """
+
+    def __init__(self, params, log, tid=None):
+        self.params = params or {}
+        self.log = log or (lambda *_: None)
+        self.tid = tid
+        self.file = _account_file(self.params.get('account') or '')
+        self.maa_dir = _maa_dir_of(self.file)
+        self.conn = _conn_of(self.file, self.maa_dir)
+        self.client = _client_of(self.file)
+
+    def touch(self, **kw):
+        """这个号当前该连的那台模拟器（strict：点名过就不许自愈换设备）"""
+        return stagenav.Touch(self.conn['adb_path'], self.conn['address'],
+                              self.log, package=stagenav.game_package(self.client),
+                              strict=_strict_addr(self.file), **kw)
+
+    def spec(self, **kw):
+        """拼一份 run_core 的 spec：带上这个号的档案 / 渠道 / 点名的地址"""
+        out = {'maaDir': self.maa_dir,
+               'accountName': (self.params.get('accountName')
+                               or self.params.get('tail')
+                               or _account_name_tail(self.file) or '')}
+        out.update(_profile_kw(self.file))
+        out.update(_addr_kw(self.file))
+        out.update(kw)
+        return out
+
+
+@skill("wakeup", "唤醒游戏到主界面（可选按尾号切号）", needs_game=True,
+       aliases=("唤醒",))
 def skill_wakeup(params, log, tid=None):
     """skill 1：唤醒游戏到主界面
 
@@ -378,6 +468,8 @@ def skill_wakeup(params, log, tid=None):
 
 # ---------------------------------------------------------------- navigate
 
+@skill("navigate", "从主界面导航到指定活动", needs_game=True,
+       aliases=("导航",))
 def skill_navigate(params, log, tid=None):
     """skill 2/3：从主界面导航到活动（老活动走曲谱，当期走区域列表）
 
@@ -736,6 +828,8 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
     return rows, retry
 
 
+@skill("fight", "自动战斗：预检练度/前置 → 编队/借人/开打（失败自动换作业）",
+       needs_game=True, aliases=("战斗",))
 def skill_fight(params, log, tid=None):
     """skill 5：自动战斗——开打前预检 / 编队 / 借助战 / 吃理智药 / 开打
 
@@ -796,8 +890,12 @@ def skill_fight(params, log, tid=None):
     tail = (params.get('accountName') or params.get('tail')
             or _account_name_tail(file) or '').strip()
     cop = params.get('copilot') or {}
-    # wakeup/navigate 显式给了才走全套；默认直跑（2026-11-17 用户要求）
-    with_nav = bool(params.get('wakeup') or params.get('navigate'))
+    # wakeup/navigate 显式给了才走全套；默认直跑（2026-11-17 用户要求）。
+    # 例外（2026-11-22）：assumeStageList / noSwitch 明确要求直跑时，即使上层
+    # 补了 wakeup 也不走导航——用户亲口说「我已经在关卡列表 / 别切号」优先。
+    assume_list = bool(params.get('assumeStageList') or params.get('noSwitch'))
+    with_nav = bool(params.get('wakeup') or params.get('navigate')) \
+        and not assume_list
 
     # ---- 开打前预检：能打哪几关、哪几关打不了、为什么 ----
     # 用户点名的关（预检会往里补前置关，比对时要用原样的这一份）
@@ -967,6 +1065,7 @@ def skill_fight(params, log, tid=None):
 
 # ---------------------------------------------------------------- skip_story
 
+@skill("skip_story", "过剧情关卡（ST 关）", needs_game=True)
 def skill_skip_story(params, log, tid=None):
     """skill 6：过剧情关卡（mn-st-1 这类 ST 关）
 
@@ -1278,6 +1377,7 @@ def _save_train_plan(file, plans):
     })
 
 
+@skill("train", "培养干员：精英化/技能/专精，材料不足暂停", needs_game=True)
 def skill_train(params, log, tid=None):
     """skill 7：培养干员——升精英化 / 技能等级 / 专精（MAA 的 OperProgress）
 
@@ -1370,6 +1470,7 @@ def skill_train(params, log, tid=None):
 
 # ---------------------------------------------------------------- signin
 
+@skill("signin", "森空岛签到（单号/全部）", needs_game=False)
 def skill_signin(params, log, tid=None):
     """skill 4：森空岛签到（file 空 = 全部账号）"""
     from . import signin
@@ -1432,6 +1533,7 @@ def _cycle_rows(prefix):
     return rows
 
 
+@skill("weekly", "周目编排：剧情+战斗按序全自动", needs_game=True)
 def skill_weekly(params, log, tid=None):
     """周目编排：唤醒 → （过剧情 → 打一段）× N → 导航 EX → 打 EX
 
@@ -1547,6 +1649,8 @@ def _sweep_segments(keyword, log, tiers=None, raid='both'):
     return out, (res.get('title') or keyword)
 
 
+@skill("sweep", "一键扫图：普通→突袭→S 逐段导航挂机（失败自动换作业）",
+       needs_game=True, aliases=("扫图",))
 def skill_sweep(params, log, tid=None):
     """一键扫图：普通关 → EX 普通 → EX 突袭 → S 关，逐段导航 + 挂机
 
@@ -1659,6 +1763,8 @@ def skill_sweep(params, log, tid=None):
 
 # ---------------------------------------------------------------- 小工具（牛杂）
 
+@skill("tool", "MAA 牛杂小工具：战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店",
+       needs_game=True, aliases=("商店", "小工具"))
 def skill_tool(params, log, tid=None):
     """跑 MAA「小工具 → 牛杂」里的功能：战时新闻委员会 / 活动商店
 
@@ -1742,7 +1848,9 @@ def skill_tool(params, log, tid=None):
 
 # ---------------------------------------------------------------- 领奖
 
-def skill_claim(params, log, tid=None):
+@skill("claim", "领取活动奖励（活动奖励页一键领取）", needs_game=True,
+       aliases=("领奖", "领奖励"))
+def skill_claim(ctx):
     """领取活动奖励（活动奖励页 → 一键领取）
 
     用户 2026-11-22 要求把「活动奖励」也做成 skill：OS 的活动地图上有个
@@ -1752,24 +1860,24 @@ def skill_claim(params, log, tid=None):
     纯 adb 导航 + 点一下，不经过 MaaCore（MAA 没有「领活动奖励」这个任务）。
     已经领完的时候按钮还在，点了没反应——所以这里不校验结果，点完就回。
     没写 ``claim`` 那条导航的活动会明确报「进了奖励页但要手动点」。
+
+    **新式写法示范**：第一个参数是 :class:`Ctx`，账号 / MAA 目录 / 连接 /
+    Touch 都不用自己拼（见文件顶部「skill 注册」那段）。
     """
     from . import eventnav
 
-    file = _account_file(params.get('account') or '')
-    d = _maa_dir_of(file)
-    prefix = (params.get('prefix') or params.get('activity') or '').strip().upper()
+    p = ctx.params
+    log = ctx.log
+    prefix = (p.get('prefix') or p.get('activity') or '').strip().upper()
 
     # 可选先唤醒：用户说「把这个号的奖励领了」时游戏可能还停在登录页/主界面
-    if params.get('wakeup'):
-        tail = (params.get('accountName') or params.get('tail')
-                or _account_name_tail(file) or '').strip()
-        skill_wakeup({'account': file, 'accountName': tail}, log, tid=tid)
+    if p.get('wakeup'):
+        tail = (p.get('accountName') or p.get('tail')
+                or _account_name_tail(ctx.file) or '').strip()
+        _call_skill('wakeup', {'account': ctx.file, 'accountName': tail},
+                    log, ctx.tid)
 
-    conn = _conn_of(file, d)
-    client = _client_of(file)
-    t = stagenav.Touch(conn['adb_path'], conn['address'], log,
-                       package=stagenav.game_package(client),
-                       strict=_strict_addr(file))
+    t = ctx.touch()
     alive, detail = t.ready()
     log('adb：%s' % detail)
     if not alive:
@@ -1783,7 +1891,7 @@ def skill_claim(params, log, tid=None):
     if not ok:
         raise RuntimeError('领奖没成功：%s' % why)
     log(why)
-    return {'ok': True, 'account': file, 'prefix': prefix, 'why': why}
+    return {'ok': True, 'account': ctx.file, 'prefix': prefix, 'why': why}
 
 
 # ---------------------------------------------------------------- 批量编排
@@ -1800,15 +1908,36 @@ def _norm_steps(steps):
         else:
             raise ValueError('第 %d 步格式不对（要是 {skill: ...}）' % i)
         name = str(name or '').strip().lower()
-        name = {'扫图': 'sweep', '战斗': 'fight', '唤醒': 'wakeup',
-                '导航': 'navigate', '领奖': 'claim', '领奖励': 'claim',
-                '商店': 'tool', '小工具': 'tool'}.get(name, name)
+        # 口语别名由 @skill(aliases=...) 登记，别再在这里维护第二份
+        name = ALIASES.get(name, name)
         if name not in SKILLS:
             raise ValueError('第 %d 步的 skill 不认识：%s（可选：%s）'
                              % (i, name or '空', ' '.join(sorted(SKILLS))))
         out.append((name, p))
     if not out:
         raise ValueError('没给任何步骤（steps 是空的）')
+    return out
+
+
+def _nav_first(step_list, many):
+    """多账号时把 ``fight`` 改成「先唤醒 + 导航」再打
+
+    用户 2026-11-22 的口径：只要不是只跑一个号，界面停在哪根本无从判断
+    （上一个号可能停在关卡列表、主页、基建、甚至结算页），**默认走导航**。
+    两种例外由调用方显式声明：
+
+      - ``assumeStageList``：用户说自己已经停在关卡列表了
+      - ``noSwitch``：用户说不要切号、直接开始
+    """
+    if not many:
+        return step_list
+    out = []
+    for name, p in step_list:
+        if name == 'fight' and not p.get('assumeStageList') \
+                and not p.get('noSwitch'):
+            if not (p.get('wakeup') or p.get('navigate')):
+                p = dict(p, wakeup=True, navigate=True)
+        out.append((name, p))
     return out
 
 
@@ -1916,7 +2045,7 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
             plog('---- %d/%d %s ----' % (j, len(step_list),
                                          SKILLS[name][0]))
             try:
-                r = SKILLS[name][1](p, plog, tid=tid)
+                r = _call_skill(name, p, plog, tid)
                 acc_res.append({'skill': name, 'ok': True,
                                 'result': _digest(r)})
             except Exception as e:              # noqa: BLE001
@@ -1984,6 +2113,13 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
             raise ValueError('没有可跑的账号')
         files.append(f)
 
+    # 多账号 → 每个号都从「未知界面」开始，fight 一律先唤醒 + 导航
+    # （2026-11-22 用户要求：没有明确说「已经在关卡列表」就走导航）
+    before = [dict(p) for _, p in step_list]
+    step_list = _nav_first(step_list, len(files) > 1)
+    nav_added = [n for (n, p), b in zip(step_list, before)
+                 if p.get('wakeup') and not b.get('wakeup')]
+
     # 分组：同模拟器的号必须排队
     groups = {}
     for f in files:
@@ -2011,6 +2147,9 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
         log = tasks.log_factory(tid2)
         log('步骤：' + ' → '.join(SKILLS[n][0].split('：')[0] for n, _ in step_list))
         log('模拟器分组：' + plan)
+        if nav_added:
+            log('多账号：%s 默认先唤醒 + 导航（界面状态未知；用户说'
+                '「已在关卡列表」才直跑）' % '、'.join(nav_added))
         results = {}
         lock = threading.Lock()
 
@@ -2074,28 +2213,36 @@ def _digest(r):
 
 # ---------------------------------------------------------------- 调度
 
-SKILLS = {
-    'wakeup':    ('唤醒游戏到主界面（可选按尾号切号）', skill_wakeup),
-    'navigate':  ('从主界面导航到指定活动',            skill_navigate),
-    'fight':     ('自动战斗：预检练度/前置 → 编队/借人/开打（失败自动换作业）',
-                  skill_fight),
-    'skip_story': ('过剧情关卡（ST 关）',              skill_skip_story),
-    'signin':    ('森空岛签到（单号/全部）',            skill_signin),
-    'weekly':    ('周目编排：剧情+战斗按序全自动',      skill_weekly),
-    'train':     ('培养干员：精英化/技能/专精，材料不足暂停', skill_train),
-    'sweep':     ('一键扫图：普通→突袭→S 逐段导航挂机（失败自动换作业）',
-                  skill_sweep),
-    'tool':      ('MAA 牛杂小工具：战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店',
-                  skill_tool),
-    'claim':     ('领取活动奖励（活动奖励页一键领取）', skill_claim),
-}
+# 名字 → (描述, 函数)：保持原来的形状（/api/skill/list、助手的工具列表、
+# 冒烟里的打桩都直接吃它）。内容由 @skill 装饰器登记，别再在这里手写一张
+# 和第二份描述重复的表（以前两处各写一遍，加 skill 就要改两处）。
+SKILLS = {s.name: (s.desc, s.fn) for s in REGISTRY.values()}
 
-# 哪些 skill 跑之前要先确认模拟器在。signin 走的是森空岛网页，跟游戏无关，
-# 不查——否则用户只想签个到，却被要求开模拟器。这张表另用一个常量而不是
-# 塞进 SKILLS 元组：/api/skill/list 和助手的工具列表都直接吃 SKILLS 的形状，
-# 加字段会把两处都牵连一遍。
-_NEEDS_GAME = frozenset(['wakeup', 'navigate', 'fight', 'skip_story', 'weekly',
-                         'train', 'sweep', 'tool', 'claim'])
+#: 哪些 skill 跑之前要先确认模拟器在（装饰器里的 needs_game=False 不查）。
+#: signin 走森空岛网页，跟游戏无关——用户只想签个到不该被要求开模拟器。
+_NEEDS_GAME = frozenset(s.name for s in REGISTRY.values() if s.needs_game)
+
+
+def _call_skill(name, params, log, tid=None):
+    """按注册的签名调用 skill
+
+    新写法 ``def skill_x(ctx)`` 传 :class:`Ctx`；老写法
+    ``(params, log, tid=None)`` 原样调用。两种并存——加新 skill 不用回头
+    改老的，老的也能一个一个慢慢迁过来。
+    """
+    entry = SKILLS.get(name)
+    if not entry:
+        raise ValueError('没有这个 skill：%s（可选：%s）'
+                         % (name, ' '.join(sorted(SKILLS))))
+    fn = entry[1]
+    try:
+        import inspect
+        first = next(iter(inspect.signature(fn).parameters), '')
+    except Exception:
+        first = ''
+    if first == 'ctx':
+        return fn(Ctx(params or {}, log, tid))
+    return fn(params or {}, log, tid=tid)
 
 
 def run_skill(name, params=None):
@@ -2113,7 +2260,7 @@ def run_skill(name, params=None):
     if not entry:
         raise ValueError('没有这个 skill：%s（可选：%s）'
                          % (name, ' '.join(sorted(SKILLS))))
-    desc, fn = entry
+    desc = entry[0]
 
     def job():
         # tasks.create 把线程命名成 task-<tid>，从线程名取回自己的 tid，
@@ -2136,7 +2283,7 @@ def run_skill(name, params=None):
                                       address=_addr_of(f) or None)
             if not ok:
                 raise RuntimeError('环境没准备好：%s' % why)
-        return fn(params or {}, log, tid=tid)
+        return _call_skill(name, params, log, tid)
 
     # 日志按账号分栏：任务要记住自己属于哪个号。没指定账号时按「左侧当前
     # 那个号」算（_account_file('') 就是干这个的），算不出来就当全局任务。

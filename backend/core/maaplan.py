@@ -797,7 +797,7 @@ def run_core(spec, tid=None, timeout=None):
     #   done/summary 干员培养的成果（skill_train 用来算还剩哪些没做）
     state = {'stage': '', 'trail': [], 'by_file': by_file, 'cid_of': cid_of,
              'tried': tried, 'results': [], 'cleared': {}, 'cur_cid': 0,
-             'actions': {}, 'deployed': [], 'nodes': {},
+             'actions': {}, 'deployed': {}, 'nodes': {},
              'last_log': time.time(), 'pause': '', 'pause_detail': '',
              'done': {}, 'summary': {}, 'stop': None,
              'plans': spec.get('plans') or []}
@@ -1191,9 +1191,9 @@ def _custom_tap_line(text):
 
 # MaaCore 的 CopilotAction：抄作业时每做一个动作就报一次
 _ACTION_CN = {
-    'Deploy': '部署', 'Retreat': '撤退', 'UseSkill': '开技能',
-    'SwitchSpeed': '切二倍速', 'SkillDaemon': '技能就绪自动开',
-    'BulletTime': '子弹时间', 'StartAction': '开始行动',
+    'Deploy': '部署', 'Retreat': '撤退', 'UseSkill': '使用技能',
+    'SwitchSpeed': '切换倍速', 'SkillDaemon': '开始挂机',
+    'BulletTime': '子弹时间', 'StartAction': '已开始行动',
 }
 
 # 子任务（pipeline 节点）→ 人话。只挑用户能看懂的，其余一律不写：
@@ -1214,8 +1214,8 @@ _SUBTASK_CN = {
     'ToChapterNew': '进入章节',
     'StageBegin': '进入关卡',
     # 编队 / 开打
-    'BattleStartPre': '准备编队',
-    'BattleStartAll': '开始行动',
+    'BattleStartPre': '开始编队',
+    'BattleStartAll': '已开始行动',
     'BattleQuickFormation': '快速编队',
     'BattleQuickFormationConfirm': '确认编队',
     'BattleQuickFormationSkillPage': '编队·技能页',
@@ -1440,30 +1440,49 @@ def _on_core_event(ev, log, tid, state=None):
     elif kind == 'done':
         log('全部任务跑完')
     elif kind == 'node':
-        # 只报「换了一个阶段」，同一阶段反复来不写（SubTaskStart 一秒十几条）
+        # MAA 的日志面板就是一行一个阶段（开始编队 / 已开始行动 / 战斗中…），
+        # 这里照同样的口径输出，不再加「·」前缀。
+        # SubTaskStart 一秒能来十几条，所以同一阶段只报一次；跨关卡时把去重
+        # 记录清掉（state['stage'] 变化），否则第二关的「已开始行动」会被上
+        # 一关的 20 秒窗口吞掉（2026-11-22 用户要求「像 MAA 那样每关都有」）。
         label = _subtask_label(ev.get('sub') or '')
         if not label:
             return
         now = time.time()
         last = (state or {}).get('nodes') or {}
-        if last.get('label') == label and now - last.get('at', 0) < 20:
+        if last.get('label') == label and now - last.get('at', 0) < 8:
             return
         if state is not None:
             state['nodes'] = {'label': label, 'at': now}
-        log('· %s' % label)
+        log(label)
     elif kind == 'extra':
         what = ev.get('what')
         data = ev.get('data') or {}
         if what == 'CopilotListLoadTaskFileSuccess':
             code = _stage_of_file(data, state)
             if code:
+                prev = (state or {}).get('stage') or ''
+                # 能在同一批里换到下一个作业，说明**上一关已经打完了**：
+                # MultiCopilot 是顺序执行的，翻车会走 TaskChainError 而不是
+                # 换关。MaaCore 在 Copilot 任务里不发 StageDrops，拿这个推
+                # 是最可靠的「每关成功」信号（2026-11-22 用户要求）。
+                if prev and prev.upper() != code.upper():
+                    log('✓ %s 完成' % prev)
                 log('换作业：%s' % code)
                 if state is not None:
                     state['stage'] = code
+                    state['nodes'] = {}      # 新一关，阶段去重重新开始
                     fn = os.path.basename(str(data.get('file_name') or ''))
                     state['cur_cid'] = (state.get('cid_of') or {}).get(fn) or 0
                     if code not in state['trail']:
                         state['trail'].append(code)
+        elif what == 'BattleFormationSelected':
+            # MAA 面板里一行一条「选择干员: 芬」。以前没接这个 what，
+            # 编队阶段只能看到一行笼统的「编队：…」（2026-11-22 用户对比
+            # MAA 日志后指出）。
+            sel = str(data.get('selected') or data.get('group_name') or '')
+            if sel:
+                log('选择干员: %s' % sel)
         elif what == 'CopilotAction':
             act = str(data.get('action') or '')
             target = str(data.get('target') or '')
@@ -1473,11 +1492,22 @@ def _on_core_event(ev, log, tid, state=None):
             if not label:
                 return
             now = time.time()
+            # MAA 面板的统一前缀是「当前步骤: 」。StartAction 例外——
+            # 它单独一行「已开始行动」。
+            if act == 'StartAction':
+                log(label)
+                return
+            step = '当前步骤: %s' % label
+            if target:
+                step += ' %s' % target
             if act == 'Deploy':
-                done = (state or {}).setdefault('deployed', [])
-                if target and target not in done:
-                    done.append(target)
-                    log('部署 %s' % target)
+                # 同一个干员 6 秒内只报一次（撤退再部署是正常的，别永久吞掉）
+                done = (state or {}).setdefault('deployed', {})
+                if target and now - done.get(target, 0) < 6:
+                    return
+                if target:
+                    done[target] = now
+                log(step)
                 return
             if act == 'UseSkill':
                 # 一场仗要开十几次技能，15 秒内只说一次，不然日志全是「开技能」
@@ -1485,17 +1515,18 @@ def _on_core_event(ev, log, tid, state=None):
                     return
                 if state is not None:
                     state['skill_at'] = now
-                log('开技能')
+                log(step)
                 return
             seen = (state or {}).setdefault('actions', {})
             if act in seen:
                 return
             seen[act] = now
-            log(label + ((' %s' % target) if target else ''))
+            log(step)
         elif what == 'BattleFormation':
+            # MAA 是先把干员名单单独打一行：``[芬, 斑点, 黑角, 安赛尔, 克洛丝]``
             names = [str(x) for x in (data.get('formation') or []) if x]
             if names:
-                log('编队：%s' % '、'.join(names[:12]))
+                log('[%s]' % ', '.join(names[:12]))
         elif what == 'StageInfo':
             name = data.get('name') or data.get('stage') or ''
             if name:

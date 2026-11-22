@@ -1327,12 +1327,12 @@ function chipTitle(o) {
   if (o.group) return '组合：满足任一即可';
   const e = ['精零', '精一', '精二'][o.elite] || '';
   const m = (o.mastery || []).map((x, i) => x ? `专${'一二三'[i] || ''}${x}` : '').filter(Boolean).join(' ');
-  // 练度要求（v1 老作业没写的会补默认值，带 implied 标记）
+  // 练度要求（v1 老作业没写的仍按星级补默认值，但不再标「默认」——
+  // 用户 2026-11-22 说这属于噪音）
   const req = o.req || {};
   const need = [];
   if (req.elite != null) need.push('精' + req.elite);
   if (req.level != null) need.push(req.level + '级');
-  if (req.implied) need.push('默认');
   const needTxt = need.length ? ` · 要求 ${need.join(' ')}` : '';
   if (o.sub) return `由${o.sub.name}${o.sub.skill || ''}替换出战${needTxt}`;
   if (!o.owned) return '未拥有' + needTxt;
@@ -1743,7 +1743,6 @@ async function showOpDetail(op, variant) {
           if (req.level != null) bits.push(req.level + ' 级');
           if (req.skill_level != null) bits.push(req.skill_level >= 8 ? ('专' + (req.skill_level - 7) + ' 技能' + (req.skill || 1)) : ('技能 ' + req.skill_level));
           if (req.module) bits.push('模组 ' + req.module);
-          if (req.implied) bits.push('老作业未标注，按星级默认');
           // 名字上色：借的那个人紫、缺练度的橙，跟顶部提示一对；
           // 替换条目（#92）绿字 + 「由黍1替换」标注
           const isBorrow = borrowOne && o.name === borrowOne;
