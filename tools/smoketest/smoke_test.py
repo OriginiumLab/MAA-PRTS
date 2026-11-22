@@ -6303,6 +6303,189 @@ def check_cross_zone_segments(tmp):
         (maaplan._navigate, maaplan._leave_result, maaplan._wait_run) = old
 
 
+
+def check_scatter_stages(tmp):
+    """B58 散点关卡（S 关）：认格子 → 点进去 → 单作业模式一关一趟
+
+    用户 2026-11-23：OS 的 S 关不在关卡列表里，浮在雪山地图上（左上竖条写着
+    「积雪清理系统」）。MaaCore 的 ``ClickStageName`` 只在关卡列表里整屏 OCR，
+    这种界面一个都认不出，所以这条路自己点到编队页，再一关排一个 Copilot 任务
+    （单作业模式：只给 filename，不给 copilot_list，它就不做导航）。
+    """
+    _reset_config(tmp)
+    import io as _io
+    from core import scatter, maaplan, maacore, eventnav, stagenav
+
+    # ---- ① 形状解析：EX / 主线不能被当成 S 关 ----
+    assert scatter.has('OS-S-3') and not scatter.has('TL-1'), '活动入口判据不对'
+    assert scatter.cell_index('OS-S-3') == 3
+    assert scatter.cell_index('OS-EX-1') == 0, \
+        'OS-EX-1 被解析成格子 1（会点到 S-1 上）'
+    assert scatter.cell_index('1-7') == 0 and scatter.cell_index('OS-1') == 0
+
+    # ---- ② 模板齐全 ----
+    lay = scatter.layout_of('OS')
+    for idx in (1, 2, 3, 4, 5):
+        assert scatter._tpl(lay['cells'][idx]['tpl']), '缺格子模板 %d' % idx
+    for k in ('start', 'raid', 'start_raid', 'formation'):
+        assert scatter._tpl(lay[k]), '缺按钮模板 %s' % k
+
+    # ---- ③ 认格子：贴回原位命中；ROI 之外的误命中不算 ----
+    from PIL import Image
+
+    def compose(items, size=(1920, 1080), bg=(40, 44, 56)):
+        im = Image.new('RGB', size, bg)
+        for pth, xy in items:
+            im.paste(Image.open(pth).convert('RGB'), xy)
+        buf = _io.BytesIO()
+        im.save(buf, 'PNG')
+        return buf.getvalue()
+
+    poses = {1: (220, 295), 2: (1325, 295), 3: (220, 576),
+             4: (1325, 576), 5: (765, 771)}
+    tpls = {i: scatter._tpl(lay['cells'][i]['tpl']) for i in range(1, 6)}
+    full = compose([(tpls[i], poses[i]) for i in range(1, 6)])
+    got = scatter.cells_of(full, 'OS')
+    assert sorted(got) == [1, 2, 3, 4, 5], got
+    assert scatter.is_here(full, 'OS')
+    assert not scatter.has_detail(full, 'OS'), '没打开详情却说有详情面板'
+    assert scatter.cells_of(compose([]), 'OS') == {}, '空图也认出了格子'
+
+    # S2 的模板贴到 S5 的位置：ROI 不匹配，必须不算
+    wrong = compose([(tpls[2], poses[5])])
+    assert 2 not in scatter.cells_of(wrong, 'OS'), \
+        'S2 的模板在 S5 的位置也被认成 S2（ROI 没起作用）'
+
+    # ---- ④ 详情面板 / 编队页判据 ----
+    detail = compose([(scatter._tpl(lay['start']), (1560, 940))])
+    assert scatter.has_detail(detail, 'OS'), '「开始行动」在还说没详情面板'
+    form = compose([(scatter._tpl(lay['formation']), (1288, 16))])
+    assert scatter.in_formation(form, 'OS'), '「快捷编队」在还说不在编队页'
+    assert not scatter.in_formation(compose([]), 'OS')
+
+    # ---- ⑤ 单作业模式的参数：只给 filename，不给 copilot_list ----
+    row = {'filename': 'X:/copilot/OS-S-1_1.json',
+           'stage_name': 'OS-S-1', 'is_raid': True}
+    prm = maaplan._single_params(row, {'copilot': {'formation': True}})
+    assert 'copilot_list' not in prm, '单作业模式不能带 copilot_list（会走导航）'
+    assert prm['filename'] == row['filename']
+    assert prm['formation'] is True
+
+    # ---- ⑥ run_scatter 的循环：每个格子一趟，未被解锁/点不开就跳过 ----
+    class FakeTouch:
+        def __init__(self, *a, **k):
+            self.taps = []
+            self._shot = b'frame'
+
+        def ready(self):
+            return True, 'adb 正常（测试桩）'
+
+        def shot(self):
+            return self._shot
+
+        def tap_px(self, x, y):
+            self.taps.append((x, y))
+
+        def tap(self, x, y):
+            self.taps.append((x, y))
+
+    class FakeEng:
+        def __init__(self, *a, **k):
+            self.appended, self.starts, self.chains = [], 0, []
+
+        def open(self):
+            return self
+
+        def connect(self, *a, **k):
+            return True
+
+        def append(self, typ, params):
+            self.appended.append((typ, params))
+            return len(self.appended)
+
+        def start(self):
+            self.starts += 1
+            return True
+
+        def wait(self, timeout=None, poll=1.0):
+            return True
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    old = (stagenav.Touch, maacore.Engine, eventnav.run,
+           scatter.is_here, scatter.cells_of, scatter.open_stage,
+           scatter.back_to_cells, maaplan._connection)
+    opened, bad = [], []
+
+    def fake_open(touch, pre, idx, raid, log=None, pos=None, timeout=12.0):
+        opened.append((idx, raid))
+        if (idx, raid) in bad:
+            return False, '没点开（测试桩）'
+        return True, ''
+
+    stagenav.Touch = FakeTouch
+    maacore.Engine = FakeEng
+    # 冒烟环境没有真的 MAA 目录，连接参数直接给一份（不然 _connection 会去读
+    # <maaDir>/config/gui.new.json 然后抛 FileNotFoundError）
+    maaplan._connection = lambda d, profile=None: {
+        'adb_path': 'adb', 'address': '127.0.0.1:5555',
+        'config': 'General', 'touch': 'MiniTouch', 'maa_dir': d}
+    eventnav.run = lambda *a, **k: (True, 'ok')
+    scatter.open_stage = fake_open
+    scatter.back_to_cells = lambda *a, **k: True
+    try:
+        # ① 三关连着跑：S1 普通 → S1 突袭 → S2 普通
+        cells = {1: (430, 385), 2: (1535, 385)}
+        scatter.is_here = lambda d, p: True
+        scatter.cells_of = lambda d, p: dict(cells)
+        spec = {'maaDir': tmp,
+                'copilot': {'formation': True},
+                'copilotList': [
+                    {'filename': 'a.json', 'stage_name': 'OS-S-1',
+                     'is_raid': False},
+                    {'filename': 'b.json', 'stage_name': 'OS-S-1',
+                     'is_raid': True},
+                    {'filename': 'c.json', 'stage_name': 'OS-S-2',
+                     'is_raid': False}]}
+        r1 = maaplan.run_scatter(spec, tid=None, timeout=600)
+        assert r1['ok'], r1
+        assert opened == [(1, False), (1, True), (2, False)], opened
+        assert r1['stage_trail'] == ['OS-S-1', 'OS-S-1(突袭)', 'OS-S-2'], \
+            r1['stage_trail']
+
+        # ② 界面上没有这个按钮（没解锁）→ 跳过，不排作业
+        opened.clear()
+        cells = {1: (430, 385)}
+        spec2 = dict(spec, copilotList=[
+            {'filename': 'd.json', 'stage_name': 'OS-S-4', 'is_raid': False},
+            {'filename': 'e.json', 'stage_name': 'OS-S-1', 'is_raid': False}])
+        r2 = maaplan.run_scatter(spec2, tid=None, timeout=600)
+        assert opened == [(1, False)], opened
+        assert r2['stage_trail'] == ['OS-S-1'], r2['stage_trail']
+
+        # ③ 点开了但没进编队（理智不够/未开放）→ 记进失败，接着跑下一关
+        opened.clear()
+        bad.clear()
+        bad.append((2, False))
+        cells = {1: (430, 385), 2: (1535, 385)}
+        spec3 = dict(spec, copilotList=[
+            {'filename': 'f.json', 'stage_name': 'OS-S-2', 'is_raid': False},
+            {'filename': 'g.json', 'stage_name': 'OS-S-1', 'is_raid': False}])
+        r3 = maaplan.run_scatter(spec3, tid=None, timeout=600)
+        assert not r3['ok'], r3
+        assert r3['stages_failed'][0]['stage'] == 'OS-S-2', r3
+        assert r3['stage_trail'] == ['OS-S-1'], r3['stage_trail']
+        assert opened == [(2, False), (1, False)], opened
+    finally:
+        (stagenav.Touch, maacore.Engine, eventnav.run,
+         scatter.is_here, scatter.cells_of, scatter.open_stage,
+         scatter.back_to_cells, maaplan._connection) = old
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -6382,6 +6565,8 @@ def main():
                 lambda: check_pages_skills_logs(tmp))
         r.check('B57 跨分区分段导航（OS-10 → 先切 EX 区再挂 OS-EX-1）',
                 lambda: check_cross_zone_segments(tmp))
+        r.check('B58 散点关卡（S 关）：认格子→点进编队→单作业模式一关一趟',
+                lambda: check_scatter_stages(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

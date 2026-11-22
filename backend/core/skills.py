@@ -1003,8 +1003,23 @@ def skill_fight(params, log, tid=None):
             '手机尾号）')
     # 兜底超时：MAA 卡在编队/加载界面时不会自己停（用户实测挂过 480 分钟），
     # 两小时还没跑完就停下，别让整个任务僵尸化。
-    r = maaplan.run_core(spec, tid=tid,
-                         timeout=params.get('timeout') or 2 * 60 * 60)
+    # 散点关卡（OS-S-* 这种浮在活动地图上的按钮）走另一条路：MaaCore 的
+    # ClickStageName 是在**关卡列表**里整屏 OCR 找关卡名，这种界面它一个都认
+    # 不出（用户 2026-11-23：「MAA 无法识别 S 关卡」）。所以我们自己点到干员
+    # 编队页，再一关排一个 Copilot 任务（单作业模式，不做导航）。
+    from . import scatter
+    # 判据要连「形状」一起看：只查前缀的话，挂 OS-EX-1 也会被认成散点关卡
+    # （OS 有 layout），然后 cell_index 返回 0、整批静默跳过。
+    use_scatter = bool(mode == 'copy' and stages
+                       and all(scatter.has(x) and scatter.cell_index(x)
+                               for x in stages))
+    if use_scatter:
+        log('这些是散点关卡（不在关卡列表里），走单作业模式：一关一关点进去打')
+        r = maaplan.run_scatter(spec, tid=tid,
+                                timeout=params.get('timeout') or 2 * 60 * 60)
+    else:
+        r = maaplan.run_core(spec, tid=tid,
+                             timeout=params.get('timeout') or 2 * 60 * 60)
 
     # ---- 收尾结算：只说**确定的**事，不猜逐关成败 ----
     # 2026-11-22 用户口径：「不能稳定识别出是否战斗成功……如果判断不出来就把

@@ -1116,6 +1116,210 @@ def run_core(spec, tid=None, timeout=None):
         eng.close()
 
 
+def _single_params(row, spec):
+    """单作业模式的 Copilot 参数：只给 ``filename``，**不给** ``copilot_list``
+
+    MaaCore 里那句是 ``CopilotTask set_params failed, stage_name or filename
+    not found``——filename 单独就能成立。给了 copilot_list 它就走 MultiCopilot，
+    每关都要 ``ClickStageName`` 在关卡列表里 OCR 找名字；而散点关卡（OS-S-*）
+    根本不在那种列表里，认不出来（用户 2026-11-23：「MAA 无法识别 S 关卡」）。
+    只给 filename 它就不导航，界面在哪从哪开始——正好我们从编队页交给它。
+    """
+    p = _copilot_params([row], spec)
+    p.pop('copilot_list', None)
+    p['filename'] = row.get('filename')
+    return p
+
+
+def run_scatter(spec, tid=None, timeout=None):
+    """散点式关卡（S 关这类）：一关一关点进去，用**单作业模式**打
+
+    和 :func:`run_core` 唯一的区别：作业不是「整队排给 MAA 让它自己找关」，而是
+    我们自己点到干员编队页、一关排一个 Copilot 任务。原因见 :mod:`scatter`：
+    OS 的 S 关浮在雪山地图上（积雪清理系统），MaaCore 的 ``ClickStageName``
+    在关卡列表里 OCR，这种界面一个都认不出。
+
+    返回结构刻意和 ``run_core`` 对齐（``ok`` / ``stage_trail`` /
+    ``stages_failed`` / ``error``），调用方的收尾逻辑不用改。
+
+    ``spec`` 除了 run_core 那些，还要 ``copilotList``：**每一条就是一趟**
+    （普通/突袭各一条），``is_raid`` 决定点「开始行动」还是「开始突袭」。
+    """
+    from . import maacore, scatter, eventnav, stagenav
+
+    log = tasks.log_factory(tid) if tid else (lambda *_: None)
+    d = spec.get('maaDir') or settings.load().get('maaDir') or ''
+    if not d:
+        raise ValueError('还没设置 MAA 目录')
+
+    rows = [r for r in (spec.get('copilotList') or []) if r.get('filename')]
+    if not rows:
+        raise ValueError('散点关卡要作业文件（copilotList 是空的）')
+    first = str(rows[0].get('stage_name') or '')
+    pre = eventnav.prefix_of(first)
+    lay = scatter.layout_of(pre)
+    if not lay:
+        raise ValueError('「%s」没有散点关卡的标定（navtpl/scatter）' % (pre or first))
+    log('%s：%s，一关一个作业（单作业模式）'
+        % (lay.get('label') or pre, '、'.join(
+            '%s%s' % (r.get('stage_name'), '突袭' if r.get('is_raid') else '')
+            for r in rows)))
+
+    mine = maa.running_in(d)
+    if mine:
+        log('先关掉正在运行的 MAA 窗口（避免和直连抢模拟器）…')
+        if not maa.close(d):
+            raise RuntimeError('MAA 关不掉，请手动退出后重试')
+
+    conn = _connection(d, spec.get('profile'))
+    if spec.get('adbAddress'):
+        conn = dict(conn, address=spec['adbAddress'])
+    log('连接 %s（%s）…' % (conn['address'], conn['config']))
+
+    total = timeout or (2 * 60 * 60)
+    deadline = time.time() + total
+    state = {'trail': [], 'results': [], 'nodes': {}, 'stage': '',
+             'by_file': {}, 'cid_of': {}, 'cur_cid': 0}
+    trail, failed = [], []
+    touched = 0
+
+    touch = stagenav.Touch(conn['adb_path'], conn['address'], log,
+                           package=stagenav.game_package(spec.get('clientType')))
+    alive, detail = touch.ready()
+    if not alive:
+        log('连不上模拟器：%s' % detail)
+        return {'ok': False, 'error': detail, 'stage_trail': [], 'stages_failed': [],
+                'chains': [], 'timed_out': False, 'failed_stage': '',
+                'failed_why': '', 'swaps': [], 'paused': '', 'pauseDetail': '',
+                'trained': {}, 'trainSummary': {}, 'stageReport': 'trail'}
+
+    # 先到 S 关界面：复用活动导航（点「喀兰之心」那个分区节点），它认得出
+    # 主页 / 终端页 / 活动地图，比我们自己拼一条路稳。
+    # 已经在 S 关界面就别再导航一次：那页右下角也摆着三个分区节点，
+    # eventnav 的「已经在活动地图上」会成立，接着去点「喀兰之心」，画面不变
+    # 就判失败——多绕一圈还报个假错误。
+    data = touch.shot()
+    if scatter.is_here(data, pre):
+        log('已经在 S 关界面，跳过导航')
+    else:
+        nav_ok, nav_why = eventnav.run(touch, first, log)
+        if not nav_ok:
+            log('导航没到 S 关界面：%s' % nav_why)
+            return {'ok': False, 'error': nav_why, 'stage_trail': [],
+                    'stages_failed': [], 'chains': [], 'timed_out': False,
+                    'failed_stage': '', 'failed_why': '', 'swaps': [],
+                    'paused': '', 'pauseDetail': '', 'trained': {},
+                    'trainSummary': {}, 'stageReport': 'trail'}
+        time.sleep(1.5)
+    # 详情面板如果是开着的（上一轮点开过），先点掉再认格子
+    scatter.back_to_cells(touch, pre, log)
+    data = touch.shot()
+    if not scatter.is_here(data, pre):
+        log('到了「%s」但没认出任何关卡按钮（模板过期？）' % (lay.get('label') or pre))
+        return {'ok': False, 'error': 'S 关按钮一个都没认出来',
+                'stage_trail': [], 'stages_failed': [], 'chains': [],
+                'timed_out': False, 'failed_stage': '', 'failed_why': '',
+                'swaps': [], 'paused': '', 'pauseDetail': '', 'trained': {},
+                'trainSummary': {}, 'stageReport': 'trail'}
+    cells = scatter.cells_of(data, pre)
+    log('认到 %d 个关卡按钮：%s'
+        % (len(cells), '、'.join('%s-S-%d' % (pre, i) for i in sorted(cells))))
+
+    eng = maacore.Engine(d, on_event=lambda ev: _on_core_event(ev, log, tid, state))
+    eng.open()
+    try:
+        if not eng.connect(conn['adb_path'], conn['address'],
+                           conn.get('config') or 'General',
+                           conn.get('touch') or 'MiniTouch'):
+            log('MaaCore 连不上模拟器')
+            return {'ok': False, 'error': 'MaaCore 连不上模拟器',
+                    'stage_trail': [], 'stages_failed': [], 'chains': [],
+                    'timed_out': False, 'failed_stage': '', 'failed_why': '',
+                    'swaps': [], 'paused': '', 'pauseDetail': '', 'trained': {},
+                    'trainSummary': {}, 'stageReport': 'trail'}
+        for i, row in enumerate(rows, 1):
+            if time.time() > deadline:
+                log('跑满 %d 分钟，剩下的关不打了' % int(total // 60))
+                break
+            if state.get('pause'):
+                log('已暂停（%s）' % state['pause'])
+                break
+            code = str(row.get('stage_name') or '')
+            idx = scatter.cell_index(code)
+            raid = bool(row.get('is_raid'))
+            label = '%s%s' % (code, ' 突袭' if raid else ' 普通')
+            log('---- [%d/%d] %s ----' % (i, len(rows), label))
+            if not idx or idx not in (lay.get('cells') or {}):
+                log('跳过 %s：标定里没有这个编号' % code)
+                continue
+            # 格子只在进界面时认一次：详情面板一展开，整屏会蒙一层暗色，
+            # 所有模板的分数一起升高（实测 S2/S4 从 0 分涨到 11 分），这时
+            # 重新识别会把「有」看成「没有」。坐标是钉死的，认一次就够。
+            if idx not in cells:
+                log('跳过 %s：进界面时没看到这个按钮（没解锁）' % code)
+                continue
+            ok_open, why = scatter.open_stage(touch, pre, idx, raid, log,
+                                           pos=cells.get(idx))
+            if not ok_open:
+                log('跳过 %s：%s' % (code, why))
+                failed.append({'stage': code, 'why': why})
+                continue
+            touched += 1
+            state['stage'] = code
+            state['nodes'] = {}
+            mark = len(eng.chains)
+            try:
+                eng.append('Copilot', _single_params(row, spec))
+            except Exception as e:                  # noqa: BLE001 参数不对就别硬跑
+                log('MAA 不接受这份作业：%s' % e)
+                failed.append({'stage': code, 'why': str(e)})
+                scatter.back_to_cells(touch, pre, log)
+                continue
+            if not eng.start():
+                log('AsstStart 返回失败')
+                failed.append({'stage': code, 'why': 'AsstStart 返回失败'})
+                scatter.back_to_cells(touch, pre, log)
+                continue
+            left = max(120.0, deadline - time.time())
+            done = eng.wait(timeout=min(1200.0, left))
+            bad = [c for c in eng.chains[mark:] if not c.get('ok')]
+            if not done:
+                log('这一关超时（%d 秒），先停下' % int(min(1200.0, left)))
+                eng.stop()
+                failed.append({'stage': code, 'why': '超时'})
+            elif bad:
+                why = bad[0].get('why') or 'MAA 报任务链失败'
+                log('%s 失败：%s' % (label, why))
+                failed.append({'stage': code, 'why': why})
+            else:
+                log('%s 打完了（单作业模式不判三星，界面停在结算页）' % label)
+                trail.append(code + ('(突袭)' if raid else ''))
+                state.setdefault('results', []).append(
+                    {'stage': code, 'ok': True, 'why': '', 'at': time.time(),
+                     'cid': _cid_of(row.get('filename'))})
+            if not scatter.back_to_cells(touch, pre, log):
+                log('打完没能回到 S 关界面，剩下的关不打了')
+                break
+    finally:
+        eng.close()
+
+    return {'ok': not failed,
+            'tasks': touched,
+            'chains': [],
+            'timed_out': time.time() > deadline,
+            'failed_stage': failed[0]['stage'] if failed else '',
+            'failed_why': failed[0]['why'] if failed else '',
+            'stage_trail': trail,
+            'stages_failed': failed,
+            'swaps': [],
+            'paused': state.get('pause') or '',
+            'pauseDetail': state.get('pause_detail') or '',
+            'trained': {}, 'trainSummary': {},
+            'stageReport': 'trail',
+            'error': ('; '.join('%s：%s' % (x['stage'], x['why']) for x in failed)
+                      if failed else '')}
+
+
 def run_custom(spec, tid=None, timeout=None):
     """直连跑一条 ``Custom`` 任务（小工具 / 牛杂里的那几项）
 
