@@ -5305,6 +5305,24 @@ def check_multi_emu_batch(tmp):
         skills.SKILLS['wakeup'] = ('唤醒', fake('wakeup'))
         skills.SKILLS['claim'] = ('领奖', fake('claim'))
         skills.envcheck.ensure = lambda *x, **k: (True, 'ok')
+        # 多开默认每组一个**独立子进程**（同进程两个 MaaCore 抢管道，见
+        # multiproc 注释）。测试里换成「就地跑」——否则子进程拿不到上面
+        # 这几个假 skill，会真的去连模拟器
+        from core import multiproc
+        old_proc = multiproc.run_group
+        proc_calls = []
+
+        def local_proc(kind, tid_, idx, payload, log, who=''):
+            proc_calls.append((kind, idx, payload.get('group', {}).get('files')))
+            res = {}
+            lk = threading.Lock()
+            steps = [(s[0], s[1] if len(s) > 1 else {})
+                     for s in payload.get('steps') or []]
+            skills._run_group(payload['group'], steps, payload.get('names') or {},
+                              log, res, lk, tid=None)
+            return res, []
+
+        multiproc.run_group = local_proc
         t = None
         try:
             tid = skills.run_batch([a, b, c], [{'skill': 'wakeup'},
@@ -5318,7 +5336,11 @@ def check_multi_emu_batch(tmp):
             skills.SKILLS.clear()
             skills.SKILLS.update(old_skills)
             skills.envcheck.ensure = old_ensure
+            multiproc.run_group = old_proc
         assert t and t['status'] == 'done', (t or {}).get('error')
+        # 两台模拟器 = 两个子进程，每组只带自己那台的号
+        assert len(proc_calls) == 2, proc_calls
+        assert sorted(len(v) for _k, _i, v in proc_calls) == [1, 2], proc_calls
         for f in (a, b, c):
             got = [tag for (who, tag) in seq if who == f]
             assert got == ['wakeup', 'claim'], (f, got)
@@ -5666,6 +5688,62 @@ def check_nav_from_stage_list(tmp):
     assert abs(x - 1388) <= 8 and abs(y - 894) <= 8, (x, y)
 
 
+def check_task_log_isolation(tmp):
+    """右栏日志按账号分栏 + 多开子进程日志前缀（2026-11-22）
+
+    两件用户报的问题都钉在这里，全用合成数据、不碰真机：
+
+      - 「右边日志都消失了」：``tasks.get()`` 把文件句柄带出去，``/api/task``
+        序列化直接 500，前端每 700ms 收到一次失败，右栏只剩一行任务名；
+      - 「日志只在自己的 tab 里」：多开两组的日志 tail 到同一个任务，没有
+        ``[昵称]`` 前缀的行前端只能当公共行，官服 tab 混进 B 服那台进度。
+    """
+    _reset_config(tmp)
+    from core import accounts, multiproc, tasks
+
+    p = '[灰bao#0384]'
+    dec = tasks._decorate
+    assert dec('MaaCore v6.23.0 已加载', p) == p + ' MaaCore v6.23.0 已加载'
+    assert dec('[组 emulator-5556] 开始：MAA -1', p) == p + ' 开始：MAA -1'
+    assert dec('[小卡拉帕鲁灰#6408] 排队（官服）', p) == '[小卡拉帕鲁灰#6408] 排队（官服）'
+    assert dec('[MAA] 事件', p) == '[MAA] 事件'
+    assert dec('裸行', '') == '裸行'
+
+    tid = tasks.create('前缀任务', owners=['a.json'], prefix=p)
+    tasks.log(tid, '模拟器已连接')
+    tasks.log(tid, '[组 emulator-5556] 开始')
+    t = tasks.get(tid)
+    assert t['logs'] == [p + ' 模拟器已连接', p + ' 开始'], t['logs']
+    # /api/task 直接 json.dumps(get()) 的结果：内部字段一律不能出去
+    assert all(not k.startswith('_') for k in t), sorted(t)
+    json.dumps({'ok': True, 'data': t}, ensure_ascii=False)
+    assert t['owners'] == ['a.json']
+    tasks.finish(tid)
+
+    tid2 = tasks.create('全局任务')       # owners 为空 = 所有 tab 可见
+    tasks.finish(tid2)
+    ids_a = [x['id'] for x in tasks.for_owner('a.json')]
+    ids_z = [x['id'] for x in tasks.for_owner('zzz.json')]
+    assert tid in ids_a and tid2 in ids_a, (ids_a, tid, tid2)
+    assert tid2 in ids_z and tid not in ids_z, (ids_z, tid, tid2)
+
+    # 一组一个号 → tag 用昵称；多号组不硬塞（每行本来就有各自前缀）
+    old = accounts.get_account
+    accounts.get_account = lambda f: {'account': {'nickName': '灰bao#0384'}}
+    try:
+        assert multiproc.group_tag({'files': ['x.json']}) == '灰bao#0384'
+    finally:
+        accounts.get_account = old
+    assert multiproc.group_tag({'files': ['a.json', 'b.json']}) == ''
+
+    # 子进程命令 + main.py 入口分支都得在，否则多开会静默退回单进程
+    cmd = multiproc.worker_cmd('x.payload')
+    assert '--skill-worker' in cmd and cmd[-1] == 'x.payload', cmd
+    assert 'python' in cmd[0].lower(), cmd
+    src = open(os.path.join(REPO, 'backend', 'main.py'), encoding='utf-8').read()
+    assert '--skill-worker' in src and 'skillworker' in src
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -5739,6 +5817,8 @@ def main():
                 lambda: check_multi_emu_address(tmp))
         r.check('B54 导航从任意页起步（不盲点终端大卡/提示条定点比对/已在地图不绕路）',
                 lambda: check_nav_from_stage_list(tmp))
+        r.check('B55 右栏日志按账号分栏（序列化不带句柄/前缀补齐/owners 过滤/子进程入口）',
+                lambda: check_task_log_isolation(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

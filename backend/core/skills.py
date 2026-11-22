@@ -38,6 +38,7 @@ from . import accounts
 from . import atomicio
 from . import envcheck
 from . import maaplan
+from . import multiproc
 from . import resources
 from . import settings
 from . import stageplan
@@ -60,18 +61,35 @@ def _addr_kw(file):
 
 
 def _profile_kw(file):
-    """``{'profile': ...}`` —— 让 run_core 按这个账号的档案连模拟器
+    """这个账号跑 MaaCore 要带的两件事：``profile`` / ``clientType``
 
-    不给的话 MaaCore 用的是 MAA 里「当前档案」（``Current``）：多开时八份档案
-    可能全指向同一台，b 服那份却在另一台，不点名就永远连错设备
-    （2026-11-22 用户实测：5556 那组一行日志都没有）。
+    ``profile``：不点名的话 MaaCore 用的是 MAA 里「当前档案」（``Current``），
+    多开时八份档案可能全指向同一台，b 服那份却在另一台，不点名就永远连错
+    设备（2026-11-22 用户实测：5556 那组一行日志都没有）。
+
+    ``clientType``：官服 / b 服是两个**不同包名**的客户端。以前这里只给了
+    profile，StartUp 一律按 ``Official`` 跑——b 服那台模拟器上 MAA 去找官服
+    包/官服登录，直接卡死，用户看到的就是「另一台一点动静都没有」
+    （2026-11-22 用户特别提醒「明日方舟启动分官服和 b 服」）。渠道串来自
+    账号文件的 ``account.channelName``（``bilibili服``），要用
+    :func:`maaplan.client_type_of` 换成 MaaCore 认的 ``Bilibili``。
     """
+    kw = {}
     try:
         from . import acctbind
         p = acctbind.profile_of(file)
     except Exception:
         p = ''
-    return {'profile': p} if p else {}
+    if p:
+        kw['profile'] = p
+    channel = _client_of(file)
+    if channel:
+        try:
+            from . import maaplan
+            kw['clientType'] = maaplan.client_type_of(channel)
+        except Exception:
+            pass
+    return kw
 
 
 def _strict_addr(file):
@@ -79,8 +97,18 @@ def _strict_addr(file):
 
     绑了档案或用户点了名 → 地址就是硬要求，连不上就报错，不能让 adb 自检
     自动换成第一台在线设备（那样两个组会同时戳同一台，另一台一动不动）。
+
+    只看**地址来源**（点名的地址 / 账号绑的档案），不看 ``_profile_kw`` 的
+    整体真值——它现在还带 ``clientType``，拿它判会把「只填了官服/b 服、
+    没绑档案」的号也当成硬指定，单号重开模拟器换了端口就再也连不上。
     """
-    return bool(_addr_of(file) or _profile_kw(file))
+    if _addr_of(file):
+        return True
+    try:
+        from . import acctbind
+        return bool(acctbind.profile_of(file))
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- 工具
@@ -188,9 +216,20 @@ def _account_name_tail(file):
 
 
 def _client_of(file):
+    """账号是官服还是 b 服（``官服`` / ``bilibili服``）
+
+    **渠道名在 ``account`` 段里**（``snapshot['account']['channelName']``），
+    不在顶层——2026-11-22 实测：老写法读顶层拿到空串，b 服账号被判成官服，
+    于是 b 服那台模拟器上 MAA 去启动官服客户端，登录/切号一直失败重试，
+    用户看到的就是「另一台没动静」。顶层两个键留着做旧数据兜底。
+    """
     try:
         snap = accounts.get_account(file)
-        return (snap.get('clientType') or snap.get('channelName') or '').strip()
+        a = snap.get('account') or {}
+        a = a if isinstance(a, dict) else {}
+        return str(snap.get('clientType') or a.get('clientType')
+                   or snap.get('channelName') or a.get('channelName')
+                   or '').strip()
     except Exception:
         return ''
 
@@ -1806,6 +1845,114 @@ def online_devices(maa_dir=None):
         return []
 
 
+def _run_group(g, step_list, names, log, results, lock, tid=None):
+    """在一台模拟器上按顺序跑完 ``g['files']`` 里的号 → 写 ``results``
+
+    模块级函数（原来嵌在 run_batch 里当闭包）：多开时每个**组**要搬到独立
+    子进程里跑，父子两边必须共用同一份实现，否则「单开能跑、多开跑不同步」
+    这类鬼故事永远查不完。
+
+    为什么必须子进程（2026-11-22 真机实测）：同一进程里同时建两个 MaaCore
+    实例，第二个 ``AsstConnect`` 一定失败，asst.log 里是
+
+        CreateOverlappablePipe failed, err 231
+        Call `adb.exe devices` failed
+        Cannot connect: address appears to be serial number but device not found
+
+    err 231 是「所有管道实例都忙」——MaaCore 起 adb 子进程时用命名管道收
+    输出，两个实例撞同一个名字就其中之一直接失败。这跟档案、地址、adb 路径
+    都无关（5556 单独跑一切正常）。所以一台模拟器一个进程，别在进程内并发。
+    """
+    # 这个组里的号都连同一台模拟器：把地址钉在线程上，skill 里的
+    # _conn_of / run_core 都按它连（用户点名覆盖时才有值）
+    if g.get('override'):
+        _ADDR.map = {f: g['address'] for f in g['files']}
+    # 组一开跑就把「连的是谁」写清楚：以前第二组不动时，日志里连它是
+    # 哪份 MAA、哪个档案、哪台设备都查不到
+    log('[组 %s] 开始：MAA %s / 档案 %s / %d 个号%s'
+        % (g.get('address') or '默认模拟器',
+           g.get('dir') or '默认', g.get('profile') or '当前档案',
+           len(g['files']),
+           '（用户点名）' if g.get('override') else ''))
+    for i, f in enumerate(g['files'], 1):
+        nm = ''
+        try:
+            snap = accounts.get_account(f)
+            # 昵称在 account 段里（顶层没有 nickName），以前直接
+            # snap.get('nickName') 拿到 None，日志前缀全是文件名
+            a = snap.get('account') or {}
+            nm = (a.get('nickName') or a.get('alias')
+                  or snap.get('alias') or f)
+        except Exception:
+            nm = f
+        tail = (names.get(f) or names.get(nm)
+                or _account_name_tail(f) or '').strip()
+        pre = '[%s]' % (nm or f)
+
+        def plog(msg, _p=pre):
+            log('%s %s' % (_p, msg))
+
+        plog('=== 第 %d/%d 个号（%s %s）==='
+             % (i, len(g['files']), g['address'] or '默认模拟器',
+                ('切号 ' + tail) if tail else '不切号'))
+        if any(n in _NEEDS_GAME for n, _ in step_list):
+            # 按这个号自己的档案判断模拟器开没开（多开时每份档案
+            # 连的是不同的模拟器，不能一律看全局那份）
+            ok, why = envcheck.ensure(
+                plog, maa_dir=g['dir'],
+                profile=g.get('profile') or None,
+                address=(g['address'] or None) if g.get('override') else None)
+            if not ok:
+                with lock:
+                    results[f] = {'ok': False, 'name': nm,
+                                  'error': '环境没准备好：%s' % why}
+                continue
+        acc_res = []
+        for j, (name, p) in enumerate(step_list, 1):
+            p = dict(p or {})
+            p.setdefault('account', f)
+            if tail:
+                p.setdefault('accountName', tail)
+            plog('---- %d/%d %s ----' % (j, len(step_list),
+                                         SKILLS[name][0]))
+            try:
+                r = SKILLS[name][1](p, plog, tid=tid)
+                acc_res.append({'skill': name, 'ok': True,
+                                'result': _digest(r)})
+            except Exception as e:              # noqa: BLE001
+                plog('这一步没成功：%s: %s' % (type(e).__name__, e))
+                acc_res.append({'skill': name, 'ok': False,
+                                'why': '%s: %s' % (type(e).__name__, e)})
+                # 唤醒失败 / 领奖失败不该拖垮整条链，但打关失败之后的
+                # 领奖、搬商店往往也没意义——继续跑，结果里如实标红
+        with lock:
+            results[f] = {'ok': all(x['ok'] for x in acc_res),
+                          'name': nm, 'steps': acc_res}
+
+
+def _run_group_proc(tid, idx, g, step_list, names, results, lock, log):
+    """把一组账号丢进**独立进程**跑（同进程两个 MaaCore 会抢命名管道）"""
+    got, _rep = multiproc.run_group(
+        'skill', tid, idx,
+        {'group': {'dir': g.get('dir') or '',
+                   'profile': g.get('profile') or '',
+                   'address': g.get('address') or '',
+                   'override': bool(g.get('override')),
+                   'files': list(g.get('files') or [])},
+         'steps': [list(x) for x in step_list],
+         'names': {str(k): v for k, v in (names or {}).items()}},
+        log, who=g.get('address') or '默认模拟器')
+    with lock:
+        for f, v in (got or {}).items():
+            results[f] = v
+    if not got:
+        with lock:
+            for f in g.get('files') or []:
+                results.setdefault(f, {'ok': False, 'name': f,
+                                       'error': '子进程异常（没交回结果）'})
+
+
+
 def run_batch(accounts_list, steps, names=None, emulators=None):
     """按账号跑同一组 skill：**同一模拟器串行，不同模拟器并行**
 
@@ -1867,98 +2014,30 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
         results = {}
         lock = threading.Lock()
 
-        def run_group(g):
-            # 这个组里的号都连同一台模拟器：把地址钉在线程上，skill 里的
-            # _conn_of / run_core 都按它连（用户点名覆盖时才有值）
-            if g.get('override'):
-                _ADDR.map = {f: g['address'] for f in g['files']}
-            # 组一开跑就把「连的是谁」写清楚：以前第二组不动时，日志里连它是
-            # 哪份 MAA、哪个档案、哪台设备都查不到
-            log('[组 %s] 开始：MAA %s / 档案 %s / %d 个号%s'
-                % (g.get('address') or '默认模拟器',
-                   g.get('dir') or '默认', g.get('profile') or '当前档案',
-                   len(g['files']),
-                   '（用户点名）' if g.get('override') else ''))
-            for i, f in enumerate(g['files'], 1):
-                nm = ''
-                try:
-                    snap = accounts.get_account(f)
-                    # 昵称在 account 段里（顶层没有 nickName），以前直接
-                    # snap.get('nickName') 拿到 None，日志前缀全是文件名
-                    a = snap.get('account') or {}
-                    nm = (a.get('nickName') or a.get('alias')
-                          or snap.get('alias') or f)
-                except Exception:
-                    nm = f
-                tail = (names.get(f) or names.get(nm)
-                        or _account_name_tail(f) or '').strip()
-                pre = '[%s]' % (nm or f)
-
-                def plog(msg, _p=pre):
-                    log('%s %s' % (_p, msg))
-
-                plog('=== 第 %d/%d 个号（%s %s）==='
-                     % (i, len(g['files']), g['address'] or '默认模拟器',
-                        ('切号 ' + tail) if tail else '不切号'))
-                if any(n in _NEEDS_GAME for n, _ in step_list):
-                    # 按这个号自己的档案判断模拟器开没开（多开时每份档案
-                    # 连的是不同的模拟器，不能一律看全局那份）
-                    ok, why = envcheck.ensure(
-                        plog, maa_dir=g['dir'],
-                        profile=g.get('profile') or None,
-                        address=(g['address'] or None) if g.get('override') else None)
-                    if not ok:
-                        with lock:
-                            results[f] = {'ok': False, 'name': nm,
-                                          'error': '环境没准备好：%s' % why}
-                        continue
-                acc_res = []
-                for j, (name, p) in enumerate(step_list, 1):
-                    p = dict(p or {})
-                    p.setdefault('account', f)
-                    if tail:
-                        p.setdefault('accountName', tail)
-                    plog('---- %d/%d %s ----' % (j, len(step_list),
-                                                 SKILLS[name][0]))
-                    try:
-                        r = SKILLS[name][1](p, plog, tid=tid2)
-                        acc_res.append({'skill': name, 'ok': True,
-                                        'result': _digest(r)})
-                    except Exception as e:              # noqa: BLE001
-                        plog('这一步没成功：%s: %s' % (type(e).__name__, e))
-                        acc_res.append({'skill': name, 'ok': False,
-                                        'why': '%s: %s' % (type(e).__name__, e)})
-                        # 唤醒失败 / 领奖失败不该拖垮整条链，但打关失败之后的
-                        # 领奖、搬商店往往也没意义——继续跑，结果里如实标红
-                with lock:
-                    results[f] = {'ok': all(x['ok'] for x in acc_res),
-                                  'name': nm, 'steps': acc_res}
-
-        def safe_group(g):
-            """线程里抛的异常必须落进日志（daemon 线程静默死掉就是「没动静」）"""
-            who = g.get('address') or '默认模拟器'
-            try:
-                run_group(g)
-            except Exception as e:                  # noqa: BLE001
-                log('[%s] 这一组出错，后面的号没跑：%s: %s'
-                    % (who, type(e).__name__, e))
-                with lock:
-                    for f in g.get('files') or []:
-                        results.setdefault(f, {'ok': False, 'name': f,
-                                               'error': '%s: %s'
-                                               % (type(e).__name__, e)})
-
         if len(groups) == 1:
             g = next(iter(groups.values()))
             log('只有一组（%s）：%d 个号排队切号'
                 % (g.get('address') or '默认模拟器', len(g['files'])))
-            safe_group(g)
+            try:
+                _run_group(g, step_list, names, log, results, lock, tid=tid2)
+            except Exception as e:                  # noqa: BLE001
+                log('[%s] 这一组出错，后面的号没跑：%s: %s'
+                    % (g.get('address') or '默认模拟器', type(e).__name__, e))
+                for f in g.get('files') or []:
+                    results.setdefault(f, {'ok': False, 'name': f,
+                                           'error': '%s: %s'
+                                           % (type(e).__name__, e)})
         else:
-            log('分 %d 组并行：%s' % (len(groups), plan))
+            # 多开：每组一个**独立进程**。同进程里两个 MaaCore 会抢命名管道
+            # （asst.log: CreateOverlappablePipe failed, err 231），第二台
+            # 永远连不上——这就是「说好并行，另一台一动不动」的真因。
+            log('分 %d 组并行（每组一个独立进程）：%s' % (len(groups), plan))
             ths = []
-            for g in groups.values():
-                th = threading.Thread(target=safe_group, args=(g,), daemon=True,
-                                      name='batch-g')
+            for i, g in enumerate(groups.values(), 1):
+                th = threading.Thread(
+                    target=_run_group_proc,
+                    args=(tid2, i, g, step_list, names, results, lock, log),
+                    daemon=True, name='batch-g%d' % i)
                 th.start()
                 ths.append(th)
             for th in ths:
@@ -1980,7 +2059,7 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
                             'steps': v.get('steps')} for f, v in results.items()]}
 
     return tasks.create('批量任务（%d 个账号 / %d 台模拟器）'
-                        % (len(files), len(groups)), job)
+                        % (len(files), len(groups)), job, owners=files)
 
 
 def _digest(r):
@@ -2059,5 +2138,12 @@ def run_skill(name, params=None):
                 raise RuntimeError('环境没准备好：%s' % why)
         return fn(params or {}, log, tid=tid)
 
-    tid = tasks.create('skill:' + name, job)
+    # 日志按账号分栏：任务要记住自己属于哪个号。没指定账号时按「左侧当前
+    # 那个号」算（_account_file('') 就是干这个的），算不出来就当全局任务。
+    try:
+        owner = _account_file((params or {}).get('account') or '')
+    except Exception:
+        owner = ''
+    tid = tasks.create('skill:' + name, job,
+                       owners=[owner] if owner else None)
     return tid

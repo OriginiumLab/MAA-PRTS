@@ -987,7 +987,8 @@ def _tool_apply_plan(args, session=None):
     if blocked:
         return blocked
     tid = tasks.create('多账号挂机（%d 个账号）' % len(
-        [a for a in plan['accounts'] if a.get('ops')]))
+        [a for a in plan['accounts'] if a.get('ops')]),
+        owners=[a.get('file') for a in plan['accounts'] if a.get('file')])
     def go():
         try:
             res = multiacct.apply(plan, tid)
@@ -1345,7 +1346,8 @@ def _start_build(payload):
             out['failed'] = failed
         return out
 
-    tid = tasks.create('挂机（%d 个账号）' % len(rows))
+    tid = tasks.create('挂机（%d 个账号）' % len(rows),
+                       owners=[r.get('file') for r in rows if r.get('file')])
 
     def go():
         try:
@@ -1894,8 +1896,15 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
     然后 `run_steps(..., emulators={"灰bao#0384 bilibili服": "emulator-5556"})`
   - 不问也能跑，但会串行排队，用户看到的还是「只有一台在动」
   - 传了 emulators，程序会**严格**连那台：连不上就报错，不会偷偷换回 5554
-- 每组都跑在自己的线程里，日志每行带 `[账号名]`；完整日志另存在
-  `debug/tasks/<任务号>.log`，出问题让用户把这个文件发你
+- 每组跑在**自己的进程**里（不是线程）：同一个进程里两个 MaaCore 会抢
+  命名管道，第二台永远连不上（asst.log 里 `CreateOverlappablePipe failed,
+  err 231`）——以前「说好并行，另一台一动不动」就是这个。现在多组=多进程，
+  两台会真的同时动
+- **官服 / b 服是两个不同的包**：账号的渠道自动判定（b 服走
+  `com.hypergryph.arknights.bilibili` + MaaCore 的 `Bilibili`），你**不用**
+  也别自己切客户端；同一个模拟器上装了两个包时，按账号自己的渠道来
+- 日志每行带 `[账号名]`，右栏按账号分栏（切到哪个号只看那个号的日志）；
+  完整日志另存在 `debug/tasks/<任务号>.log`，出问题让用户把这个文件发你
 
 **什么时候用 skill 而不是 build_run**：
 - 用户要「从唤醒开始，剧情关也帮我过，一口气打完」→ skill_weekly。

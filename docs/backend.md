@@ -30,7 +30,7 @@
 | `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.ps1 替换 |
 | `core/maa.py` | MAA 进程控制、`gui.new.json` 读写、作业文件下载 |
 | `core/envcheck.py` | 开跑前的环境闸：模拟器开着没有、adb 通不通。路径优先从 MAA 的 `gui.new.json` 抄（`Config` 类型 / `AdbPath` / `Extras.<类型>.EmulatorPath` / `InstanceIndex`），再退到 `settings.emulatorPath` 和 adb 反推。没启动就替用户启动（`settings.emulatorAutoStart`，默认开），起来才放行。**不进 `SKILLS`**，所以 `/api/skill/list` 和助手工具表里都看不到它——它是每个任务的前置闸，`skills.run_skill` 起任务时自动调一次，正常时零日志 |
-| `core/tasks.py` | 内存任务表：状态、日志、结果，供前端轮询 |
+| `core/tasks.py` | 内存任务表：状态、日志、结果，供前端轮询。`owners` 记任务属于哪些账号（右栏按账号分栏用），`prefix` 让多开子进程的每行日志自动带 `[昵称]`；`_public()` 只吐可序列化字段——文件句柄绝不能出接口（2026-11-22「右边日志都消失了」就是它漏出去导致 `/api/task` 500） |
 | `core/progress.py` | 森空岛 `player/info` → 关卡进度：主线推到哪（含剧情关落点）、后续关卡、活动 zone 已打/总数、剿灭最高击杀、日常周常。只做 zone 级余量判断，不拿计数切关卡列表（两边口径含剧情关/突袭关，会错位） |
 | `core/asstlog.py` | MAA 日志观测：`debug/asst.log` 的回调 JSON + `debug/gui.log` 的 `Start/Completed Task Chain` → 结构化事件流；增量读、轮转识别、状态推导（idle/running/stalled/failed/done）、`failures()` 还原「跑过哪几关、哪几关没跑完」 |
 | `core/maalog.py` | 直连跑机时的 MAA 日志桥：`maalog.Tap` 从 `asst.log` **末尾**开始增量读（`Tail.seek_end()`，不重放历史），只把 `[ERR]/[WRN]` 里能解释问题的行翻成人话（认不出关卡名 / 干员不存在 / 参数不合法），噪行丢弃、同句 20 秒去重。回调 JSON 行不读——那部分由 `maacore` 回调负责，避免同一件事写两遍 |
@@ -111,7 +111,8 @@ main()
 | POST | `/api/maa/apply` | 写入作业集：关 MAA → 备份 → 下载 → 写 TaskList → 重启。返回 `taskId` |
 | POST | `/api/maa/clear` | 清空某配置的 `Copilot.TaskList`。**预留，无界面入口** |
 | GET | `/api/maa/tasklist?profile=` | 读 MAA 某配置当前的 `TaskList`。**预留，无界面入口** |
-| GET | `/api/task?id=&since=` | 后台任务状态与增量日志（`since` 是日志游标） |
+| GET | `/api/task?id=&since=` | 后台任务状态与增量日志（`since` 是日志游标），带 `owners`（属于哪些账号） |
+| GET | `/api/tasks?file=&limit=` | 某个账号相关的任务（新的在前，含完整日志），助手右栏切账号时回填用；任务 `owners` 为空 = 全局，所有 tab 可见 |
 | GET | `/api/gacha?file=` | 抽卡统计视图：读本地缓存算汇总（总抽数/星级/出率/保底），**不发网络请求** |
 | POST | `/api/gacha/sync` | 从森空岛拉抽卡记录并并入缓存（增量，按 `分类｜池｜干员｜时间戳｜pos` 去重）。返回 `taskId` |
 | POST | `/api/signin/run` | 森空岛签到：`{file}` 为空 = 全部账号（方舟 + 终末地），传账号文件 = 只签这一个。返回 `taskId`（日志在前端面板里刷） |
@@ -650,9 +651,85 @@ key = (os.path.normcase(os.path.abspath(d or '.')), str(conn.get('address') or '
   （雷电 `emulator-5554` / MuMu `127.0.0.1:16384` 之类）；
 - 同一个键 = 同一份 MAA + 同一台模拟器 → **组内串行**（两条 adb 同时戳同一台
   会表现成「点了没反应」）；
-- 不同键 → 每组一个线程**并行**，这就是「多开」。
+- 不同键 → 每组一个**独立进程并行**，这就是「多开」。
 
-`run_plan` 只在单组时保持原来的同步行为，多组才开线程，日志按组汇总。
+`run_plan` 只在单组时保持原来的同步行为，多组才开线程（每组再起子进程），
+日志按组汇总。
+
+**②b 多开必须「一进程一台模拟器」（2026-11-22 真机定位，这是「另一台不动」的
+最后一层根因）**
+
+分组、档案、地址全对了，第二台还是不动。真机对着两份 `debug/asst.log` 才看清：
+
+```
+[ERR] CreateOverlappablePipe failed, err 231
+[WRN] Call ` D:\...\adb.exe devices ` failed
+[INF] ConnectionInfo ... "address":"emulator-5556",
+      "why":"Cannot connect: address appears to be serial number but device not found"
+```
+
+`err 231` = Windows「所有管道实例都忙」。MaaCore 调 adb 时用命名管道收输出，
+**同一个进程里两个 MaaCore 实例撞同一个管道名**，后到的那次直接失败，于是
+MaaCore 认为设备不存在。跟档案、地址、adb 路径都无关——5556 单独跑（只起一个
+Engine）一切正常，两台同时跑就只有 5554 能动。
+
+所以多开只能一个进程一台模拟器：
+
+- `backend/core/multiproc.py`：写 payload → `MAA-PRTS --skill-worker <payload>`
+  （源码模式跑 `python backend/main.py --skill-worker ...`）→ tail 子进程的
+  日志文件转发进任务日志 → 读回 `{results, report}`；
+- `backend/core/skillworker.py`：子进程入口，`kind` 分 `skill`（run_batch 一组）
+  和 `plan`（run_plan 一组），日志落到父进程指定的
+  `debug/tasks/<tid>-g<i>.log`，任务结束删 payload / 结果，日志留着排障；
+- `skills.run_batch` / `maaplan.run_plan` 在 `len(groups) > 1` 时全部走子进程；
+  单组仍就地跑（不起进程，省 1~2 秒，日志即时）。
+
+冒烟 B52 里 `multiproc.run_group` 被换成「就地执行」——否则测试里的假 skill
+不会出现在子进程里，会真的去连模拟器。
+
+**②c 官服 / b 服是两个包（2026-11-22）**
+
+b 服账号的渠道在 `snapshot['account']['channelName']` 里，值是 **`bilibili服`**
+（不是 `bilibili`）。以前两处都读错：
+
+- `skills._client_of()` 读的是**顶层** `channelName`（永远空）→ 一律当官服；
+- `stagenav.game_package()` 只认 `('bilibili','b','b服')`，`bilibili服` 两边
+  都不等 → 返回官服包名。
+
+结果 b 服那台模拟器上 MAA 去启动/查找**官服**客户端，登录失败后进入
+「game-restart loop」，表现还是「另一台没动静」。现在：
+
+- `_client_of` 先读 `account` 段，再退回顶层；
+- `game_package` 按「含 bili / b服」判，b 服走
+  `com.hypergryph.arknights.bilibili`；
+- `_profile_kw()` 顺带带 `clientType`（`maaplan.client_type_of('bilibili服')`
+  → `Bilibili`），所有 `run_core` 的 StartUp 都按账号自己的渠道跑。
+
+**②d 右栏日志按账号分栏（2026-11-22）**
+
+用户两条反馈一起处理：「右边日志都消失了」+「每个账号的日志只在自己的
+tab 里」。
+
+- **日志消失的根因在序列化**：给任务加日志落盘时把打开的文件句柄塞进了
+  任务 dict，`api_task` 直接 `json.dumps(tasks.get(...))` →
+  `TypeError: Object of type TextIOWrapper is not JSON serializable` → 接口
+  500 → 前端每 700ms 收一次失败，右栏只剩一行任务名。现在内部字段一律
+  下划线开头（`_fh` / `_prefix`），`_public()` 白名单只吐 9 个可序列化字段。
+  所有创建点都补了 `owners`：`run_batch` / `run_skill` / `run_plan` /
+  `multiacct` / `/api/multi/run`，单账号任务只挂在那个号名下。
+- **分栏靠「任务 owners + 行前缀」两级**：`tasks.for_owner(file)` 先挑出这个号
+  相关的任务（含 `owners` 为空的全局任务），前端 `chatSideSwitch()` 切号时
+  拉 `/api/tasks?file=` 回填；`paintSideLog()` 再逐行按 `sideOwnerOf()` 过滤
+  ——`[昵称] xxx` 归那个号、`[组 xxx]` 和没有前缀的汇总行是公共行、
+  匹配不上的前缀跟着「发起这个任务的号」走。单账号任务整块跳过别的 tab，
+  连前端合成的「✓ 完成」也不会留下一个孤零零的任务标题。
+- **多开两组的日志会被 tail 到同一个任务里交错**，所以子进程写日志时就要
+  带前缀。`tasks.create(prefix='[昵称]')` → `tasks.log()` 里的 `_decorate()`
+  统一补：无前缀行补上、`[组 emulator-5556]` 改写成 `[昵称]`、已有
+  `[昵称]` / `[MAA]` 原样。挂在 `tasks` 这一层而不是包装 worker 的 `log`
+  函数——`maaplan.run_core` 是**直接** `tasks.log_factory(tid)` 写「MaaCore
+  已加载 / 模拟器已连接」的，包装拦不到。一组多号时不硬塞（每行本来就有
+  各自的前缀）。真机回来两组日志每行都带 `[昵称]`，官服 tab 看不到 B 服。
 
 **③ `skills.run_batch(accounts, steps)`：一条龙**
 
@@ -670,8 +747,9 @@ key = (os.path.normcase(os.path.abspath(d or '.')), str(conn.get('address') or '
 - 日志前缀 `[昵称]`（昵称取 `snap['account']['nickName']`，不是文件名——
   第一版写错了，日志里全是 `.json`）。
 - 外层由 `tasks.create('批量任务（N 个账号 / M 台模拟器）')` 挂成一条任务，
-  前端右侧进度栏只有一个进度条。每组线程包了 try/except，崩了往日志写
-  「这一组出错」——daemon 线程静默死掉，用户看到的就是「另一台没动静」。
+  前端右侧进度栏只有一个进度条。多组时每组一个**独立进程**（见 ②b），
+  父进程那条线程只负责 tail 日志、收结果，包了 try/except，崩了往日志写
+  「这一组出错」——组线程静默死掉，用户看到的就是「另一台没动静」。
 - 每个任务的日志**同时落盘** `debug/tasks/<tid>.log`（`tasks.py`）：以前只在
   内存里，窗口一关现场就没了，用户报「只有一台在跑」时连哪组没启动都查不出。
 

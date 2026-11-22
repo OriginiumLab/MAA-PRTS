@@ -203,6 +203,10 @@ def build():
         # CLI 入口是 main() 里的分支（`MAA-PRTS.exe --cli ...`），显式声明
         # 免得哪天挪成动态导入后被漏掉
         '--hidden-import', 'cli',
+        # 多开子进程入口同样是 main() 分支里的函数内 import；漏掉的表现是
+        # 打包版多开时第二台起不来，日志里只剩「子进程没交回结果」。
+        '--hidden-import', 'core.skillworker',
+        '--hidden-import', 'core.multiproc',
         # 活动关导航要判断"当前停在哪一页"（stagenav.probe），靠 PIL 解 adb
         # 截出来的 PNG。它是函数内 import，构建机的 Pillow 又可能只被拿去
         # 画图标（icon 已存在时根本不 import），不显式声明就会漏进包——

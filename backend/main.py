@@ -404,6 +404,17 @@ def main():
         i = sys.argv.index('--cli')
         return cli.main(sys.argv[i + 1:])
 
+    # 多开子进程入口（skills.run_batch 多组时每组起一个）：同进程两个 MaaCore
+    # 会抢命名管道，只能一进程一台模拟器，详见 core/skillworker.py
+    if '--skill-worker' in sys.argv:
+        from core import skillworker
+        i = sys.argv.index('--skill-worker')
+        payload = sys.argv[i + 1] if i + 1 < len(sys.argv) else ''
+        if not payload:
+            print('[error] --skill-worker 需要 payload 文件路径')
+            return 2
+        return skillworker.main(payload)
+
     if not os.path.isdir(WEB):
         print('[error] frontend dir not found: %s' % WEB)
         print('        Resources are loaded relative to the working directory --')

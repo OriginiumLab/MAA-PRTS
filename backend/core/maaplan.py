@@ -47,7 +47,7 @@ import re
 import threading
 import time
 
-from . import acctname, maa, maalog, settings, tasks
+from . import acctname, maa, maalog, multiproc, settings, tasks
 
 PROFILE_PREFIX = 'PRTS-'
 _SAFE = re.compile(r'[\\/:*?"<>|]')
@@ -1957,13 +1957,29 @@ def run_plan(rows, spec_base, tid=None):
         with _GROUPS_LOCK:
             report.extend(got)
 
+    def run_one_proc(idx, g):
+        """多开：这台模拟器交给独立进程（同进程两个 MaaCore 会抢命名管道，
+        见 multiproc 的模块注释——这是「说好并行、另一台不动」的真因）"""
+        _res, got = multiproc.run_group(
+            'plan', tid, idx, {'group': g, 'spec': spec_base}, log,
+            who=g.get('address') or '默认模拟器')
+        with _GROUPS_LOCK:
+            report.extend(got or [])
+        if not got:
+            with _GROUPS_LOCK:
+                for r in (g.get('rows') or []):
+                    report.append({'file': r.get('file'), 'name': r.get('name'),
+                                   'ok': False,
+                                   'error': '子进程异常（没交回结果）'})
+
     if len(groups) <= 1:
         for _, g in groups:
             run_one(g)
     else:
+        log('（每个模拟器一个独立进程）')
         ths = []
-        for _, g in groups:
-            th = threading.Thread(target=run_one, args=(g,), daemon=True,
+        for i, (_k, g) in enumerate(groups, 1):
+            th = threading.Thread(target=run_one_proc, args=(i, g), daemon=True,
                                   name='plan-%s' % (g['address'] or 'emu'))
             th.start()
             ths.append(th)

@@ -335,10 +335,16 @@ def game_package(client=None):
 
     ``pidof`` / ``am start`` 都要包名；B 服用户给官服包名会「进程永远不在」，
     启动检测全部落空。
+
+    渠道串来自账号文件的 ``account.channelName``，实际取值是 **``bilibili服``**
+    （不是 ``bilibili``）——2026-11-22 实测：老写法只认 ``('bilibili','b','b服')``，
+    「bilibili服」两边都不等，被判成官服，b 服那台模拟器上找官服包找不到，
+    表现正是「另一个模拟器一点动静都没有」。所以这里按「含 bili / b服」判。
     """
-    return ('com.hypergryph.arknights.bilibili'
-            if str(client or '').lower() in ('bilibili', 'b', 'b服')
-            else 'com.hypergryph.arknights')
+    c = str(client or '').strip().lower()
+    if 'bili' in c or c in ('b', 'b服') or 'b服' in c:
+        return 'com.hypergryph.arknights.bilibili'
+    return 'com.hypergryph.arknights'
 
 
 # ---------------------------------------------------------------- 触屏通道

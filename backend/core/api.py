@@ -663,6 +663,17 @@ def api_task(q, _body):
     return t
 
 
+def api_tasks(q, _body):
+    """某个账号的相关任务（新的在前，带完整日志）
+
+    助手右栏的日志按账号分栏：切到哪个号，就把这个号的任务日志整块摆出来
+    （2026-11-22 用户要求「日志随账号切换」）。任务本身挂在后台线程上跑，
+    切号不影响它。
+    """
+    return {'list': tasks.for_owner(q.get('file') or '',
+                                    int(q.get('limit') or 8))}
+
+
 # ---------------------------------------------------------------- 观测（M2/M3）
 def api_watch_status(q, _body):
     """MAA 现在跑到哪了。没开监控也能给个实时读数（前端一打开就要显示）"""
@@ -724,7 +735,8 @@ def api_multi_apply(_q, body):
         raise ValueError('方案是空的（没有可执行的作业）')
     d = _maa_dir_any(body.get('file'))
     plan_data['maaDir'] = d
-    tid = tasks.create('多账号挂机（%d 个账号）' % len(rows))
+    tid = tasks.create('多账号挂机（%d 个账号）' % len(rows),
+                       owners=[a.get('file') for a in rows if a.get('file')])
     start = body.get('start', True)
     tl = plan_data.get('tasks') or (
         ['startup', 'copilot', 'mall', 'award'] if start else ['startup'])
@@ -925,6 +937,7 @@ ROUTES = {
     '/api/maa/clear': api_maa_clear,
     '/api/maa/tasklist': api_maa_tasklist,
     '/api/task': api_task,
+    '/api/tasks': api_tasks,
     '/api/export': api_export,
     '/api/paradox/plan': api_paradox_plan,
     '/api/paradox/pick': api_paradox_pick,

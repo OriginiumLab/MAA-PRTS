@@ -69,7 +69,7 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 | `openOnboarding()` / `openAddAccount()` | 上面的薄包装（引导多一个「稍后设置」，成功后把目录存为全局默认） |
 | `openSettings()` | 设置弹窗（助手只留一行状态 + 「配置」按钮，参数在二级弹窗里） |
 | `openAgentSettings(onSaved)` | 助手连接参数二级弹窗：Base URL / 模型名 / API Key / 免确认开关。保存后回刷状态并通知调用方（设置弹窗更新那行提示） |
-| `pollTask(tid, root, sel)` | 任务日志轮询（同步账号、写入 MAA、同步抽卡、签到、助手触发的后台任务共用）。日志容器默认 `#task-log`，签到面板两块日志各有 id，用 `sel` 指过去。承载日志的弹窗被关掉（`root.isConnected === false`）就停下——任务本身在后台跑，不需要前端继续问 |
+| `pollTask(tid, root, sel, onNew)` | 任务日志轮询（同步账号、写入 MAA、同步抽卡、签到、助手触发的后台任务共用）。日志容器默认 `#task-log`，签到面板两块日志各有 id，用 `sel` 指过去；第 4 参 `onNew(lines, kind, owners)` 给右栏分栏用（不传就只写弹窗）。承载日志的弹窗被关掉（`root.isConnected === false`）就停下——任务本身在后台跑，不需要前端继续问 |
 | `setModule(mod)` | 模块菜单切换（作业获取 / 助手 / 抽卡统计 / 森空岛签到），同时决定右栏作业集要不要收起来 |
 | `applyModuleAvailability()` | 按当前账号的游戏决定 tab 可见性：终末地账号**只留助手与抽卡统计**（隐藏「作业获取」和「森空岛签到」）并自动切过去；切回明日方舟时自动回作业获取（手动点过的模块不会被抢） |
 | `renderGacha()` / `paintGacha()` / `paintGachaBody()` | 抽卡统计面板。终末地按「角色寻访 / 武器申领」两个 tab 分开（`S.gachaTab`），一个 tab 一套完整面板；两个游戏版式一致：按卡池 → 星级分布 → 最近记录。按卡池是一池一张卡片（按最近抽卡时间倒序，最新的在最上面），池子下面直接挂这个池出的六星（最多 8 个：名字 + 第几抽 + 时间 + new） |
@@ -340,6 +340,16 @@ MAA 自己重开是个 bug。
 `#mod-chat` 分两栏：`.chat-main`（左，聊天占大头）+ `.chat-side`（右 300px，执行日志）。
 tool / tool_result 事件不再进聊天流，全部落到右栏 `#chat-side-log`（时间顺序、
 自动跟随滚动、带「看进度」按钮）；reset / 清空按钮会把右栏一起清掉。
+
+**右栏按账号分栏（2026-11-22 用户要求「日志随账号 tab 变」）**：`CHAT.side`
+里按 taskId 存全部行（只存原文，归属渲染时现算，避免切号回填那一刻
+`S.accounts` 还没到、把行全记到发起号头上）。`chatSideSwitch(file)` 在
+`selectAccount` / `enterChat` 里调：先重画，再拉 `/api/tasks?file=` 把这个号
+以前跑完的任务补进来。`paintSideLog()` 两级过滤——任务的 `owners` 不含当前
+号就整块跳过，行再按 `sideOwnerOf()` 判（`[昵称]` → 那个号、`[组 …]` 与无前缀
+汇总行 → 公共、认不出的前缀 → 跟着发起号）。「✓ 完成」这类前端合成行显式记
+归属，否则会串成别的 tab 里一个孤零零的勾。`clearSideLog()` 只清当前账号
+看得见的行，别的号留着。
 
 markdown 渲染：`mdToHtml(src)`（app.js）——整篇先 `esc()` 再按行解析，无标签注入。
 支持代码块、行内代码、标题、引用、有序/无序列表、粗体、斜体、删除线、链接、表格、
