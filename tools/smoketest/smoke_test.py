@@ -4151,6 +4151,7 @@ def check_battle_retry(tmp):
     ② 作业翻车时日志明确「✘ X 翻车：原因」，能看出是哪一关
     ③ 失败后换下一份作业，**从卡住的那关往后重挂**（前面的关不重打）
     ④ skill_sweep 的分段顺序：普通关 → EX 普通 → EX 突袭 → S 关
+    ⑤ S 段只打普通（突袭没奖励），要突袭得显式 s_raid=True
     """
     _reset_config(tmp)
     from core import copilot, maaplan, resources, skills
@@ -4295,6 +4296,16 @@ def check_battle_retry(tmp):
         assert [s['name'] for s in segs2] == ['普通关', 'EX 关', 'S 关'], segs2
         segs3, _ = skills._sweep_segments('SV', lambda *_: None, tiers=['ex'])
         assert [s['name'] for s in segs3] == ['EX 关·普通', 'EX 关·突袭'], segs3
+        # ⑤ S 关突袭没奖励（用户 2026-11-23「太变态了，刷那个没有奖励」）：
+        #    raid='raid' 只把 EX 排成突袭，S 段仍得是普通；要 S 突袭必须
+        #    显式 s_raid=True
+        segs4, _ = skills._sweep_segments('SV', lambda *_: None, raid='raid')
+        assert [(s['name'], s['variant']) for s in segs4] == [
+            ('普通关', 'normal'), ('EX 关·突袭', 'raid'),
+            ('S 关', 'normal')], segs4
+        segs5, _ = skills._sweep_segments('SV', lambda *_: None, raid='raid',
+                                          s_raid=True)
+        assert [s['variant'] for s in segs5] == ['normal', 'raid', 'raid'], segs5
     finally:
         resources.resolve = old_res
 

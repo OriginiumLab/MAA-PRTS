@@ -155,7 +155,9 @@ MaaCore 拿到 `is_raid=true` 会自己点 `ChangeToRaidDifficulty` 切难度，
   绝不出现已成功的 `SV-EX-1`；返回值 `mark` 非 None
 - `_sweep_segments`：`['SV-1','SV-2','SV-EX-1','SV-S-1']` → 段名
   `普通关 / EX 关·普通 / EX 关·突袭 / S 关`，variant `normal/normal/raid/normal`；
-  `raid='normal'` 塌成三段；`tiers=['ex']` 只出 EX 两段；剧情关（ST）不进计划
+  `raid='normal'` 塌成三段；`tiers=['ex']` 只出 EX 两段；剧情关（ST）不进计划；
+  **`raid='raid'` 时 S 段仍是 normal**（S 突袭没奖励），要突袭得显式
+  `s_raid=True` 才会变 `raid`
 
 ### B44 当期活动导航（2026-11-19）
 

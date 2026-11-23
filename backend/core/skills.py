@@ -1787,7 +1787,7 @@ _SWEEP_TIER_CN = {'base': '普通关', 'ex': 'EX 关', 's': 'S 关',
                   'mo': 'MO 关', 'f': 'F 关'}
 
 
-def _sweep_segments(keyword, log, tiers=None, raid='both'):
+def _sweep_segments(keyword, log, tiers=None, raid='both', s_raid=False):
     """活动 → 分段计划：普通关 / EX 普通 / EX 突袭 / S 关 …
 
     为什么要分段（用户 2026-11-19 需求 4：「挂完普通导航到突袭，再挂突袭的
@@ -1795,6 +1795,10 @@ def _sweep_segments(keyword, log, tiers=None, raid='both'):
     MAA 的 Copilot 只认**当前分区**上的关卡名，中间不重新导航就会「找不到
     关卡」（见 ``_run_fight_batch`` 的注释）。同一段内换难度（普通 ↔ 突袭）
     不用重导航——MaaCore 拿到 ``is_raid=true`` 自己点「切换突袭难度」。
+
+    ``s_raid`` 默认关：**S 关突袭没有奖励**（用户 2026-11-23：「太变态了，
+    刷那个没有奖励」），以前 raid='raid' 会把 S 段一起排成突袭，等于白烧
+    理智。要 S 突袭必须显式传 s_raid=True。
     """
     from . import resources
     res = resources.resolve(keyword)
@@ -1819,8 +1823,9 @@ def _sweep_segments(keyword, log, tiers=None, raid='both'):
             out.append({'name': label + '·突袭', 'codes': codes,
                         'nav': codes[0], 'variant': 'raid'})
         else:
-            # 险地（15+ 章 #s）在 MaaCore 里就是 is_raid=true
-            variant = 'raid' if (k == 's' and raid == 'raid') else 'normal'
+            # 险地（15+ 章 #s）在 MaaCore 里就是 is_raid=true；活动 S 关的突袭
+            # 没奖励，只有显式 s_raid=True 才排
+            variant = 'raid' if (k == 's' and s_raid) else 'normal'
             out.append({'name': label, 'codes': codes, 'nav': codes[0],
                         'variant': variant})
     return out, (res.get('title') or keyword)
@@ -1840,6 +1845,7 @@ def skill_sweep(params, log, tid=None):
 
     段落可以用 ``tiers`` 挑（base / ex / s / mo / f），``raid`` 控制 EX 段：
     ``both``（默认，普通 + 突袭）/ ``raid``（只突袭）/ ``normal``（只普通）。
+    **S 段永远是普通**——活动 S 突袭没有奖励，要排得显式传 ``sRaid=true``。
     """
     raw = (params.get('stage') or params.get('keyword') or '').strip()
     if not raw:
@@ -1851,7 +1857,8 @@ def skill_sweep(params, log, tid=None):
         tiers = [x.strip() for x in tiers.replace('，', ',').split(',')
                  if x.strip()]
     segs, title = _sweep_segments(raw, log, tiers=tiers,
-                                  raid=str(params.get('raid') or 'both'))
+                                  raid=str(params.get('raid') or 'both'),
+                                  s_raid=bool(params.get('sRaid')))
     if not segs:
         raise ValueError('「%s」里没有可挂的关卡' % title)
     log('扫图计划（%s）：%d 段' % (title, len(segs)))
