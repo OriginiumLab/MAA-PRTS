@@ -1692,6 +1692,23 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
         # 每轮先补一发「鼠标抬起」：注入被打断会让按键卡在按下状态，之后
         # 所有 tap 全被吃掉（2026-11-17 真机踩过，keyevent 却好使，极具迷惑性）
         touch.heal()
+        # 「是否确认退出游戏？」兜底：ESC 按多了就会弹它，这时候再按一下就
+        # 真的退出游戏了（2026-11-23 用户实测：S 关入口没认出来，一路 ESC 到
+        # 这一步，游戏被关掉，整轮挂机白跑）。认到就点左边的 ✕ 取消——这个框
+        # 只在主界面弹，取消完就在家里，下一轮 really_home() 会认出来。
+        try:
+            from . import pages as _pages
+            _ex = _pages.exit_confirm_bytes(touch.shot())
+        except Exception:                       # noqa: BLE001 认不出来别拖垮导航
+            _ex = None
+        if _ex:
+            log('弹了「是否确认退出游戏？」，点左边的 ✕ 取消'
+                '（再按返回/ESC 就把游戏关了）')
+            touch.tap_px(*_ex)
+            time.sleep(STEP_DELAY)
+            # 这个框只在主界面弹：取消掉就当家了，别再补返回/ESC 把它弹回来
+            home = True
+            break
         # 剧情页要**最优先**处理：明亮 CG 连 at_home 都能骗过，不先排掉的话
         # 后面的返回键 / ESC / 「<」全是在剧情页上瞎点。
         if in_story_dialog(touch):

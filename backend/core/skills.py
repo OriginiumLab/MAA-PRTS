@@ -915,10 +915,15 @@ def _tidy_stage_list(stages, asked, log):
 
 def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
                  depth=3, strict=False, prereq=None):
-    """``_select_ops`` + 落盘 → ``(copilotList, retry)``
+    """``_select_ops`` + 落盘 → ``(copilotList, retry, raid_missing)``
 
     ``retry`` 直接塞进 ``spec['retry']``，run_core 据此在翻车后换作业重挂。
     每关只有一份候选时不给 retry（没得换，省一轮空转）。
+
+    ``raid_missing`` 是「用户点名要突袭、但作业站只有普通」的那几关。以前这种
+    降级只写一行日志，助手看不到，就照着用户的说法继续回「打的是突袭」——
+    2026-11-23 用户投诉「说突袭、两个号导入的都是普通 EX-8」。现在把它当成
+    返回值的一部分，助手必须如实转告。
     """
     picks, pool = _select_ops(stages, file, log, raid=raid, wants=wants,
                               fixed=fixed, depth=depth, strict=strict,
@@ -927,7 +932,14 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
     retry = {}
     if any(len(v) > 1 for v in pool.values()):
         retry = {'pool': pool, 'maxRounds': max(2, min(4, depth))}
-    return rows, retry
+    # 实际排下去的档位 vs 用户点名要的档位
+    asked = {str(k).upper() for k, v in (wants or {}).items()
+             if str(v).lower() == 'raid'}
+    if str(raid).strip().lower() == 'raid':
+        asked |= {str(s).upper() for s in stages}
+    got = {str(r.get('stage_name') or '').upper()
+           for r in rows if r.get('is_raid')}
+    return rows, retry, sorted(a for a in asked if a and a not in got)
 
 
 @skill("fight", "自动战斗：预检练度/前置 → 编队/借人/开打（失败自动换作业）",
@@ -1083,19 +1095,24 @@ def skill_fight(params, log, tid=None):
     # 一份，而且不看要打普通还是突袭（`@both` 那种要两条），得在这里按变体拆。
     # 不给 copilotList 的话队列里 Copilot 会被 core_tasks 跳过（见
     # _prepare_ops 注释），noNav 模式下直接空队列报错。
+    raid_missing = []
     if mode == 'copy':
         if params.get('copilotList'):
             spec['copilotList'] = params['copilotList']
         else:
             # 每关多挑几份备选：翻车时 run_core 会自动换下一份重挂
             # （2026-11-19 需求 3），不用整轮重来、也不重打已成功的关
-            spec['copilotList'], retry = _prepare_ops(
+            spec['copilotList'], retry, raid_missing = _prepare_ops(
                 stages, file, log, raid=params.get('raid', 'auto'),
                 wants=wants, fixed=fixed,
                 depth=int(params.get('swapDepth') or 3),
                 prereq=prereq)
             if retry:
                 spec['retry'] = retry
+            if raid_missing:
+                log('这几关要的是突袭，但作业站只有普通版，实际排的是普通：%s'
+                    '（要严格只打突袭就传 raid="raid" 并把这几关去掉）'
+                    % '、'.join(raid_missing))
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
 
     # 把**实际要打的难度**单独打成一行。用户 2026-11-23 报障：「说普通 1 到 5，
@@ -1192,6 +1209,18 @@ def skill_fight(params, log, tid=None):
         log('本轮没正常结束：%s'
             % ((r or {}).get('error') or (r or {}).get('failed_why')
                or '看上面的报错')[:120])
+    # 实际排下去的难度（逐关）。助手回复里说到难度**只能引用这个**：以前它
+    # 照着「EX 关默认突袭」那句描述回话，排进去的却是普通，用户以为是程序坏了。
+    diff = {}
+    for row in (spec.get('copilotList') or []):
+        code = str(row.get('stage_name') or '')
+        if not code:
+            continue
+        one = '突袭' if row.get('is_raid') else '普通'
+        if code in diff and diff[code] != one:
+            diff[code] = '普通+突袭'
+        else:
+            diff[code] = one
     return {'ok': ok_chain, 'mode': mode, 'stages': stages,
             'account': file, 'noNav': not with_nav,
             'prereq': sorted(prereq),
@@ -1200,11 +1229,15 @@ def skill_fight(params, log, tid=None):
             'stagesFailed': [{'stage': x.get('stage'), 'why': x.get('why')}
                              for x in got_bad],
             'swaps': swaps,
+            'difficulties': diff,
+            'raidMissing': raid_missing,
             'notPlayed': rest,
             'blocked': (plan or {}).get('blocked') or [],
             'precheck': plan,
             'summary': (plan or {}).get('summary') or '',
-            'stageNote': 'MAA 只报跑过哪些关和任务链成败，不报逐关成功数'}
+            'stageNote': 'MAA 只报跑过哪些关和任务链成败，不报逐关成功数。'
+                         '回复里说难度只能引用 difficulties 字段；'
+                         'raidMissing 非空时必须如实说这几关只有普通作业'}
 
 
 # ---------------------------------------------------------------- skip_story

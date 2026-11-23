@@ -357,6 +357,12 @@ TOOLS = [
                                     '（如 157****3635）；B 服填游戏内用户名。'
                                     '缺的时候要问用户，**原样传**，别自己拼格式'},
            'limitStages': {'type': 'integer', 'description': '最多挂几关，默认 8'},
+           'raid': {'type': 'string', 'enum': ['normal', 'raid', 'both'],
+                    'description': '抄作业的难度，**照用户原话传**：说「突袭」→ '
+                                   '必须显式传 raid；说「普通」→ normal；说'
+                                   '「都要」→ both。**省略 = 只打普通**。'
+                                   '要突袭却漏了这个参数，排下去的就是普通'
+                                   '（2026-11-23 用户报过这个）'},
            'profile': {'type': 'string',
                        'description': '档案名后缀，比如「活动-时间啊向前」。不给就自动起名'},
            'start': {'type': 'boolean', 'description': '写完是否立刻启动，默认 true'}},
@@ -394,6 +400,11 @@ TOOLS = [
     _tool('add_stages',
           '给**一个**账号挂一组关卡的快捷方式（等价于 mode=copy 的 build_run）。',
           {'account': _ACC, 'keyword': _STAGE,
+           'raid': {'type': 'string', 'enum': ['normal', 'raid', 'both'],
+                    'description': '难度，**照用户原话传**：说「突袭」→ raid，'
+                                   '「普通」→ normal，「都要」→ both；省略=只写'
+                                   '普通行。要突袭却没有突袭作业的关会被跳过并'
+                                   '在 raidMissing 里列出来'},
            'start': {'type': 'boolean', 'description': '写完是否立刻启动，默认 true'}},
           ['keyword']),
     # ---- 挂关 skill 化（2026-11-17）：唤醒 / 导航 / 剧情 / 战斗 / 签到 / 周目 ----
@@ -432,8 +443,11 @@ TOOLS = [
           '**默认不唤醒不导航**——界面在哪就从哪直接开打；'
           '用户还在主界面 / 游戏没开时要先 skill_navigate 或 skill_wakeup，'
           '或传 wakeup=true 走全套。**调用前先跟用户确认要打哪些关**。'
-          '**每关只打要打的那一档**：EX 关默认只打突袭；普通还没通关、要一次'
-          '打通就写 stages=["SV-EX-1@both"]；只刷材料写 @normal 或 raid="normal"。'
+          '**难度必须显式说**：不传 raid、也不带 @ 后缀 = **只打普通**（跟着'
+          '用户原话走，别自动升级）。要突袭就写 raid="raid" 或 '
+          'stages=["SV-EX-1@raid"]；普通还没通关、要一次打通写 @both。'
+          '用户说「打突袭」时**漏了这两个字段，实际排下去的就是普通**——'
+          '2026-11-23 用户报「说突袭、两个号导入的都是普通 EX-8」就是这么来的。'
           '**用户点名某份作业（「用 41624」「换成令的单核」）时必须用 ops 传 '
           'copilotId**，光说"已经换了"没用——不传 ops 就会重新搜索挑回同一份。'
           '每关会自动准备 2~3 份备选作业：某一关打不过（比如只打 2 星）就'
@@ -445,9 +459,11 @@ TOOLS = [
           '返回 taskId。',
           {'stages': {'type': 'array', 'items': {'type': 'string'},
                       'description': '关卡代号，可加 @ 后缀逐关指定难度：'
-                                     '"SV-EX-1@raid" 只打突袭（默认）、'
+                                     '"SV-EX-1@raid" 只打突袭、'
                                      '"SV-EX-1@both" 普通+突袭、'
-                                     '"SV-EX-1@normal" 只打普通。不带后缀走 raid 参数'},
+                                     '"SV-EX-1@normal" 只打普通。**不带后缀'
+                                     '就走 raid 参数，而 raid 不传只打普通**：'
+                                     '用户说突袭就必须写 @raid 或传 raid="raid"'},
            'mode': {'type': 'string', 'enum': ['copy', 'fight']},
            'wakeup': {'type': 'boolean',
                       'description': 'true=连唤醒+导航一起跑（默认 false 直跑）'},
@@ -457,13 +473,15 @@ TOOLS = [
                                          '。用户说「S-3 点不开/没解锁，把前置一起补」'
                                          '时才传 true，别自己默认补'},
            'raid': {'type': 'string', 'enum': ['normal', 'raid', 'both'],
-                    'description': '难度档位，**照用户原话传，不许替他升级**：'
-                                   '用户说「普通」→ normal（必须显式传，别省）；'
-                                   '说「突袭/突袭模式」→ raid；说「普通和突袭都打」'
-                                   '→ both。用户完全没提难度才省略（默认只打普通）。'
-                                   '**绝不许因为「复刻活动」「应该打突袭」之类理由'
-                                   '把普通改成突袭**——2026-11-23 用户投诉：说挂普通，'
-                                   '实际排成突袭。主线磨难/险地不是突袭，不受影响'},
+                    'description': '难度档位，**照用户原话传**：'
+                                   '用户说「突袭/突袭模式」→ 必须显式传 raid；'
+                                   '说「普通」→ normal；说「普通和突袭都打」'
+                                   '→ both。**省略 = 只打普通**（不是突袭，'
+                                   '也不是自动）。**绝不许因为「EX 关」「复刻'
+                                   '活动」「一般都要打突袭」之类理由替用户升级'
+                                   '或降级**——2026-11-23 用户投诉过一次说普通'
+                                   '排成突袭、一次说突袭结果排成普通。'
+                                   '主线磨难/险地不是突袭，不受影响'},
            'ops': {'type': 'array',
                    'description': '指定用哪一份作业（用户点名「用 41624 那份」'
                                   '「换成令的单核」时**必须**传，否则每次都重新'
@@ -477,7 +495,9 @@ TOOLS = [
                                                'description': '作业 id'},
                                  'raid': {'type': 'string',
                                           'enum': ['raid', 'normal', 'both'],
-                                          'description': '这关打哪档，默认 raid'}},
+                                          'description': '这关打哪档；不写就按'
+                                                         ' skill_fight 的 raid '
+                                                         '参数（默认只打普通）'}},
                              'required': ['stage', 'copilotId']}},
            'account': _ACC}, ['stages']),
     _tool('skill_weekly',
@@ -648,6 +668,22 @@ MODE_DESC = {
     'daily': '日常一条龙（公招 / 基建 / 领奖）',
     'daily_copy': '日常一条龙 + 抄作业',
 }
+
+
+def _variant_arg(raw):
+    """raid 参数归一：``'raid'/'突袭'`` → raid，``'both'`` → both，
+    ``'normal'`` / 空 → normal / 不筛
+
+    用户说的是中文还是英文都收，别让「突袭」两个字在参数里变成普通。
+    """
+    v = str(raw or '').strip().lower()
+    if v in ('raid', '突袭', 'only', 'onlyraid'):
+        return 'raid'
+    if v in ('both', 'all', '都要'):
+        return 'both'
+    if v:
+        return 'normal'
+    return ''
 
 
 def _stage_rows(keyword, account=None):
@@ -1097,20 +1133,46 @@ def _tool_add_stages(args, session=None):
     acc = args.get('account') or _default_account()
     if not acc:
         return {'error': '还没有账号'}
+    raid = _variant_arg(args.get('raid'))
     res = _stage_rows(kw, acc)
-    items, skipped = [], []
+    items, skipped, raid_missing = [], [], []
+    seen_code, seen_key = set(), set()
     for packed in (res.get('stages') or []):
         st = packed.get('stage') or {}
+        code = st.get('code')
+        variant = st.get('variant') or 'normal'
+        if code:
+            seen_code.add(code)
+        # 用户点名要突袭：只收突袭行。**不许拿普通行顶上**——「说要突袭、导入
+        # 的却是普通 EX-8」就是这么来的（2026-11-23 用户报障）。
+        if raid == 'raid' and variant != 'raid':
+            continue
+        if raid == 'normal' and variant == 'raid':
+            continue
+        # 同一关的普通/突袭两行只写一条；要 both 就两行都留
+        key = (code, variant) if raid == 'both' else code
+        if code and key in seen_key:
+            continue
         best = next((o for o in (packed.get('ops') or [])
                      if o.get('mode') != 'blocked'), None)
         if not best:
-            skipped.append(st.get('code'))
+            if raid in ('raid', 'both') and variant == 'raid':
+                raid_missing.append(code)
+            skipped.append(code)
             continue
+        seen_key.add(key)
         items.append({'copilotId': best.get('copilotId'),
-                      'stageCode': st.get('code'), 'title': best.get('title'),
-                      'variant': st.get('variant'), 'name': st.get('code')})
+                      'stageCode': code, 'title': best.get('title'),
+                      'variant': variant, 'name': code})
+    if raid == 'raid':
+        # 这些关有普通版、但压根没有突袭行 → 用户要的那一档排不出来
+        raid_missing += [c for c in sorted(seen_code - {i['stageCode'] for i in items})
+                         if c and c not in raid_missing]
     if not items:
-        return {'error': '这份关键词下没有能打的作业', 'skipped': skipped}
+        return {'error': '这份关键词下没有能打的作业', 'skipped': skipped,
+                'raidMissing': raid_missing,
+                'note': ('要求突袭，但这几关只有普通作业（或突袭作业缺干员），'
+                         '没有偷偷用普通顶上' if raid_missing else '')}
     start = args.get('start')
     start = True if start is None else bool(start)
     summary = '给「%s」挂 %d 关：%s\n（会替换 MAA 里现有的作业列表，原来的会被清掉）' % (
@@ -1123,8 +1185,16 @@ def _tool_add_stages(args, session=None):
                           auto_start=start,
                           maa_dir=(accounts.get_account(acc).get('maa') or {}).get('dir') or None,
                           account=acc)   # 带上账号：写盘时做干员替换（#92）
-    return {'started': True, 'taskId': tid, 'count': len(items),
-            'skipped': skipped, 'note': '已提交写入 MAA，不要在这里等它跑完'}
+    out = {'started': True, 'taskId': tid, 'count': len(items),
+           'difficulties': {i['stageCode']: ('突袭' if i.get('variant') == 'raid'
+                                             else '普通') for i in items},
+           'skipped': skipped,
+           'note': '已提交写入 MAA，不要在这里等它跑完'}
+    if raid_missing:
+        out['raidMissing'] = raid_missing
+        out['note'] += ('；这几关要的是突袭，但作业站只有普通（或突袭作业缺'
+                        '干员），没有偷偷用普通顶上——照实告诉用户')
+    return out
 
 
 def _tool_maa_capabilities(args, session=None):
@@ -1320,6 +1390,10 @@ def _tool_build_run(args, session=None):
     start = args.get('start')
     start = True if start is None else bool(start)
     limit = max(1, min(20, int(args.get('limitStages') or 8)))
+    # 难度：用户说突袭就只排突袭行（以前这个工具压根没这个参数，永远取每关
+    # 第一行=普通——2026-11-23「说突袭、导入的都是普通 EX-8」就是这条）
+    raid = _variant_arg(args.get('raid'))
+    raid_missing = []
     names = {str(k): v for k, v in (args.get('names') or {}).items()}
     want_files = [str(x) for x in (args.get('accounts') or []) if str(x).strip()]
 
@@ -1366,6 +1440,7 @@ def _tool_build_run(args, session=None):
             return {'error': '关卡「%s」没找到，换个关键词' % kw}
 
     if need_ops:
+        raid_all, raid_got = set(), set()
         for r in rows:
             try:
                 snap = multiacct._snap_of(r['file'])
@@ -1373,22 +1448,42 @@ def _tool_build_run(args, session=None):
             except Exception as e:
                 r['note'] = '搜作业失败：%s' % e
                 continue
+            seen = set()
             for packed in (res.get('stages') or [])[:limit]:
                 st = packed.get('stage') or {}
+                code = st.get('code') or ''
+                variant = st.get('variant') or 'normal'
+                if code:
+                    raid_all.add(code)
+                # 用户点名要突袭就只排突袭行，**不拿普通行顶上**（「说突袭、
+                # 导入的却是普通 EX-8」，2026-11-23 用户报障）
+                if raid == 'raid' and variant != 'raid':
+                    continue
+                if raid == 'normal' and variant == 'raid':
+                    continue
+                if code and code in seen:
+                    continue            # 同一关的普通/突袭两行只排一条
                 best = next((o for o in (packed.get('ops') or [])
                              if o.get('mode') != 'blocked'), None)
                 if not best:
                     continue
+                seen.add(code)
+                if variant == 'raid':
+                    raid_got.add(code)
                 r['ops'].append({'copilotId': best.get('copilotId'),
-                                 'stageCode': st.get('code') or '',
+                                 'stageCode': code,
                                  'title': best.get('title') or '',
-                                 'variant': st.get('variant')})
+                                 'variant': variant})
             r['stages'] = [o['stageCode'] for o in r['ops']]
         usable = [r for r in rows if r['ops']]
         if not usable:
             return {'error': '这些账号在这批关卡里一份能打的作业都没有',
-                    'hint': '换个关键词；或者用 mode=fight 直接刷关卡（不抄作业）'}
+                    'hint': '要求突袭时还会更少——换成「普通」或 raid="both" 再试'}
         rows = usable
+        if raid == 'raid' and raid_all - raid_got:
+            raid_missing = sorted(raid_all - raid_got)
+        else:
+            raid_missing = []
 
     profile_hint = str(args.get('profile') or '').strip()
     head = '%s · %d 个账号' % (
@@ -1405,11 +1500,20 @@ def _tool_build_run(args, session=None):
         lines.append('· %s（切号名 %s）→ %s' % (r['name'], r['accountName'], tail))
     if formation and need_ops:
         lines.append('抄作业时自动编队：开')
+    if need_ops:
+        # 难度写清楚：不写这一行，助手很容易按自己刚才的说法回答用户
+        diff = {('突袭' if o.get('variant') == 'raid' else '普通')
+                for r in rows for o in (r['ops'] or [])}
+        lines.append('难度：%s' % ('、'.join(sorted(diff)) or '（没排作业）'))
+    if raid_missing:
+        lines.append('注意：这几关要的是突袭，但作业站只有普通版，**没有排**：%s'
+                     % '、'.join(raid_missing[:8]))
     lines.append('会直接驱动 MAA 核心跑（不用手动点开始），跑完自动切下一个账号。')
 
     payload = {'rows': rows, 'tasks': tl, 'formation': formation,
                'fightStages': fight_stages, 'profileHint': profile_hint,
-               'start': start, 'maaDir': d, 'mode': mode}
+               'start': start, 'maaDir': d, 'mode': mode,
+               'raidMissing': raid_missing}
     pid = 'b:' + uuid.uuid4().hex[:8]
     with _plans_lock:
         now = time.time()
@@ -2129,12 +2233,17 @@ find_ops 多查几个用户常打的关，统计哪些干员反复出现在作�
   启动（路径从 MAA 配置里读）。任务报「环境没准备好」时，把日志那句话原样转给
   用户让他手动开，别自己反复重试、也别去改 MAA 的连接设置
 - **突袭不是磨难**：EX/活动关的「突袭」和主线的「磨难/险地」是两回事（用户
-  2026-11-19 明确）。**默认每关只打真正要打的那一档**：EX 关有突袭作业就只打
-  突袭，不再先打一遍普通（用户实测抱怨过「说好只排突袭，结果又从头挂普通
-  EX-1」）。普通还没通关、要一次打通时，把那一关写成 ``SV-EX-1@both``。
+  2026-11-19 明确）。**难度按用户原话，一个字都不许替他改**：代码里
+  `raid='auto'`（不传）= **只打普通**，所以用户说「打突袭」时必须显式写
+  `raid="raid"` 或把那一关写成 `SV-EX-1@raid`，否则排下去的真是普通——
+  2026-11-23 用户报「说突袭，两个号导入的都是普通 EX-8」就是这么来的（嘴上
+  突袭、参数没传）。反过来，用户说「普通」也绝不能升成突袭。
+  普通还没通关、要一次打通时，把那一关写成 ``SV-EX-1@both``。
   同一次计划里可以逐关分开写：``["SV-EX-1@raid", "SV-EX-6@both"]``。
-  只刷材料写 ``@normal`` 或 raid=normal。磨难/险地是主线独立难度，不用后缀。
-  **不要**跟用户说「突袭打不了」——作业站有突袭作业就能排。
+  磨难/险地是主线独立难度，不用后缀。
+  **不要**跟用户说「突袭打不了」——作业站有突袭作业就能排；真搜不到突袭
+  作业时日志里会写「这关没有突袭作业，只打普通」，**照实转告用户**，别
+  顺着自己刚才说的话继续吹。
 - **复刻活动的 EX / S：先把突袭问清楚**（用户 2026-11-22 要求）：list_activities
   里 `reprint: true`（现在 OS = 雪山降临1101）或活动导航标了复刻的，用户说要刷
   它的 EX / S 时，**先问两句**：「要不要连突袭一起打」「去年这个活动打过吗」。

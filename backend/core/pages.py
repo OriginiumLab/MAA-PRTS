@@ -26,10 +26,17 @@
 
 返回键 / ESC 的行为
 -------------------
-用户观察（2026-11-22）：明日方舟**大部分情况一直按 ESC 都能回主页**，唯一
-例外就是基建这个确认框（用户可能自己关掉了这个提示，那就不会出现）。所以
-:func:`to_home` 的顺序是「先判主页 → 再判确认框 → 再按返回/ESC」，每一步
-都**先看一帧**，绝不在主页上盲按（主界面按返回会弹「退出游戏」）。
+用户观察（2026-11-22）：明日方舟**大部分情况一直按 ESC 都能回主页**，例外
+有两个：
+
+- 基建的「是否确认离开罗德岛基建？」（用户可能自己关掉了这个提示，那就不会
+  出现）→ 点右边 ✓；
+- **主界面上的「是否确认退出游戏？」**——一旦已经在主页还接着按 ESC 就会弹
+  出来，再按一下游戏就关掉（2026-11-23 实测「S 关入口没认出来，一路按 ESC
+  把游戏按没了」）→ 点左边 ✕ 取消，并直接当「已到家」收工。
+
+所以 :func:`to_home` 的顺序是「先判主页 → 再判退出确认 → 再判基建确认 →
+再按返回/ESC」，每一步都**先看一帧**，绝不在主页上盲按。
 """
 from __future__ import annotations
 
@@ -177,6 +184,22 @@ _BAR_DARK = 70                 # 左半（取消）亮度上限
 _BAR_RED = 55                  # 右半 R 比 G/B 均值高多少才算「红按钮」
 
 
+def _bar_point(im):
+    """按钮条在不在 → 在就返回右半「确认」的像素坐标，不在返回 None
+
+    两种弹窗（基建离开 / 退出游戏）共用这一条：左 ✕ 右 ✓ 两个白圆钮同时
+    定点命中。模板缺失时返回 None，调用方自己退到色彩签名兜底。
+    """
+    if not all(_tpl(name) is not None for name, _ in _CONFIRM_ICONS):
+        return None
+    hits = [_score_ratio(im, _tpl(name), fx, fy, rng=8)
+            for name, (fx, fy) in _CONFIRM_ICONS]
+    if max(hits) > _CONFIRM_MAX:
+        return None
+    return (int(round(im.width * _CONFIRM_TAP[0])),
+            int(round(im.height * _CONFIRM_TAP[1])))
+
+
 def confirm_leave_bytes(data):
     """这一帧是不是基建退出确认框 → 是就返回「确认」按钮的像素坐标 ``(x, y)``
 
@@ -185,14 +208,72 @@ def confirm_leave_bytes(data):
     im = _gray(data)
     if im is None:
         return None
+    pt = _bar_point(im)
+    if pt:
+        return pt
     if all(_tpl(name) is not None for name, _ in _CONFIRM_ICONS):
-        hits = [_score_ratio(im, _tpl(name), fx, fy, rng=8)
-                for name, (fx, fy) in _CONFIRM_ICONS]
-        if max(hits) > _CONFIRM_MAX:
-            return None
-        return (int(round(im.width * _CONFIRM_TAP[0])),
-                int(round(im.height * _CONFIRM_TAP[1])))
+        return None                 # 模板在手就只认定点比对，别用色彩签名猜
     return _bar_bytes(data)
+
+
+# ---------------------------------------------------------------- 退出游戏确认
+# 「是否确认退出游戏？」和上面那个基建确认框用的是**同一套按钮条**（左 ✕
+# 右 ✓），光看按钮分不出来。但点错代价完全相反：在退出确认上点右边 ✓ 就是
+# 替用户按了「退出游戏」，整个挂机当场结束。
+#
+# 2026-11-23 用户实测：S 关入口认不出来 → 一路按 ESC → 主界面又被按出这个框
+# → 程序接着按 ESC，游戏直接关掉。所以这里必须**先认出它、点左边的 ✕**。
+#
+# 区分办法是**背后的页面**：退出确认只会在主界面弹，背后是模糊掉的主界面，
+# 一整片都亮（真机截图按钮条上方 0.10~0.26 屏高平均亮度 125~155、下方
+# 0.80~0.98 是 105~130）；基建确认背后是基地，是暗的。所以判据 =
+# 「按钮条命中」+「上下两段里有一段够亮」。
+#
+# 阈值故意压得很低（100）：把基建框误认成退出框只会少退一层（下轮再试，
+# 且 ✕ 是无害的取消）；反过来把退出框认成基建框就是直接关游戏。
+_EXIT_LUM = 100
+_EXIT_CANCEL = (0.3464, 0.6870)      # 左半「✕ 取消」的中心，和基建那个 ✕ 同位
+
+
+def _mean_lum(im, y0, y1, step=4):
+    """这一段高度的平均亮度（灰度图抽样，别整屏遍历）"""
+    w, h = im.size
+    px = im.load()
+    xs = range(0, w, max(4, w // 80))
+    tot = n = 0
+    for y in range(int(h * y0), max(int(h * y0) + 1, int(h * y1)), step):
+        for x in xs:
+            tot += px[x, y]
+            n += 1
+    return (tot / float(n)) if n else 0.0
+
+
+def exit_confirm_bytes(data):
+    """这一帧是不是「是否确认退出游戏？」→ 是就返回「✕ 取消」的像素坐标
+
+    **认到必须点 ✕**：这个框只在主界面弹，取消之后一定还在主界面，所以调用方
+    点完就可以认定「已经到家」，别再按返回/ESC（再按一次又弹出来，按歪了就
+    把游戏关了）。
+
+    不是这个框返回 None——基建确认框会走 :func:`confirm_leave_bytes` 点 ✓。
+    """
+    im = _gray(data)
+    if im is None:
+        return None
+    pt = _bar_point(im)
+    if not pt and not all(_tpl(name) is not None
+                          for name, _ in _CONFIRM_ICONS):
+        pt = _bar_bytes(data)       # 模板缺失时的兜底，和 confirm_leave 一致
+    if not pt:
+        return None
+    # 取「按钮条上方」和「按钮条下方」两段里更亮的那段：模糊后的主界面上下
+    # 都是亮的（真机截图上方 125~155、下方 105~130），只要有一段亮就够了；
+    # 基建那边两段都是暗的。
+    lum = max(_mean_lum(im, 0.10, 0.26), _mean_lum(im, 0.80, 0.98))
+    if lum < _EXIT_LUM:
+        return None                 # 背后是暗的 → 基建那个框，交给 confirm_leave
+    return (int(round(im.width * _EXIT_CANCEL[0])),
+            int(round(im.height * _EXIT_CANCEL[1])))
 
 
 def _bar_bytes(data):
@@ -237,15 +318,32 @@ def to_home(touch, log=None, rounds=8, data=None):
 
     顺序（每轮先看一帧，确认到了就停）：
       1. 认主页 → 成功
-      2. 认基建确认框 → 点红条（不按返回，按了也没用）
-      3. 剧情 / CG 回放页 → 跳幕
-      4. 否则按返回键（前 3 轮）→ ESC（再 3 轮）→ 点左上角「<」
+      2. 认「退出游戏」确认框 → 点左边 ✕，直接当到家（再按就关游戏了）
+      3. 认基建确认框 → 点红条（不按返回，按了也没用）
+      4. 剧情 / CG 回放页 → 跳幕
+      5. 否则按返回键（前 3 轮）→ ESC（再 3 轮）→ 点左上角「<」
     """
     log = log or (lambda *_: None)
     for i in range(rounds):
         if data is None:
             data = touch.shot()
         if data and is_home_bytes(data):
+            return True
+        # 退出确认**必须排在基建确认前面**：两者按钮条一模一样，但这里点 ✓
+        # 等于替用户退出游戏（2026-11-23 实测：ESC 按到这一步，程序又按了一下，
+        # 游戏就没了）。认到就点左边的 ✕，取消完一定在主界面。
+        ex = exit_confirm_bytes(data) if data else None
+        if ex:
+            log('弹出「是否确认退出游戏？」——点左边的 ✕ 取消'
+                '（再按返回/ESC 会把游戏关掉）')
+            touch.tap_px(*ex)
+            time.sleep(1.2)
+            if is_home(touch):
+                log('已取消退出确认，回到主界面')
+            else:
+                # 这个框只在主界面弹，取消之后本来就该在家；认不出图标也按
+                # 「到家」处理，绝不再补一发 ESC 去把它弹回来。
+                log('已取消退出确认（图标没认出来，按主界面继续）')
             return True
         pt = confirm_leave_bytes(data) if data else None
         if pt:

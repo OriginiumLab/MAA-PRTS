@@ -3976,31 +3976,35 @@ def check_raid_order(tmp):
     skills._default_maa_dir = lambda: tmp
     try:
         logs = []
-        rows, _retry = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '',
-                                          logs.append)
+        rows, _retry, _miss = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '',
+                                                  logs.append)
         seq = [(r['stage_name'], r['is_raid']) for r in rows]
         # ① 默认只打普通：没明说难度就不许替用户升级到突袭
         assert seq == [('SV-EX-1', False), ('SV-EX-2', False)], seq
 
         # ①b 显式 raid='raid' 才只排突袭
-        rows_r, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='raid')
+        rows_r, _, _m = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                            raid='raid')
         assert [(r['stage_name'], r['is_raid']) for r in rows_r] == [('SV-EX-1', True)]
 
         # ② both：普通 → 突袭两条，顺序不能反
-        rows_b, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='both')
+        rows_b, _, _mb = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                             raid='both')
         seq_b = [(r['stage_name'], r['is_raid']) for r in rows_b]
         assert seq_b == [('SV-EX-1', False), ('SV-EX-1', True)], seq_b
 
         # ③ raid=False / 'normal'：只排普通
-        rows2, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid=False)
+        rows2, _, _m2 = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                            raid=False)
         assert [(r['stage_name'], r['is_raid']) for r in rows2] == [('SV-EX-1', False)]
-        rows2b, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append, raid='normal')
+        rows2b, _, _m2b = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                              raid='normal')
         assert [(r['stage_name'], r['is_raid']) for r in rows2b] == [('SV-EX-1', False)]
 
         # ④ 逐关覆盖：EX-1 只突袭、EX-2 普通+突袭（agent 承诺的混合计划）
         want = {'SV-EX-1': 'raid', 'SV-EX-2': 'both'}
-        rows_w, _ = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '', logs.append,
-                                       raid='auto', wants=want)
+        rows_w, _, _mw = skills._prepare_ops(['SV-EX-1', 'SV-EX-2'], '',
+                                            logs.append, raid='auto', wants=want)
         seq_w = [(r['stage_name'], r['is_raid']) for r in rows_w]
         assert seq_w == [('SV-EX-1', True), ('SV-EX-2', False),
                          ('SV-EX-2', True)], seq_w
@@ -4023,8 +4027,8 @@ def check_raid_order(tmp):
             return fake_search(st, snap, pages=pages, limit=limit)
 
         copilot.search = fake_search_mixed
-        rows_skip, _ = skills._prepare_ops(['SV-EX-1', 'XX-1'], '',
-                                           logs_skip.append)
+        rows_skip, _, _ms = skills._prepare_ops(['SV-EX-1', 'XX-1'], '',
+                                                logs_skip.append)
         assert [r['stage_name'] for r in rows_skip] == ['SV-EX-1'], rows_skip
         assert any('跳过 XX-1' in x for x in logs_skip), logs_skip
         copilot.search = fake_search
@@ -4129,8 +4133,8 @@ def check_agent_tool_chain(tmp):
     skills._default_maa_dir = lambda: tmp
     try:
         logs = []
-        rows, _ = skills._prepare_ops(['SV-EX-1'], '', logs.append,
-                                      fixed={'SV-EX-1': 98765}, raid='raid')
+        rows, _, _m = skills._prepare_ops(['SV-EX-1'], '', logs.append,
+                                          fixed={'SV-EX-1': 98765}, raid='raid')
         assert hits['search'] == 0, '指名作业后不许再搜作业站'
         assert rows[0]['filename'].endswith('98765.json'), rows
         assert rows[0]['is_raid'] is True, rows
@@ -4535,7 +4539,7 @@ def check_stage_infer(tmp):
     try:
         skills._account_file = lambda n: 'x.json'
         skills._default_maa_dir = lambda: 'MAA'
-        skills._prepare_ops = lambda *a, **k: ([], {})
+        skills._prepare_ops = lambda *a, **k: ([], {}, [])
         skills.maaplan.run_core = lambda *a, **k: {
             'ok': True, 'stages_ok': [], 'stages_failed': [], 'swaps': []}
 
@@ -5643,6 +5647,193 @@ def check_one_engine_per_proc(tmp):
     finally:
         maacore.release_inproc()
     assert plan_calls == ['plan'], plan_calls
+
+
+def _bars_frame(bright, width=1920, height=1080):
+    """合成一帧带「左 ✕ 右 ✓」按钮条的图（bright=False = 基建那种暗底）
+
+    按钮条用的是真模板原位贴上去，所以定点比对必然是 0 分；亮度那一层由
+    底色决定。抓不到真机截图时靠它验判据。
+    """
+    from PIL import Image
+    from core import pages
+    base = 225 if bright else 40
+    im = Image.new('RGB', (width, height), (base, base, base))
+    for name, (fx, fy) in pages._CONFIRM_ICONS:
+        tpl = pages._tpl(name)
+        assert tpl is not None, name
+        t = tpl.convert('RGB')
+        im.paste(t, (int(width * fx) - t.width // 2,
+                     int(height * fy) - t.height // 2))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def _plain_frame(level=230, width=1920, height=1080):
+    from PIL import Image
+    im = Image.new('RGB', (width, height), (level, level, level))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+class _FakeTouch(object):
+    """只实现 pages.to_home 用到的几个方法"""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.taps = []
+        self.keys = []
+        self.n = 0
+
+    def shot(self):
+        i = min(self.n, len(self.frames) - 1)
+        self.n += 1
+        return self.frames[i]
+
+    def tap_px(self, x, y):
+        self.taps.append((x, y))
+        return True
+
+    def tap(self, x, y):
+        self.taps.append((x, y))
+        return True
+
+    def back(self):
+        self.keys.append('back')
+        return True
+
+    def esc(self):
+        self.keys.append('esc')
+        return True
+
+    def size(self):
+        return (1920, 1080)
+
+
+def check_exit_confirm(tmp):
+    """B64 「是否确认退出游戏？」要认出来点 ✕，不许再按 ESC 把游戏关掉
+
+    2026-11-23 用户实测：S 关入口没认出来 → 一路 ESC → 主页也没认出来 → 停在
+    「是否确认退出游戏？」→ 程序接着按 ESC，游戏直接退出，整轮挂机白跑。
+
+    两种确认弹窗（基建离开 / 退出游戏）按钮条完全一样（左 ✕ 右 ✓），以前的
+    代码把它们当同一种，点右边 ✓ = 替用户退出游戏。现在靠「背后亮不亮」分开：
+    退出确认背后是模糊的主界面（亮），基建背后是基地（暗）。
+    """
+    from core import pages
+
+    plain = _plain_frame()
+    bright = _bars_frame(True)
+    dark = _bars_frame(False)
+
+    # ① 亮底 + 按钮条 = 退出确认；暗底 = 基建，别认成退出
+    assert pages.confirm_leave_bytes(bright) is not None
+    assert pages.exit_confirm_bytes(bright) is not None
+    assert pages.exit_confirm_bytes(dark) is None, '暗底被认成退出确认了'
+    assert pages.confirm_leave_bytes(dark) is not None
+    # 没按钮条的亮帧两个都不认（别在普通页面上乱点）
+    assert pages.exit_confirm_bytes(plain) is None
+    assert pages.confirm_leave_bytes(plain) is None
+
+    # ② to_home 认到退出确认：只点左边的 ✕，一次返回/ESC 都不许按
+    t = _FakeTouch([bright, plain, plain, plain])
+    assert pages.to_home(t, lambda *_: None) is True
+    assert t.keys == [], t.keys
+    assert len(t.taps) == 1, t.taps
+    x, y = t.taps[0]
+    assert abs(x / 1920.0 - 0.3464) < 0.02, t.taps
+    assert abs(y / 1080.0 - 0.6870) < 0.02, t.taps
+
+    # ③ 基建那个（暗底）照旧点右边的 ✓，别把「离开基建」也取消了
+    t2 = _FakeTouch([dark, plain])
+    pages.to_home(t2, lambda *_: None, rounds=1)
+    assert t2.taps, '暗底确认框没点'
+    assert t2.taps[0][0] / 1920.0 > 0.6, t2.taps
+
+
+def check_raid_variant(tmp):
+    """B65 难度口径：说要突袭就真排突袭；排不出来必须如实报 raidMissing
+
+    2026-11-23 用户报「我让他打 OS-EX-8 突袭，结果两个账号导入的都是普通」。
+    根因是提示词里写着「EX 关默认只打突袭」，代码默认却是普通（auto→normal），
+    助手照描述办、不传 raid，排下去的就是普通，嘴上还在说突袭。所以：
+      · 工具描述统一写成「省略 = 普通」，要突袭必须显式传；
+      · ``_prepare_ops`` 把「要突袭但只有普通作业」的关回成 raidMissing；
+      · add_stages / build_run 真的收 raid 参数，不再永远取每关第一行（普通）。
+    """
+    from core import agent, maaplan, skills
+
+    assert agent._variant_arg('突袭') == 'raid'
+    assert agent._variant_arg('raid') == 'raid'
+    assert agent._variant_arg('only') == 'raid'
+    assert agent._variant_arg('普通') == 'normal'
+    assert agent._variant_arg('both') == 'both'
+    assert agent._variant_arg('') == ''
+
+    old_sel, old_prep = skills._select_ops, maaplan.prepare_copilot
+    old_dir = skills._maa_dir_of
+    skills._maa_dir_of = lambda f: tmp
+    try:
+        skills._select_ops = lambda *a, **k: (
+            [{'copilotId': 1, 'stageCode': 'OS-EX-8', 'variant': 'normal'}], {})
+        normal = [{'filename': 'a.json', 'stage_name': 'OS-EX-8',
+                   'is_raid': False}]
+        raid = [{'filename': 'b.json', 'stage_name': 'OS-EX-8',
+                 'is_raid': True}]
+        maaplan.prepare_copilot = lambda *a, **k: normal
+        _r, _t, miss = skills._prepare_ops(
+            ['OS-EX-8'], '示例号.json', lambda *_: None, raid='raid')
+        assert miss == ['OS-EX-8'], miss
+        _r, _t, miss = skills._prepare_ops(
+            ['OS-EX-8'], '示例号.json', lambda *_: None, raid='normal')
+        assert miss == [], miss           # 本来就要普通，不算缺
+        maaplan.prepare_copilot = lambda *a, **k: raid
+        _r, _t, miss = skills._prepare_ops(
+            ['OS-EX-8'], '示例号.json', lambda *_: None, raid='raid')
+        assert miss == [], miss           # 真排到突袭了
+    finally:
+        skills._select_ops, maaplan.prepare_copilot = old_sel, old_prep
+        skills._maa_dir_of = old_dir
+
+    # add_stages：raid 真的筛行，缺突袭行时不许拿普通顶上
+    def rows(raid_ops):
+        return {'stages': [
+            {'stage': {'code': 'OS-EX-8', 'variant': 'normal'},
+             'ops': [{'copilotId': 11, 'mode': 'ready'}]},
+            {'stage': {'code': 'OS-EX-8', 'variant': 'raid'},
+             'ops': raid_ops},
+        ]}
+
+    old_rows = agent._stage_rows
+    old_load = agent.settings.load
+    old_apply = agent.maa.start_apply
+    old_acct = agent.accounts.get_account
+    cap = {}
+    agent.settings.load = lambda: {'agent': {'autoApply': True}}
+    agent.accounts.get_account = lambda f: {'maa': {}}
+    agent.maa.start_apply = lambda items, **kw: (
+        cap.setdefault('items', items), 'tid')[1]
+    try:
+        # 突袭行没有可用作业 → 报错 + raidMissing，绝不写普通
+        agent._stage_rows = lambda kw, acc=None: rows([])
+        out = agent._tool_add_stages({'keyword': 'OS-EX-8', 'raid': 'raid',
+                                      'account': '示例号.json'})
+        assert out.get('error') and out.get('raidMissing') == ['OS-EX-8'], out
+        assert 'items' not in cap, cap
+
+        # 两行都有作业：突袭只要突袭那行
+        agent._stage_rows = lambda kw, acc=None: rows(
+            [{'copilotId': 22, 'mode': 'ready'}])
+        out = agent._tool_add_stages({'keyword': 'OS-EX-8', 'raid': 'raid',
+                                      'account': '示例号.json'})
+        assert out.get('count') == 1, out
+        assert [i['variant'] for i in cap['items']] == ['raid'], cap
+        assert out.get('difficulties') == {'OS-EX-8': '突袭'}, out
+    finally:
+        agent._stage_rows, agent.settings.load = old_rows, old_load
+        agent.maa.start_apply, agent.accounts.get_account = old_apply, old_acct
 
 
 def check_client_and_stop(tmp):
@@ -7276,6 +7467,10 @@ def main():
                 lambda: check_emu_auto_start(tmp))
         r.check('B63 一路一个进程（多开第二个号不再把前面那路跑挂）',
                 lambda: check_one_engine_per_proc(tmp))
+        r.check('B64 退出确认点 ✕（不再按 ESC 把游戏关掉）',
+                lambda: check_exit_confirm(tmp))
+        r.check('B65 难度口径（要突袭就排突袭 / 排不出来报 raidMissing）',
+                lambda: check_raid_variant(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
