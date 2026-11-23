@@ -4611,13 +4611,15 @@ function garCurrentOpts() {
   return S.garOpts[S.current] || (d ? { ...d } : null);
 }
 
+const garStdOk = d => /medal-farm-v1\.1\.4/i.test((d && d.coreDir) || '');
+
 /* 把选项描进表单：用户改过用改过的，否则用后端从 MAA 抄的默认值 */
 function paintGarInputs() {
   const o = garCurrentOpts();
   if (!o) return;
   const set = (id, v) => { const el = $(id); if (el && v !== undefined && v !== null) el.value = String(v); };
   set('#gar-device', o.device);
-  set('#gar-mode', 'quick');   // 上游 v1.1.7 起仅支持极速
+  set('#gar-mode', (garStdOk(S.gar) && o.mode === 'standard') ? 'standard' : 'quick');
   set('#gar-goal', o.goal);
   set('#gar-adb', o.adbAddress);
   set('#gar-wins', o.medalWins);
@@ -4700,8 +4702,17 @@ function paintGarState(d) {
   if (bs) bs.disabled = busy;
   if (br) br.disabled = busy || !d.hasCheckpoint;
   if (bp) bp.disabled = !busy;
-  ['#gar-device', '#gar-mode', '#gar-adb', '#gar-wins', '#gar-speed', '#gar-scale', '#gar-shot']
+  ['#gar-device', '#gar-adb', '#gar-wins', '#gar-speed', '#gar-scale', '#gar-shot']
     .forEach(id => { const el = $(id); if (el) el.disabled = busy; });
+  const gm = $('#gar-mode');
+  if (gm) {
+    const stdOk = garStdOk(d);
+    gm.disabled = busy || !stdOk;
+    gm.title = stdOk
+      ? '极速模拟（31 策略）或独立模拟规程等级 1（60 单人策略，精准/奥术/协防）'
+      : '上游 v1.1.7 起仅支持极速模拟；独立模拟需 v1.1.4 核心';
+    if (!stdOk && gm.value !== 'quick') gm.value = 'quick';
+  }
   // 来源标注：让用户知道这份默认值是从哪个 MAA 配置抄的
   const src = $('#gar-src');
   if (src) {
