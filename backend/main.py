@@ -507,6 +507,16 @@ def _wingeom_save():
 
 
 def main():
+    if sys.argv[1:] == ['--verify-chatgpt-crypto']:
+        try:
+            from core import chatgpt_crypto_check
+            chatgpt_crypto_check.verify()
+        except Exception:
+            if sys.stderr is not None:
+                traceback.print_exc()
+            return 1
+        return 0
+
     # CLI 入口：打包后同一个 exe 用 `MAA-PRTS.exe --cli accounts` 调
     # （给外部 harness / 脚本用，不启窗口、不起 HTTP）
     if '--cli' in sys.argv:

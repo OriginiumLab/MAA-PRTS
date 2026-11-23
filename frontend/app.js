@@ -2940,7 +2940,7 @@ function mirrorMsgText(m) {
   return `✓ 已配置 ${m.masked || ''}${exp}`;
 }
 
-function openSettings() {
+function openSettings(initialTab = 'general') {
   const s = S.settings;
   const p = S.paths || {};
   const pk = S.pack || {};
@@ -3304,10 +3304,20 @@ function openSettings() {
           <div class="set-pane" data-pane="agent">
             <div class="set-head">
               <h3>助手设置</h3>
-              <p>内置助手用 OpenAI 兼容协议，DeepSeek / 通义 / Kimi / 中转站 / 本地 Ollama 都能填。
-                API Key 用 Windows DPAPI 加密存在本机，换电脑解不开、也不会上传。配好之后在顶部「助手」标签页里对话。</p>
+              <p>选择模型连接方式，再到顶部「助手」标签页对话。</p>
             </div>
             <div class="set-card">
+              <label class="field"><span>连接方式</span>
+                <select id="set-ag-provider" disabled>
+                  <option value="api_key">OpenAI 兼容 API Key</option>
+                  <option value="chatgpt">ChatGPT 套餐</option>
+                </select>
+              </label>
+              <span class="onb-hint" id="set-ag-provider-state" role="status"></span>
+            </div>
+            <div class="set-card" id="set-ag-chatgpt" hidden></div>
+            <div class="set-card" id="set-ag-api">
+              <p class="muted">支持 DeepSeek、通义、Kimi 和使用兼容接口的本地模型。API Key 加密存储于本机。</p>
               <label class="field"><span>Base URL（ai 的接口地址）</span>
                 <input type="text" id="set-ag-url" placeholder="https://api.deepseek.com/v1" spellcheck="false"></label>
               <label class="field"><span>模型名</span>
@@ -4558,12 +4568,12 @@ function openSettings() {
       });
 
       /* ---------------- 助手设置 ---------------- */
-      const ag = S.agent || {};
+      bindChatGPTSettings(el);
       const agState = $('#set-ag-state', el);
       const paintAgent = d => {
-        agState.className = 'onb-hint ' + (d && d.configured ? 'ok' : 'bad');
+        agState.className = 'onb-hint ' + (d && d.apiReady ? 'ok' : 'bad');
         agState.textContent = !d ? ''
-          : d.configured ? `✓ 已就绪，用 ${d.model}`
+          : d.apiReady ? `✓ 已就绪，用 ${d.model}`
             : (d.hasKey ? '✗ 还差模型名' : '✗ 还差 API Key');
       };
       const fillAgent = d => {
@@ -4608,8 +4618,8 @@ function openSettings() {
           S.agent = await api('/api/agent/status');
           fillAgent(S.agent);
           chatInit();
-          toast(S.agent.configured ? '助手已就绪' : '已保存，但还差 API Key',
-            S.agent.configured ? 'ok' : 'warn');
+          toast(S.agent.apiReady ? '助手已就绪' : '已保存，但还差 API Key',
+            S.agent.apiReady ? 'ok' : 'warn');
         } catch (e2) {
           toast('保存失败：' + e2.message, 'err');
         } finally {
@@ -4639,95 +4649,9 @@ function openSettings() {
       // 很快）。另一组等切过去再读，免得一开设置就打一串请求。
       paintSetGame(setGame);
       paintTabN();
+      if (initialTab !== 'general') show(initialTab);
     },
   });
-}
-
-/* ------------------------------------------------------------ 内置助手连接参数（设置 → 二级弹窗）
-   单独一页的理由：塞进主设置弹窗会把它撑到 900px 以上，API Key 输入框和「保存」
-   全被挤到折叠线以下——用户看到的现象就是「点不到、也没有保存按钮」。
-   另外 API Key 是 password，早先只给 input[type=text] 写了样式，密码框会露出
-   浏览器默认的白底，在深色弹窗里像个空洞。两处都修了。 */
-function openAgentSettings(onSaved) {
-  const ag = S.agent || {};
-  const m = modal(`
-    <h3>内置助手</h3>
-    <div class="sub">OpenAI 兼容协议，DeepSeek / 通义 / Kimi / 中转站 / 本地 Ollama 都能填。
-      API Key 用 Windows DPAPI 加密存在本机，换电脑解不开、也不会上传。</div>
-    <label class="field"><span>Base URL</span>
-      <input type="text" id="ag-url" value="${esc(ag.baseUrl || '')}"
-             placeholder="https://api.deepseek.com/v1"></label>
-    <label class="field"><span>模型名</span>
-      <input type="text" id="ag-model" value="${esc(ag.model || '')}"
-             placeholder="deepseek-chat"></label>
-    <label class="field"><span>API Key${ag.hasKey ? '（已保存，留空表示不改）' : ''}</span>
-      <div class="path-row">
-        <input type="password" id="ag-key" value="" autocomplete="off" spellcheck="false"
-               placeholder="${ag.hasKey ? '已保存，留空不改' : 'sk-...'}">
-        <button class="btn-plain mini" id="ag-clear"
-                ${ag.hasKey ? '' : 'disabled'} title="删掉已保存的 Key">清除</button>
-      </div></label>
-    <label class="check-row">
-      <input type="checkbox" id="ag-auto" ${ag.autoApply ? 'checked' : ''}>
-      <span>写 MAA 时不再问我，直接执行（关掉更安全：每次写入前都弹确认）</span>
-    </label>
-    <div class="onb-hint" id="ag-state" style="margin-top:12px"></div>
-    <div class="modal-foot">
-      <button class="btn-plain" data-close>取消</button>
-      <button class="btn-solid" id="ag-save">保存</button>
-    </div>
-  `, {
-    onMount(el, close) {
-      const state = $('#ag-state', el);
-      const paint = d => {
-        state.className = 'onb-hint ' + (d && d.configured ? 'ok' : 'bad');
-        state.textContent = !d ? ''
-          : d.configured ? `✓ 已就绪，用 ${d.model}`
-            : (d.hasKey ? '✗ 还差模型名' : '✗ 还差 API Key');
-      };
-      paint(ag);
-
-      $('#ag-clear', el).addEventListener('click', async () => {
-        try {
-          await api('/api/agent/config', { apiKey: '' });
-          S.agent = await api('/api/agent/status');
-          $('#ag-key', el).value = '';
-          $('#ag-clear', el).disabled = true;
-          paint(S.agent);
-          chatInit();
-          if (onSaved) onSaved();
-          toast('已清除 API Key');
-        } catch (e) { toast(e.message, 'err'); }
-      });
-
-      $('#ag-save', el).addEventListener('click', async () => {
-        const url = $('#ag-url', el).value.trim();
-        const model = $('#ag-model', el).value.trim();
-        const key = $('#ag-key', el).value.trim();
-        if (!url) { toast('先填 Base URL', 'warn'); $('#ag-url', el).focus(); return; }
-        if (!model) { toast('先填模型名', 'warn'); $('#ag-model', el).focus(); return; }
-        const btn = $('#ag-save', el);
-        btn.disabled = true;
-        btn.textContent = '保存中…';
-        try {
-          const patch = { baseUrl: url, model, autoApply: $('#ag-auto', el).checked };
-          if (key) patch.apiKey = key;
-          await api('/api/agent/config', patch);
-          S.agent = await api('/api/agent/status');
-          chatInit();
-          if (onSaved) onSaved();
-          close();
-          toast(S.agent.configured ? '助手已就绪' : '已保存，但还差 API Key',
-            S.agent.configured ? 'ok' : 'warn');
-        } catch (e) {
-          toast('保存失败：' + e.message, 'err');
-          btn.disabled = false;
-          btn.textContent = '保存';
-        }
-      });
-    },
-  });
-  return m;
 }
 
 /* ------------------------------------------------------------ 黑名单管理（设置 → 二级弹窗）
@@ -5927,7 +5851,7 @@ function bindGlobal() {
   if (garForm) garForm.addEventListener('change', collectGarOpts);
   $('#btn-add-account').addEventListener('click', openAddAccount);
   $('#btn-import-maa').addEventListener('click', importFromMaa);
-  $('#btn-settings').addEventListener('click', openSettings);
+  $('#btn-settings').addEventListener('click', () => openSettings());
   $('#maa-state').addEventListener('click', async () => {
     await refreshMaaStatus();
     toast(S.maa.running ? 'MAA 正在运行' : 'MAA 未运行');
@@ -6625,9 +6549,11 @@ function chatPoll() {
   clearTimeout(CHAT.timer);
   const tick = async () => {
     if (!CHAT.open) return;     // 面板被关掉就彻底停下，别再空转
+    const session = CHAT.session;
     try {
-      const d = await api('/api/chat/poll?session=' + encodeURIComponent(CHAT.session)
+      const d = await api('/api/chat/poll?session=' + encodeURIComponent(session)
         + '&since=' + CHAT.since);
+      if (session !== CHAT.session || !CHAT.open) return;
       if (d.events && d.events.length) {
         CHAT.since = Math.max(CHAT.since, d.next || 0);
         chatRender(d.events);
@@ -6653,12 +6579,19 @@ function chatBusy(on) {
 }
 
 async function chatInit() {
+  const before = chatConnection(CHAT.cfg);
   try {
     CHAT.cfg = await api('/api/agent/status');
   } catch (e) { CHAT.cfg = null; }
   const ok = !!(CHAT.cfg && CHAT.cfg.configured);
+  if (CHAT.cfg && before !== chatConnection(CHAT.cfg)) {
+    forgetChat();
+    chatPoll();
+  }
   const m = $('#chat-model');
-  if (m) m.textContent = ok ? CHAT.cfg.model : '未配置模型';
+  if (m) m.textContent = ok ? CHAT.cfg.displayModel : '未配置模型';
+  const plan = $('#chat-plan');
+  if (plan) plan.hidden = !CHAT.cfg || CHAT.cfg.provider !== 'chatgpt';
 
   // 没配好就只留「去配置」这一条：示例问句点了也只会报错，不如不给
   const empty = $('#chat-empty');
@@ -6677,10 +6610,10 @@ async function chatInit() {
     const tip = document.createElement('div');
     tip.className = 'chat-empty chat-setup';
     tip.innerHTML = '<p>还没配置模型，配好就能用了：</p>'
-      + '<button class="chat-chip" id="chat-go-setup">配置模型（Base URL / 模型名 / API Key）</button>';
+      + '<button class="chat-chip" id="chat-go-setup">配置模型</button>';
     body.appendChild(tip);
     const btn = $('#chat-go-setup');
-    if (btn) btn.addEventListener('click', () => openAgentSettings());
+    if (btn) btn.addEventListener('click', () => openSettings('agent'));
   } else if (ok) {
     // 配好了就把那条提示撤掉，别留在面板上
     const t = $('#chat-body .chat-setup');
@@ -6711,25 +6644,28 @@ function leaveChat() {
 
 async function sendChat(text) {
   text = String(text || '').trim();
-  if (!text || CHAT.sending) return;
+  if (!text || CHAT.sending || !CHAT.cfg?.configured) return;
   const input = $('#chat-input');
   if (input) { input.value = ''; input.style.height = 'auto'; }
   CHAT.sending = true;
   chatBusy(true);
   try {
     const r = await api('/api/chat', { session: CHAT.session, text });
+    if (!r.ok) throw new Error(r.error || '助手请求失败');
     CHAT.session = r.session || CHAT.session;
     chatPoll();
   } catch (e) {
     CHAT.sending = false;
     toast(e.message, 'err');
+    chatBusy(false);
   }
 }
 
 async function confirmChat() {
   if (!CHAT.session) return;
   try {
-    await api('/api/chat/confirm', { session: CHAT.session });
+    const r = await api('/api/chat/confirm', { session: CHAT.session });
+    if (!r.ok) throw new Error(r.error || '确认失败');
     CHAT.sending = true;
     chatPoll();
   } catch (e) { toast(e.message, 'err'); }
@@ -6742,6 +6678,20 @@ async function cancelChat() {
 
 async function resetChat() {
   try { await api('/api/chat/reset', { session: CHAT.session }); } catch (e) { }
+  forgetChat();
+  // 右栏执行日志一起清掉（只清当前账号这份，别的号留着）
+  clearSideLog();
+  chatInit().then(chatPoll);
+}
+
+function chatConnection(cfg) {
+  if (cfg?.provider !== 'chatgpt') return 'api_key';
+  return JSON.stringify([cfg.chatgpt?.active, cfg.chatgpt?.connection, cfg.displayModel]);
+}
+
+function forgetChat() {
+  CHAT.session = '';
+  CHAT.sending = false;
   CHAT.nodes.forEach(n => n.remove());
   CHAT.nodes.clear();
   CHAT.since = 0;
@@ -6750,9 +6700,6 @@ async function resetChat() {
     body.innerHTML = '<div class="chat-empty" id="chat-empty"></div>';
     paintChatEmpty();
   }
-  // 右栏执行日志一起清掉（只清当前账号这份，别的号留着）
-  clearSideLog();
-  chatInit();
 }
 
 function bindChatChips(root) {
@@ -6766,6 +6713,10 @@ function bindChatChips(root) {
 function bindChat() {
   const input = $('#chat-input');
   if (!input) return;
+  $('#chat-plan-usage').addEventListener('click', e => {
+    e.preventDefault();
+    openUrl(CHATGPT_USAGE);
+  });
   $('#chat-reset').addEventListener('click', resetChat);
   const st = $('#chat-skilltest');
   if (st) st.addEventListener('click', chatSkillTest);

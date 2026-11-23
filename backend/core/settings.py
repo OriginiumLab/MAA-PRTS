@@ -222,6 +222,7 @@ DEFAULTS = {
     'windowGeom': {},
     # 内置助手：只存连接参数，apiKey 走 DPAPI 单独存 config/agent.key
     'agent': {
+        'provider': 'api_key',
         'baseUrl': 'https://api.deepseek.com/v1',
         'model': 'deepseek-chat',
         'autoApply': False,   # 关掉时，写 MAA 前必须用户点确认
@@ -296,6 +297,7 @@ def _norm_agent(v) -> dict:
             url = url[:-len(tail)]
     cur['baseUrl'] = url
     cur['model'] = str(cur.get('model') or '').strip()[:64]
+    cur['provider'] = 'chatgpt' if cur.get('provider') == 'chatgpt' else 'api_key'
     cur['autoApply'] = bool(cur.get('autoApply'))
     return cur
 

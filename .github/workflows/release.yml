@@ -121,7 +121,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check --prefer-binary pywebview pythonnet pyinstaller pillow
+        run: python -m pip install --disable-pip-version-check --prefer-binary pywebview pythonnet pyinstaller pillow "PyJWT[crypto]"
 
       - name: Run smoke test
         run: python -u tools/smoketest/smoke_test.py

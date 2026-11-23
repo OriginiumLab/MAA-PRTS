@@ -56,14 +56,14 @@ exit /b 0
 
 
 :InstallRuntime
-"%PYTHON%" -c "import webview, clr" >nul 2>&1
+"%PYTHON%" -c "import webview, clr, jwt, cryptography" >nul 2>&1
 if not errorlevel 1 exit /b 0
 
 echo [init] installing runtime deps pywebview & pythonnet (first run only)...
-"%PYTHON%" -m pip install --disable-pip-version-check --prefer-binary --upgrade %PIP_USER_ARG% pywebview pythonnet
+"%PYTHON%" -m pip install --disable-pip-version-check --prefer-binary --upgrade %PIP_USER_ARG% pywebview pythonnet "PyJWT[crypto]"
 if errorlevel 1 exit /b 1
 
-"%PYTHON%" -c "import webview, clr" >nul 2>&1
+"%PYTHON%" -c "import webview, clr, jwt, cryptography" >nul 2>&1
 if errorlevel 1 (
     echo [error] runtime deps still not importable after install.
     exit /b 1

@@ -1,5 +1,9 @@
 # 内置助手与命令行（M4 / M5）
 
+Windows 桌面助手可通过官方授权使用符合资格的 ChatGPT 套餐额度。此接入属于
+[OpenAI 预览能力](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)，
+接口和可用模型可能调整。登录、额度和使用方式见 [ChatGPT 套餐说明](chatgpt.md)。
+
 ## 这东西解决什么
 
 按钮能表达的是「确定的、我知道要做什么」；助手能表达的是另外三类：

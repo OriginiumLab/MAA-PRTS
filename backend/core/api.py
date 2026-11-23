@@ -7,10 +7,10 @@ import os
 import traceback
 import urllib.parse
 
-from . import (accounts, agent, appupdate, asstlog, autostart, copilot, gacha,
-               garrison, maa, maaplan, mirror, multiacct, operbox, packsync,
-               paradox, resources, scheduler, settings, signin, skills, sklogin,
-               tasks, themes, updater, version, watch)
+from . import (accounts, agent, appupdate, asstlog, autostart, chatgpt_auth,
+               chatgpt_responses, copilot, gacha, garrison, maa, maaplan, mirror,
+               multiacct, operbox, packsync, paradox, resources, scheduler, settings,
+               signin, skills, sklogin, tasks, themes, updater, version, watch)
 
 WEB = settings.static_dir()
 
@@ -951,6 +951,29 @@ def api_chat(_q, body):
     return agent.chat(body.get('session'), body.get('text'))
 
 
+def api_agent_chatgpt(_q, body):
+    action = body.get('action')
+    profile = str(body.get('profile') or '')
+    if action == 'login':
+        chatgpt_auth.start_login(profile, reconsent=bool(profile and body.get('consent')))
+    elif action == 'select':
+        chatgpt_auth.select(profile)
+    elif action == 'models':
+        return {'models': chatgpt_responses.models(profile)}
+    elif action == 'model':
+        model = str(body.get('model') or '').strip()
+        if not model or len(model) > 128:
+            raise ValueError('请选择 ChatGPT 模型。')
+        chatgpt_auth.save_model(profile, model)
+    elif action == 'logout':
+        return {'revoked': chatgpt_auth.sign_out(profile)}
+    elif action == 'resume':
+        chatgpt_auth.set_limited(profile, False)
+    else:
+        raise ValueError('未知的 ChatGPT 设置操作。')
+    return {}
+
+
 def api_chat_poll(q, _body):
     s = agent.session(q.get('session'), create=False)
     if not s:
@@ -1162,6 +1185,7 @@ ROUTES = {
     # 内置助手（M4）
     '/api/agent/status': api_agent_status,
     '/api/agent/config': api_agent_config,
+    '/api/agent/chatgpt': api_agent_chatgpt,
     '/api/chat': api_chat,
     '/api/chat/poll': api_chat_poll,
     '/api/chat/confirm': api_chat_confirm,

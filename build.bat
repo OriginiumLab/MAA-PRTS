@@ -27,14 +27,14 @@ exit /b 0
 
 
 :InstallBuildDependencies
-"%PYTHON%" -c "import webview, clr, PyInstaller, PIL" >nul 2>&1
+"%PYTHON%" -c "import webview, clr, PyInstaller, PIL, jwt, cryptography" >nul 2>&1
 if not errorlevel 1 exit /b 0
 
 echo [init] installing build dependencies (first run only)...
-"%PYTHON%" -m pip install --disable-pip-version-check --prefer-binary --upgrade %PIP_USER_ARG% pywebview pythonnet pyinstaller pillow
+"%PYTHON%" -m pip install --disable-pip-version-check --prefer-binary --upgrade %PIP_USER_ARG% pywebview pythonnet pyinstaller pillow "PyJWT[crypto]"
 if errorlevel 1 exit /b 1
 
-"%PYTHON%" -c "import webview, clr, PyInstaller, PIL" >nul 2>&1
+"%PYTHON%" -c "import webview, clr, PyInstaller, PIL, jwt, cryptography" >nul 2>&1
 if errorlevel 1 (
     echo [error] build dependencies still not importable after install.
     exit /b 1
