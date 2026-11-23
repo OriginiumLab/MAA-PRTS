@@ -133,6 +133,13 @@ def _reset_config(tmp):
     sys.path.insert(0, os.path.join(REPO, 'backend'))
     from core import settings
     settings._cache = None
+    try:
+        # 上一个检查可能按过「停止」（B66/B61），按账号记的停标记会串到
+        # 下一个检查里，让它的号一开跑就被判「已叫停」而跳过。
+        from core import maacore
+        maacore.clear_stop(None)
+    except Exception:
+        pass
 
 
 def check_vault_roundtrip():
@@ -7387,6 +7394,84 @@ def check_scatter_stages(tmp):
          scatter.back_to_cells, maaplan._connection) = old
 
 
+def check_pause_stops(tmp):
+    """B66 暂停要真的停住：按账号记账 + 段/步骤循环收手
+
+    2026-11-24 用户报「账号我按了暂停，但是流程和 maacore 好像不会停」：
+    日志里第 1 段已经写了「已停止（你按了停止），不再往下排」，接着第 2/3 段
+    又把 EX 的作业一份份排了上去。原因是 AsstStop 只停**当前那一条链**，
+    上层的段循环（扫图的 base→EX→S、周目、多账号排队）完全不知道用户按了停。
+
+    修法：用户按停止时先按账号记一笔（``maacore.request_stop``），引擎照常
+    叫停；段循环/步骤循环在每段开头查 ``stop_requested`` 就收手。
+    **必须按账号判**——停甲号不许把乙号一起停掉（用户口径「别的账号没动」）。
+    """
+    _reset_config(tmp)
+    from unittest import mock
+
+    from core import maacore, settings, skills
+
+    maacore.clear_stop(None)
+
+    # ---- 1) 记账按账号隔离：停 A 不碰 B ----
+    assert maacore.request_stop(['甲号.json']) == 1
+    assert maacore.stop_requested('甲号.json') is True
+    assert maacore.stop_requested('甲号') is True          # 不带扩展名也对得上
+    assert maacore.stop_requested('乙号.json') is False    # 别的号绝不受影响
+    maacore.clear_stop(['甲号.json'])
+    assert maacore.stop_requested('甲号.json') is False
+
+    # ---- 2) 全停（stop_all_live 那条路）----
+    maacore.request_stop(None)
+    assert maacore.stop_requested('随便哪个号.json') is True
+    maacore.clear_stop(None)
+    assert maacore.stop_requested('随便哪个号.json') is False
+
+    # ---- 3) stop_live 先记账再叫停 ----
+    # 用户按的时机常常正好是「段与段之间」，那会儿一个活引擎都没有，
+    # 只靠 AsstStop 的话下一段照排（就是用户看到的现象）。
+    assert maacore.stop_live(['丙号.json']) == 0
+    assert maacore.stop_requested('丙号.json') is True
+    assert maacore.stop_requested('丁号.json') is False
+    maacore.clear_stop(None)
+
+    # ---- 4) 多账号排队：停掉的号只停自己，后面排队的号照跑 ----
+    cfg = settings.CONFIG_DIR
+    os.makedirs(cfg, exist_ok=True)
+    for nm in ('甲号', '乙号'):
+        with io.open(os.path.join(cfg, nm + '.json'), 'w', encoding='utf-8',
+                     newline='') as fh:
+            json.dump({'account': {'uid': '1', 'nickName': nm,
+                                   'channelName': '官服'}, 'maa': {}}, fh,
+                      ensure_ascii=False)
+
+    said, seen, results = [], [], {}
+
+    def fake_call(name, p, log, tid=None):
+        who = os.path.basename(str(p.get('account') or ''))
+        seen.append(who)
+        if who.startswith('甲号'):
+            maacore.request_stop(['甲号.json'])     # 甲号第一步跑到一半按了停
+        return {'ok': True}
+
+    g = {'files': ['甲号.json', '乙号.json'], 'dir': '', 'address': '',
+         'profile': '', 'override': False}
+    steps = [('signin', {}), ('signin', {}), ('signin', {})]
+    with mock.patch.object(skills, '_call_skill', fake_call):
+        skills._run_group(g, steps, {}, said.append, results,
+                          threading.Lock(), tid='t')
+    maacore.clear_stop(None)
+
+    jia = results.get('甲号.json') or {}
+    assert jia.get('ok') is False, jia
+    assert len(jia.get('steps') or []) == 2, jia        # 1 步 + 一条「用户停止」
+    assert jia['steps'][-1].get('why') == '用户停止', jia
+    yi = results.get('乙号.json') or {}
+    assert yi.get('ok') is True, yi                     # 乙号一点没被打断
+    assert len(yi.get('steps') or []) == 3, yi
+    assert any('这个号剩下的' in str(x) for x in said), said
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -7482,6 +7567,8 @@ def main():
                 lambda: check_exit_confirm(tmp))
         r.check('B65 难度口径（要突袭就排突袭 / 排不出来报 raidMissing）',
                 lambda: check_raid_variant(tmp))
+        r.check('B66 暂停真停（按账号记账 / 段循环收手 / 不误伤别的号）',
+                lambda: check_pause_stops(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

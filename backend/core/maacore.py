@@ -88,6 +88,59 @@ def _utf8(s):
 _LIVE = set()
 _LIVE_LOCK = threading.Lock()
 
+# 用户点名要求「停这一路」的标记：引擎叫停之后，上层还有段循环（扫图第
+# 2/3 段、周目下一批、多账号下一个号）会接着往下排——2026-11-24 用户报
+# 「账号我按了暂停，但流程和 MaaCore 好像不会停」就是这里。记一笔，让
+# skill 的循环在段与段之间能查「这一路是不是已经被叫停了」。
+_STOP_REQ = set()
+_STOP_REQ_LOCK = threading.Lock()
+
+
+def request_stop(owners=None):
+    """记下「用户要求停这些账号」（真正叫停引擎在 :func:`stop_live`）
+
+    ``owners`` 空 = 全停（``stop_all_live`` 走这条）。存账号文件名，查询走
+    :func:`owner_match`，所以传昵称、去扩展名的写法都能对上。
+    """
+    with _STOP_REQ_LOCK:
+        if not owners:
+            _STOP_REQ.add('*')
+            return 1
+        n = 0
+        for w in owners:
+            s = os.path.basename(str(w or '').strip())
+            if s:
+                _STOP_REQ.add(s)
+                n += 1
+        return n
+
+
+def stop_requested(owner):
+    """这个账号是不是刚被用户叫停过（段循环 / 步骤循环用它及时收手）
+
+    **按账号判**：停 A 号不影响 B 号——用户口径是「停这一路，别的账号没动」。
+    """
+    if not owner:
+        return False
+    with _STOP_REQ_LOCK:
+        if not _STOP_REQ:
+            return False
+        wants = list(_STOP_REQ)
+    if '*' in wants:
+        return True
+    return owner_match(owner, wants)
+
+
+def clear_stop(owners=None):
+    """这一路重新开工时清掉标记，别把下一轮也一起停了"""
+    with _STOP_REQ_LOCK:
+        if not owners:
+            _STOP_REQ.clear()
+            return
+        for w in owners:
+            s = os.path.basename(str(w or '').strip())
+            _STOP_REQ.discard(s)
+
 
 def stop_live(owners=None):
     """叫停直连实例（只 AsstStop，不销毁，让调用方的 wait() 自己收到结束）
@@ -99,6 +152,9 @@ def stop_live(owners=None):
     匹配走 :func:`owner_match`，所以传文件名、``示例昵称#0384 bilibili服`` 这种
     去掉扩展名的写法、昵称都能对上。
     """
+    # 先记账再叫停：用户按的这一刻可能正好在「段与段之间」，那会儿没有
+    # 活引擎（下面循环一个都停不到），只靠 AsstStop 的话下一段还会照排。
+    request_stop(owners)
     with _LIVE_LOCK:
         live = [e for e in _LIVE if e._handle]
     n = 0

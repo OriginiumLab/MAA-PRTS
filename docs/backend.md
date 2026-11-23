@@ -982,6 +982,42 @@ skill_claim({'account': ..., 'stage': 'OS', 'wakeup': False})
 纯 adb 操作（不连 MaaCore），所以它不在 `_WRITE_HANDLERS` 里——和 `wakeup` /
 `navigate` 一样免确认。奖励页的「一键领取」按钮已领完也还在，点了没反应不算失败。
 
+## 暂停要真的停住（2026-11-24）
+
+用户按「停止」后，日志已经写了「已停止（你按了停止），不再往下排」，可扫图
+第 2/3 段还是把 EX 的作业一份份排了上去。不是 `AsstStop` 没生效——那一条链
+确实停了——而是**上层的循环不知道用户按了停**：
+
+- `skills.skill_sweep`：base → EX → S 是一段一段调 `run_core` 的，段与段之间
+  只看时间预算，不看「用户是否叫停」；
+- `skills._run_group`（多账号排队）：一个号跑完接着下一个号；
+- `skills.skill_weekly`：一批战斗打完接着下一批；
+- `maaplan._retry_failed`：翻车后无条件换作业重挂。
+
+`run_core` 返回值里其实已经有 `paused == '手动停止'`（来自
+`Engine.stopped_by_user`），只是上层没人看。
+
+修法：**用户按停止时先按账号记一笔**（`maacore.request_stop`，`stop_live`
+的第一条语句），引擎照常叫停；然后上面四处循环在段/步开头查
+`maacore.stop_requested(file)`，命中就收手。
+
+三个必须的细节：
+
+1. **按账号判**（`owner_match`）：停甲号不许把乙号一起停——用户口径是
+   「停这一路，别的账号没动」。全停只有 `stop_all_live` 会给 `'*'`。
+2. **开工前清标记**（`maacore.clear_stop`）：`run_skill` / `run_batch` 一开跑
+   就清这一路的旧标记，否则上次停了之后这一路永远开不起来。冒烟夹具
+   `_reset_config` 也要清，不然 B61 停过的标记会串到 B52/B53。
+3. **`stop_live` 先记账再叫停**：用户按的时机常常正好在「段与段之间」，
+   那会儿一个活引擎都没有（循环一个都停不到），只靠 AsstStop 的话下一段
+   照排。
+
+顺带修的两句日志：`run_core` 手动停止时不再打「跑了 X 分 Y 秒还没结束」
+（那是超时的话术）；翻车重挂入口先看 `eng.stopped`，用户停了就不换作业。
+
+冒烟 B66 钉住：标记按账号隔离 / 全停 / `stop_live` 记账 / 多账号排队时停一个
+号不波及下一个号（甲号 1 步即停、乙号 3 步跑满）。
+
 ## 页面识别与回主界面（`pages.py`，2026-11-22）
 
 用户报「判断不出游戏停在哪一页」：以前只有 `stagenav.at_home()` 一套整屏

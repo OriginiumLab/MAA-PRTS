@@ -1159,7 +1159,8 @@ def run_core(spec, tid=None, timeout=None):
             # 过车就交给 _retry_failed——里面没得换会同一份再试一次。
             swapped, chains_mark = _retry_failed(eng, spec, state, log, d, budget,
                                                  conn=conn)
-        if not finished and not state.get('pause'):
+        if not finished and not state.get('pause') \
+                and not getattr(eng, 'stopped_by_user', False):
             # 报**实际等了多久**，别拿时间预算当耗时：以前这里打 ``total // 60``，
             # 明明只跑了两分钟也会写「等了 60 分钟」/「等了 6 分钟」，用户看日志
             # 只会以为程序算错了时间（2026-11-23）。
@@ -2386,6 +2387,11 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
     收尾判失败要从它往后看，否则第一轮的失败会把重试成功的结果盖掉。真的没
     进入重试时返回 ``([], None)``——0 是合法的分界，不能拿它当「没重试」。
     """
+    if getattr(eng, 'stopped', False):
+        # 用户点了「停止挂机」：别再换作业重挂，否则就是「按了停止还在动」
+        # （2026-11-24 用户报「账号我按了暂停，但流程和 maacore 不会停」）。
+        log('已停止（你按了停止），不再换作业重挂')
+        return [], None
     retry = spec.get('retry') or {}
     pool = retry.get('pool') or {}
     # 没有 retry（每关都只有一份作业、或上层没给候选池）也要走一轮：用户报的

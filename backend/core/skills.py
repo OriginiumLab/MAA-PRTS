@@ -1223,6 +1223,7 @@ def skill_fight(params, log, tid=None):
             diff[code] = one
     return {'ok': ok_chain, 'mode': mode, 'stages': stages,
             'account': file, 'noNav': not with_nav,
+            'stopped': bool(user_stop),
             'prereq': sorted(prereq),
             'played': trail, 'failed': failed,
             'failedReason': stageplan.explain_failure((r or {}).get('failed_why') or ''),
@@ -1727,6 +1728,9 @@ def skill_weekly(params, log, tid=None):
     done, batch = [], []
     cur_kind = None
     for r in rows:
+        if maacore.stop_requested(file):
+            log('用户按了停止，周目剩下的关不跑了')
+            break
         code, story = r['code'], r['story']
         if story:
             # 冲掉攒着的战斗批次，先过剧情
@@ -1878,6 +1882,11 @@ def skill_sweep(params, log, tid=None):
         log('=' * 32)
         log('第 %d/%d 段：%s（%d 关）'
             % (i, len(segs), seg['name'], len(seg['codes'])))
+        if maacore.stop_requested(file):
+            # 用户按了停止：段与段之间必须收手，否则就是「第 1 段停了、
+            # 第 2 段又自己开打」（2026-11-24 用户报的现象）
+            log('用户按了停止，剩下的 %d 段不跑了' % (len(segs) - i + 1))
+            break
         want = {c.upper(): seg['variant'] for c in seg['codes']}
         try:
             # 这一段只要这一档：普通段不会拿突袭作业顶，反之亦然
@@ -1925,6 +1934,9 @@ def skill_sweep(params, log, tid=None):
         all_swaps.extend(r.get('swaps') or [])
         log('第 %d 段结束：跑到 %d 关%s'
             % (i, len(ran), ('，翻车 %d 关' % len(fail)) if fail else ''))
+        if str((r or {}).get('paused') or '') == '手动停止':
+            log('已停止（你按了停止），剩下的段不跑了')
+            break
 
     log('=' * 32)
     log('扫图结束：共跑到 %d 关%s'
@@ -2212,6 +2224,12 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
         plog('=== 第 %d/%d 个号（%s %s）==='
              % (i, len(g['files']), g['address'] or '默认模拟器',
                 ('切号 ' + tail) if tail else '不切号'))
+        if maacore.stop_requested(f):
+            # 用户已经叫停这个号（还没轮到它）：别叫醒它，也别占着模拟器
+            plog('这个号已经被叫停，跳过')
+            with lock:
+                results[f] = {'ok': False, 'name': nm, 'error': '用户停止'}
+            continue
         if any(n in _NEEDS_GAME for n, _ in step_list):
             # 按这个号自己的档案判断模拟器开没开（多开时每份档案
             # 连的是不同的模拟器，不能一律看全局那份）。
@@ -2238,6 +2256,12 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
                 continue
         acc_res = []
         for j, (name, p) in enumerate(step_list, 1):
+            if maacore.stop_requested(f):
+                # 「停这一个号」只停它自己的步骤，后面排队等着的号照跑
+                plog('用户按了停止，这个号剩下的 %d 步不跑了'
+                     % (len(step_list) - j + 1))
+                acc_res.append({'skill': name, 'ok': False, 'why': '用户停止'})
+                break
             p = dict(p or {})
             p.setdefault('account', f)
             if tail:
@@ -2361,6 +2385,8 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
                 '「已在关卡列表」才直跑）' % '、'.join(nav_added))
         results = {}
         lock = threading.Lock()
+        for f in files:                     # 新的一轮，清掉旧的「叫停」标记
+            maacore.clear_stop([f])
 
         if len(groups) == 1:
             g = next(iter(groups.values()))
@@ -2554,6 +2580,10 @@ def run_skill(name, params=None):
         # 让 run_core 的 MAA 事件日志（排队/逃跑/失败）写进同一条任务日志
         tid = threading.current_thread().name.replace('task-', '', 1)
         log = tasks.log_factory(tid)
+        # 这一路重新开工：清掉上一次「用户叫停」的标记，否则一开跑就被
+        # 段循环判成「已停止」，什么都不做（2026-11-24）
+        if owner:
+            maacore.clear_stop([owner])
         log('[%s] %s' % (name, desc))
         if name not in _NEEDS_GAME:
             return _skill_body(name, params, log, tid)
