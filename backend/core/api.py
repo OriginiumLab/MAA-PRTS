@@ -194,10 +194,14 @@ def api_account_maa(_q, body):
 
 
 def api_account_devices(q, _body):
-    """某个账号能选哪些模拟器：在线设备 + 现在钉的那台
+    """某个账号能选哪些模拟器：在线设备 + 本机有哪些实例 + 现在钉的那台
 
     设置里「模拟器」下拉用它。多开时地址必须是明示的（见 skills.device_of
     的规则），所以这里把 adb 现在看到的都列出来，用户点一下就行，不用手抄。
+
+    ``instances`` 是**没开着的实例也列**（雷电用 ``ldconsole list2`` 问出来）：
+    用户想把号钉到第二台时，那台常常正好没开，只列在线设备他就选不到
+    （2026-11-23「只能启动 5554，启动不了 5556」的一半原因在前端这边）。
     """
     file = ''
     try:
@@ -212,10 +216,19 @@ def api_account_devices(q, _body):
     except Exception:                           # noqa: BLE001
         cfg = {}
     devs = envcheck._devices(cfg.get('adb') or 'adb') or {}
+    insts = []
+    try:
+        for idx, up in envcheck.ld_instances(cfg.get('emu_dir') or ''):
+            ser = envcheck.ld_serial(cfg.get('emu_dir') or '', idx)
+            if ser and ser not in [x['address'] for x in insts]:
+                insts.append({'address': ser, 'index': idx, 'running': bool(up)})
+    except Exception:                           # noqa: BLE001
+        insts = []
     return {'adb': cfg.get('adb') or '',
             'bound': acctbind.addr_of(file) if file else '',
             'devices': [{'address': a, 'state': s}
-                        for a, s in sorted(devs.items())]}
+                        for a, s in sorted(devs.items())],
+            'instances': insts}
 
 
 def api_account_token(_q, body):

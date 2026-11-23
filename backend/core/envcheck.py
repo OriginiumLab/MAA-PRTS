@@ -17,6 +17,14 @@
 只用 ``settings.emulatorAutoStart``（默认开）控制要不要替用户启动；关掉时
 只提示不动手。
 
+**多开时启动哪一台**：调用方点名了地址（``address='emulator-5556'``）就
+按那台来，不是按 MAA 档案里的 ``InstanceIndex``。2026-11-23 用户报「只能
+帮我启动 5554，启动不了 5556」——档案里一律写 ``InstanceIndex: 0``，所以
+不管你要哪台，拉起来的永远是第一个实例。现在用
+``ldconsole adb --index N --command get-serialno`` 反问「这个地址是第几个
+实例」（实例没开时那行报错里也写着序列号，照样能解析），拿到序号再
+``launch --index N``。
+
 不放进 ``skills.SKILLS``：它不是用户可点的任务，是 ``skills.run_skill``
 起任务时自动调的一次前检——所以也不会出现在 ``/api/skill/list`` 和助手的
 工具列表里。
@@ -24,6 +32,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 
@@ -137,15 +146,149 @@ def _ld_instance_up(emu_dir, index):
     return None
 
 
+_SERIAL_RE = re.compile(r'emulator-(\d{4,6})')
+
+#: ldconsole 一次调用 ~100ms，而设置页一次要问「有哪些实例、各自序列号」，
+#: 八张账号卡就是几十次。3 秒内复用同一份结果，别让界面卡成幻灯片。
+_LD_CACHE = {}
+_LD_TTL = 3.0
+
+
+def _cached(key, make):
+    """``make()`` 的结果缓存 3 秒（只用于 ldconsole 的只读查询）"""
+    hit = _LD_CACHE.get(key)
+    if hit and time.time() - hit[0] < _LD_TTL:
+        return hit[1]
+    val = make()
+    _LD_CACHE[key] = (time.time(), val)
+    return val
+
+
+def ld_serial(emu_dir, index):
+    """雷电：实例序号 → adb 序列号（``emulator-5556``），拿不到返回空串
+
+    ``ldconsole adb --index N --command get-serialno``：实例开着就回序列号，
+    实例没开时回 ``error: device 'emulator-5558' not found``——**错误行里也
+    写着序列号**，照样能解析出来。所以这个调用给出的「序号 ↔ 地址」对应
+    关系不依赖实例是否在运行，比按端口公式猜可靠（多开时序号和端口错开
+    一位就会点错台，那是「说好开第二台，结果第一台又弹出来一个」）。
+    """
+    exe = os.path.join(emu_dir or '', 'ldconsole.exe')
+    if not os.path.isfile(exe):
+        return ''
+    try:
+        idx = int(index or 0)
+    except (TypeError, ValueError):
+        return ''
+    rc, out = _cached((emu_dir, 'serial', idx),
+                      lambda: _run([exe, 'adb', '--index', str(idx),
+                                    '--command', 'get-serialno'], timeout=10))
+    if rc != 0:
+        return ''
+    m = _SERIAL_RE.search(out or '')
+    return 'emulator-%s' % m.group(1) if m else ''
+
+
+def ld_instances(emu_dir):
+    """雷电：这台机器上有哪些实例 → ``[(序号, 安卓起没起来)]``
+
+    ``ldconsole`` 读不到（旧版 / 目录不对）时返回 ``[]``——调用方据此退回
+    老办法，别因为读不到就当成「一个实例都没有」。
+    """
+    exe = os.path.join(emu_dir or '', 'ldconsole.exe')
+    if not os.path.isfile(exe):
+        return []
+    rc, out = _cached((emu_dir, 'instances'),
+                      lambda: _run([exe, 'list2'], timeout=10))
+    if rc != 0:
+        return []
+    got = []
+    for line in (out or '').splitlines():
+        parts = line.split(',')
+        if len(parts) < 5:
+            continue
+        try:
+            got.append((int(parts[0].strip()), parts[4].strip() == '1'))
+        except (TypeError, ValueError):
+            continue
+    return got
+
+
+def adb_port(addr):
+    """``emulator-5556`` → 5556；``127.0.0.1:5555`` → 5555；其余 0
+
+    雷电同一台机器有两个名字：控制台口（``emulator-5554``，MAA 档案里常
+    写这个）和 adb 口（``127.0.0.1:5555``，adb 自己连的时候常用）。判
+    「是不是同一台」时两个都要认，否则用户按 ip:port 填就永远对不上。
+    """
+    a = str(addr or '').strip()
+    m = re.match(r'^emulator-(\d{2,6})$', a)
+    if m:
+        return int(m.group(1))
+    m = re.match(r'^[^:]+:(\d{2,5})$', a)
+    if m:
+        return int(m.group(1))
+    return 0
+
+
+def index_of_address(cfg, address):
+    """这个 adb 地址是**第几个实例** → ``(序号 or None, 序列号)``
+
+    只对雷电能精确反查（``ldconsole adb --index N`` 把序号换成序列号，反
+    过来就能问「5556 是第几个」）。其他模拟器没有这种反查手段，返回
+    ``(None, '')``，调用方按老口径「只检查、不代启动」处理。
+
+    序号 = 实例在自己那台机器上的排位（``ldconsole list2`` 第一列），也就
+    是 ``launch --index`` 要的值；**不是** MAA 档案里那个 ``InstanceIndex``
+    （八份档案常常全写 0）。
+    """
+    addr = str(address or '').strip()
+    if not addr:
+        return None, ''
+    edir = cfg.get('emu_dir') or ''
+    kind = cfg.get('kind') or ''
+    if kind and kind != 'LDPlayer':
+        # 明确是别的模拟器就别拿 ldconsole 去套（目录里恰好有雷电也只是巧合）
+        return None, ''
+    if not os.path.isfile(os.path.join(edir, 'ldconsole.exe')):
+        return None, ''
+    port = adb_port(addr)
+    insts = ld_instances(edir)
+    if not insts:
+        return None, ''
+    # 先问「开着的那几台」，再问没开的：对上了就少几次 subprocess
+    guess = -1
+    if port >= 5554 and (port - 5554) % 2 == 0:
+        guess = (port - 5554) // 2
+    order = sorted(insts, key=lambda x: (x[0] != guess, not x[1], x[0]))
+    for idx, _up in order:
+        ser = ld_serial(edir, idx)
+        if not ser:
+            continue
+        if ser == addr:
+            return idx, ser
+        sp = adb_port(ser)
+        # adb 口的端口 = 控制台口 + 1，两个写法指向同一台
+        if port and sp and port in (sp, sp + 1):
+            return idx, ser
+    return None, ''
+
+
 # ---------------------------------------------------------------- 读配置
-def read_config(maa_dir=None, profile=None):
+def read_config(maa_dir=None, profile=None, address=''):
     """收集连接参数。读不到 MAA 配置时返回空壳，调用方据此跳过检查。
 
     多开时每个账号绑的是不同 MAA（也往往连不同模拟器），所以这里能指定
     看哪一份 MAA 配置——不指定就看全局默认那份。
+
+    ``address`` 是调用方点名的那台（``emulator-5556``）：给了就以它为准反查
+    实例序号，**压过**档案里的 ``InstanceIndex``。档案里那个值在多开用户那
+    儿常年是 0（八份档案抄来抄去），照它启动永远拉起第一个实例。
+    返回里 ``indexFrom`` 说明序号是哪来的（``地址`` / ``档案``），``serial``
+    是序号换回来的 adb 序列号，用来「等它上线」时两种写法都认。
     """
     out = {'adb': '', 'address': '', 'kind': '', 'emu_dir': '', 'index': 0,
-           'name': '', 'source': ''}
+           'indexFrom': '档案', 'serial': '', 'name': '', 'source': ''}
 
     # 1) MAA 的 gui.new.json
     try:
@@ -199,6 +342,16 @@ def read_config(maa_dir=None, profile=None):
     if not out['adb'] or not os.path.isfile(out['adb']):
         cand = os.path.join(out['emu_dir'], 'adb.exe') if out['emu_dir'] else ''
         out['adb'] = cand if cand and os.path.isfile(cand) else (out['adb'] or 'adb')
+
+    # 4) 点名了地址 → 反查实例序号（放在最后：要用到上面定下来的 emu_dir）
+    if address:
+        idx, ser = index_of_address(out, address)
+        if idx is not None:
+            out['index'] = idx
+            out['indexFrom'] = '地址'
+            out['serial'] = ser
+        else:
+            out['serial'] = str(address)
     return out
 
 
@@ -286,18 +439,43 @@ def launch(cfg):
     return False, '目录里没找到启动器：%s（%s）' % (edir, spec['name'])
 
 
-def wait_ready(cfg, timeout=WAIT_DEFAULT, log=None, quiet_until=8.0):
-    """等 adb 就绪；``quiet_until`` 内不刷进度，免得开机快的时候一堆噪音"""
+def _addr_hit(devs, wants):
+    """``wants`` 里第一个在线的设备（都没在线返回空串）"""
+    for w in wants or []:
+        if w and (devs or {}).get(w) == 'device':
+            return w
+    return ''
+
+
+def wait_ready(cfg, timeout=WAIT_DEFAULT, log=None, quiet_until=8.0,
+               wants=None):
+    """等 adb 就绪；``quiet_until`` 内不刷进度，免得开机快的时候一堆噪音
+
+    ``wants`` 非空时**只等这几台**（``['emulator-5556', 'emulator-5554']``
+    这种同机两个写法），不能被「另一台先起来了」骗过去——多开时那正是
+    「等的是第二台，结果第一台一响就往下跑，最后连到错的那台」的来源。
+    """
     log = log or (lambda *_: None)
+    wants = [w for w in (wants or []) if w]
     t0 = time.time()
     last_note = 0.0
     while True:
-        ok, addr, detail = adb_now(cfg)
-        if ok:
-            return True, addr, detail
+        if wants:
+            devs = _devices(cfg['adb']) or {}
+            hit = _addr_hit(devs, wants)
+            if hit:
+                return True, hit, 'adb 正常（%s）' % hit
+            live = [a for a, s in devs.items() if s == 'device']
+            detail = '「%s」还没上线（现在在线：%s）' % (
+                wants[0], '、'.join(live) or '无')
+        else:
+            ok, addr, detail = adb_now(cfg)
+            if ok:
+                return True, addr, detail
         spent = time.time() - t0
         if spent >= timeout:
-            return False, cfg.get('address') or '', detail
+            return False, (wants[0] if wants else cfg.get('address') or ''), \
+                detail
         if spent - last_note >= 15 and spent >= quiet_until:
             last_note = spent
             log('还在等模拟器起来…（%d 秒，%s）' % (int(spent), detail))
@@ -305,6 +483,19 @@ def wait_ready(cfg, timeout=WAIT_DEFAULT, log=None, quiet_until=8.0):
 
 
 # ---------------------------------------------------------------- 对外
+def _auto_start():
+    """设置里的「没开就替用户启动」（读不到设置按开处理）"""
+    try:
+        return bool(settings.load().get('emulatorAutoStart', True))
+    except Exception:                           # noqa: BLE001
+        return True
+
+
+def _fail_manual(name, detail):
+    return ('%s没启动（%s）。设置里关了自动启动，请自己开一下。'
+            % (name, detail))
+
+
 def ensure(log=None, wait=None, maa_dir=None, profile=None, address=None):
     """开跑前确认环境，返回 ``(ok, 说明)``
 
@@ -313,18 +504,51 @@ def ensure(log=None, wait=None, maa_dir=None, profile=None, address=None):
     设备还往下跑，只会在几十秒后报一句更难懂的「找不到关卡」。
 
     ``maa_dir`` / ``profile`` 指定看哪份 MAA 配置（多开时每个账号一份）。
-    ``address`` 是多开时点名的模拟器地址：只查这一台在不在线，不在就直说，
-    **不会**去启动档案里那台（启动错了等于让两组抢同一台设备）。
+
+    ``address`` 是多开时点名的那台（账号绑的 / 用户当场说的）。这台不在线
+    时**按它的实例序号去启动那一台**，绝不换成档案里那台——2026-11-23 用户
+    报「只能帮我启动 5554，启动不了 5556」：以前这里只查不启，而启动分支
+    用的是档案里的 ``InstanceIndex``（多开用户那儿常年是 0），于是永远拉起
+    第一个实例，第二个永远是「没在线，请你自己开」。
     """
     log = log or (lambda *_: None)
-    cfg = read_config(maa_dir, profile)
+    cfg = read_config(maa_dir, profile, address=address or '')
     if address:
+        # 同一台的两个写法都要认：用户可能填 emulator-5556，adb 里却挂着
+        # 127.0.0.1:5557（或反过来），只按字面比会误判「没在线」
+        wants = [address]
+        if cfg.get('serial') and cfg['serial'] != address:
+            wants.append(cfg['serial'])
         devs = _devices(cfg['adb']) or {}
-        if devs.get(address) == 'device':
-            return True, 'adb 正常（%s）' % address
+        hit = _addr_hit(devs, wants)
+        if hit:
+            return True, 'adb 正常（%s）' % hit
         live = [a for a, s in devs.items() if s == 'device']
-        return False, ('指定的模拟器「%s」没在线（现在在线：%s）。'
-                       '先把它开起来再重跑' % (address, '、'.join(live) or '无'))
+        idx = cfg.get('index') if cfg.get('indexFrom') == '地址' else None
+        if idx is None:
+            # 反查不到是哪台实例（其他模拟器 / 目录不对）：说清楚，别乱启动
+            return False, ('指定的模拟器「%s」没在线（现在在线：%s）。'
+                           '先把它开起来再重跑'
+                           % (address, '、'.join(live) or '无'))
+        name = '%s 的实例 %d（%s）' % (cfg.get('name') or '模拟器', idx,
+                                      address)
+        if not _auto_start():
+            return False, _fail_manual(name, '现在在线：%s'
+                                       % ('、'.join(live) or '无'))
+        log('%s没启动，正在帮你启动…' % name)
+        started, how = launch(cfg)
+        if not started:
+            return False, ('%s没启动，我试着启动也没成功：%s。'
+                           '手动打开模拟器后再重试。' % (name, how))
+        log('启动命令已发出（%s），等它开机…' % how)
+        ok, addr, detail = wait_ready(cfg, timeout=wait or WAIT_DEFAULT,
+                                      log=log, wants=wants)
+        if ok:
+            log('%s已启动，adb 就绪（%s）' % (name, addr))
+            return True, detail
+        return False, ('%s拉起来了，但 %d 秒内 adb 没连上（%s）。'
+                       '等它开完机，在 MAA 里点一次「连接」，或者直接重跑任务。'
+                       % (name, wait or WAIT_DEFAULT, detail))
     if not cfg['adb'] and not cfg['emu_dir']:
         return True, '没读到 MAA 配置，跳过环境检查'
     if not _KINDS.get(cfg['kind']) and not cfg['emu_dir']:
@@ -346,13 +570,8 @@ def ensure(log=None, wait=None, maa_dir=None, profile=None, address=None):
                        '可以在 MAA 里点一次「连接」再重试。' % (name, detail))
 
     # 没在跑：替用户启动
-    try:
-        auto = bool(settings.load().get('emulatorAutoStart', True))
-    except Exception:                           # noqa: BLE001
-        auto = True
-    if not auto:
-        return False, ('%s没启动（%s）。设置里关了自动启动，请自己开一下。'
-                       % (name, detail))
+    if not _auto_start():
+        return False, _fail_manual(name, detail)
 
     log('%s没启动，正在帮你启动…' % name)
     started, how = launch(cfg)

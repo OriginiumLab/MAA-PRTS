@@ -266,11 +266,15 @@ B 服的切号名规则跟官服不一样，填错 MAA 会死找账号。
 选了档案就把 StartUp 里的 `AccountName` 填进切号名输入框、来源标 `profile`；
 用户一动手输入就标 `manual`。
 
-模拟器下拉的选项来自 `/api/account/devices`（`adb devices` 在线列表，形如
-`emulator-5556 · 在线`，第一项是「不指定，按 MAA 档案」），旁边「刷新」重读一遍
-adb。保存走 `/api/account/maa` 的 `patch.adbAddress`，写进账号的 `maa.adbAddress`
-——它和助手的 `bind_emulator` 是同一个字段，钉住以后跑机只连这台，那台不在线
-就报错，不会自己换。卡片头部会多一个「模拟器 emulator-5556」小标签。
+模拟器下拉的选项来自 `/api/account/devices`：`adb devices` 里的在线设备（形如
+`emulator-5556 · 在线`）在前，**本机有、但没开着的实例紧跟其后**（雷电用
+`ldconsole list2` 问出来，形如 `emulator-5556 · 未启动（跑任务时自动开）`），
+第一项是「不指定，按 MAA 档案」，旁边「刷新」重读一遍 adb。没开的实例也要列
+是 2026-11-23 补的：只列在线设备时，用户想把号钉到第二台而那台正好关着，下拉
+里根本没有 5556 可选。保存走 `/api/account/maa` 的 `patch.adbAddress`，写进
+账号的 `maa.adbAddress`——它和助手的 `bind_emulator` 是同一个字段，钉住以后跑机
+只连这台；那台没开就按它的实例号启动那一台（`emulator-5556` → `launch --index 1`），
+绝不换成别的那台。卡片头部会多一个「模拟器 emulator-5556」小标签。
 
 打开设置页时 `autoFillMaa()` 只填空着的切号名，**不替用户选档案**——
 两个游戏账号对五份档案，猜错就是切号死循环 4 分钟，宁可只提示一句

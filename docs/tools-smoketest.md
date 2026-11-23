@@ -448,11 +448,12 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
 - **绑定落盘**：`/api/account/maa` 写 `adbAddress` → `acctbind.addr_of` /
   `skills._addr_of` 都读到；本次点名（`_ADDR.map`）优先于绑定；`list_accounts`
   带出 `maaAdbAddress`
-- **绝不换台**：钉的那台不在线 → `device_of` 返回空地址 + 「不会自动换」的原因，
-  并把在线设备列出来；解绑后按档案走
+- **绝不换台**：钉的那台不在线 → `device_of` 原样返回钉的地址（不换成在线的
+  那台，交给 `envcheck` 按实例号去启动它，见 B62）；解绑后按档案走
 - **档案过期**：档案地址不在线时，两台在线 → 拦下要用户指定；只剩一台 → 顶上；
   一台都没开 → 返回空交给 `envcheck` 去启动
-- **设备下拉**：`/api/account/devices` 返回在线列表（地址 + 状态）和当前绑定
+- **设备下拉**：`/api/account/devices` 返回在线列表（地址 + 状态）、本机实例
+  （`instances`，含没开的）和当前绑定
 
 ### B61 客户端类型进任务参数 / 停止能按账号点名（2026-11-23）
 
@@ -468,6 +469,24 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
   `stop_live([这个号])` 只停它一个，全停才把剩下的停掉，已停过的不重复计数
 - **名字解析**：`match_accounts` 完全相等优先，子串对上多个 → 报错（停错号
   代价太大）
+
+### B62 多开启动：按地址反查实例号（2026-11-23）
+
+用户报「只能帮我启动 5554 的模拟器，启动不了 5556 的」。假 `ldconsole`（把
+`envcheck._run` 换掉，`list2` 回两个实例、`get-serialno` 回
+`emulator-5554/5556/5558`）钉住四件事：
+
+- **地址 → 序号**：`emulator-5556` → 实例 1；`127.0.0.1:5557`（adb 口）也是
+  实例 1；本机没有的 `emulator-9999` 和「明确是别的模拟器」都返回 `None`
+- **序号压过档案**：假档案 `InstanceIndex: 0`，`read_config(address=
+  'emulator-5556')` 必须给出 `index=1 / indexFrom='地址'`
+- **启动那一台**：`ensure(address='emulator-5556')` 时只有 5554 在线 →
+  `launch` 拿到的序号是 **1**（不是档案里的 0），日志说「实例 1」，并且
+  `wait_ready` 的 `wants` 里带着 `emulator-5556`
+- **三种边界**：目标已在线 → 放行且**零日志**；关了自动启动 → 只提示不动手；
+  反查不到是哪台实例 → 不猜也不启动，回「没在线」让用户自己开
+- **下拉里能选到没开的实例**：`/api/account/devices` 的 `instances` 同时给出
+  5554（开着）和 5556（`running=false`）——设置页要能选到关着的第二台
 - **界面接口**：`/api/run/stop {file}` 的 `accounts` 只含这个号；`{all:true}`
   才是全停
 - **多开子进程**：`multiproc.stop_groups` 按这一组的 `files` 匹配，命中才

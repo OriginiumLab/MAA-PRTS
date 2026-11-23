@@ -90,7 +90,8 @@ def device_of(file, maa_dir=None, profile=None):
     ==================  ============================================
     地址来源            那台不在线时
     ==================  ============================================
-    点名 / 账号绑定      **绝不自愈**，直接拦下并列出在线设备
+    点名 / 账号绑定      **绝不换成别的**，原样交出这台（交给 envcheck
+                        按它的实例序号去启动；能启动就不算错）
      MAA 档案            只有一台在线才顶上（地址过期很常见，无歧义）
      ==================  ============================================
 
@@ -112,14 +113,14 @@ def device_of(file, maa_dir=None, profile=None):
     src = '指定' if pinned else ('档案' if from_cfg else '')
     if want and devs.get(want) == 'device':
         return want, src, ''
+    if pinned:
+        # 钉死的这台没在线：**不换台**，原样交出去让 envcheck 去启动它。
+        # 「第二个实例没开」和「地址写错」长得一样：前者该自动开，后者会在
+        # ensure 里回一句「没在线，现在在线：…」，比这里直接拦下更准。
+        return pinned, src, ''
     if not live:
         # 一台都没开：交给 envcheck 按档案里的实例去启动，启动的正是 want
         return '', src, ''
-    if pinned:
-        return '', src, ('这个号钉的是「%s」，但它不在线（现在在线：%s）。'
-                         '不会自动换成别的模拟器——开好它再重跑，或者把设置里'
-                         '这个号的模拟器改成在线的那台'
-                         % (pinned, '、'.join(live)))
     if len(live) == 1:
         return live[0], '自动', ''
     return '', src, ('档案里写的是「%s」，它不在线；现在有 %d 台在线（%s），'

@@ -5338,12 +5338,12 @@ def check_emu_binding(tmp):
     try:
         skills._ADDR.map = {}
         assert skills.device_of(file)[:2] == ('emulator-5556', '指定')
-        # 钉的那台没在线 → 拦下，列出在线设备，**绝不**自己换
+        # 钉的那台没在线 → **不换台**，原样交出去（由 envcheck 按实例号去启动；
+        # 见 B62。「第二个实例没开」和「地址写错」长得一样，前者该自动开）
         api.api_account_maa({}, {'file': file,
                                  'patch': {'adbAddress': 'emulator-9999'}})
         addr, src, why = skills.device_of(file)
-        assert not addr and '不会自动换' in why, (addr, why)
-        assert 'emulator-5554' in why and src == '指定', why
+        assert addr == 'emulator-9999' and not why and src == '指定', (addr, src, why)
         # 解绑 → 按档案；档案那台在线就用它
         api.api_account_maa({}, {'file': file, 'patch': {'adbAddress': ''}})
         assert skills.device_of(file)[:2] == ('emulator-5554', '档案')
@@ -5366,6 +5366,152 @@ def check_emu_binding(tmp):
     finally:
         envcheck.read_config, envcheck._devices = old_rc, old_dev
         skills._ADDR.map = {}
+
+
+def check_emu_auto_start(tmp):
+    """B62 「只能启动 5554，启动不了 5556」：按地址反查实例号，启动那一台
+
+    2026-11-23 用户报：只能帮我启动 5554 adb 的模拟器，启动不了 5556 的。
+    两个洞叠在一起：
+
+    ① 启动用的实例号取自 MAA 档案的 ``InstanceIndex``——多开用户那儿八份
+       档案几乎全写 0，于是不管要哪台，``launch --index 0`` 永远拉起第一个；
+    ② ``ensure(address=...)`` 只查不启：目标不在线就回一句「先把它开起来再
+       重跑」，等于把「第二个实例没开」当成用户填错了地址。
+
+    现在用 ``ldconsole adb --index N --command get-serialno`` 把序号换成
+    序列号（实例没开时那行 ``error: device 'emulator-5558' not found`` 里
+    也写着序列号），反过来就能问出「5556 是第几个实例」；序号由调用方点名
+    的地址说了算、压过档案；目标没开就启动那一台，并且只等那台上线。
+    """
+    _reset_config(tmp)
+    from core import api, envcheck, maa
+
+    fake_dir = os.path.join(tmp, 'fakeemu')
+    if not os.path.isdir(fake_dir):
+        os.makedirs(fake_dir)
+    # ld_instances / ld_serial 只检查这个文件在不在，命令输出由 _run 兜
+    io.open(os.path.join(fake_dir, 'ldconsole.exe'), 'w',
+            encoding='utf-8', newline='').close()
+
+    def fake_run(cmd, timeout=15):
+        s = ' '.join(str(x) for x in cmd)
+        if 'list2' in s:
+            return 0, ('0,雷电模拟器,1,1,1,100,101,1920,1080,280\n'
+                       '1,雷电模拟器-1,2,2,0,0,0,1920,1080,280\n')
+        if 'get-serialno' in s:
+            i = int(cmd[cmd.index('--index') + 1])
+            return 0, 'emulator-%d' % (5554 + 2 * i)
+        if 'devices' in s:
+            return 0, 'List of devices attached\nemulator-5554\tdevice\n'
+        return -1, ''
+
+    old_run = envcheck._run
+    envcheck._run = fake_run
+    try:
+        cfg = {'kind': 'LDPlayer', 'emu_dir': fake_dir + os.sep}
+        # ---- ① 地址 → 实例序号：靠 get-serialno 反查，不按端口公式猜 ----
+        assert envcheck.ld_instances(cfg['emu_dir']) == [(0, True), (1, False)]
+        assert envcheck.ld_serial(cfg['emu_dir'], 1) == 'emulator-5556'
+        # 实例没开也能反查：错误行里带着序列号
+        assert envcheck.ld_serial(cfg['emu_dir'], 2) == 'emulator-5558'
+        assert envcheck.index_of_address(cfg, 'emulator-5556') \
+            == (1, 'emulator-5556')
+        # adb 口写法（控制台口 +1）指向同一台
+        assert envcheck.index_of_address(cfg, '127.0.0.1:5557')[0] == 1
+        # 本机没有的序号不许瞎猜，别去启动一台不存在的实例
+        assert envcheck.index_of_address(cfg, 'emulator-9999') == (None, '')
+        assert envcheck.index_of_address(
+            {'kind': 'MuMuEmulator12', 'emu_dir': fake_dir},
+            'emulator-5556') == (None, '')
+
+        # ---- ② 档案写 InstanceIndex=0，点名 5556 → 序号按地址算成 1 ----
+        old_load = maa._load_cfg
+        maa._load_cfg = lambda d=None: {
+            'Current': 'moren',
+            'Configurations': {'moren': {'Gui': {'ConnectSettings': {
+                'Config': 'LDPlayer', 'Address': 'emulator-5554',
+                'AdbPath': os.path.join(fake_dir, 'adb.exe'),
+                'Extras': {'LDPlayer': {'EmulatorPath': fake_dir,
+                                        'InstanceIndex': 0}}}}}}}
+        try:
+            c0 = envcheck.read_config('M', 'moren')
+            assert (c0['index'], c0['indexFrom']) == (0, '档案'), c0
+            c1 = envcheck.read_config('M', 'moren', address='emulator-5556')
+            assert (c1['index'], c1['indexFrom']) == (1, '地址'), c1
+            assert c1['serial'] == 'emulator-5556', c1
+
+            # 设置页的「模拟器」下拉：没开的实例也要列出来，否则用户根本
+            # 选不到第二台（只列 adb 在线设备时，5556 关着就无从绑定）
+            dev = api.api_account_devices({'file': ''}, {})
+            assert [x['address'] for x in dev['instances']] \
+                == ['emulator-5554', 'emulator-5556'], dev
+            assert dev['instances'][1]['running'] is False, dev
+
+            # ---- ③ 目标没开：启动**那一台**，且只等那台上线 ----
+            calls = {}
+            logs = []
+
+            def fake_launch(c):
+                calls['launched'] = c.get('index')
+                return True, 'ldconsole launch --index %s' % c.get('index')
+
+            def fake_wait(c, timeout=0, log=None, quiet_until=8.0, wants=None):
+                calls['wants'] = list(wants or [])
+                return True, 'emulator-5556', 'adb 正常（emulator-5556）'
+
+            old_launch, old_wait = envcheck.launch, envcheck.wait_ready
+            old_auto, old_dev = envcheck._auto_start, envcheck._devices
+            envcheck.launch, envcheck.wait_ready = fake_launch, fake_wait
+            envcheck._auto_start = lambda: True
+            envcheck._devices = lambda adb: {'emulator-5554': 'device'}
+            try:
+                ok, why = envcheck.ensure(logs.append, maa_dir='M',
+                                          profile='moren',
+                                          address='emulator-5556')
+                assert ok, why
+                assert calls['launched'] == 1, calls     # 不是档案里的 0
+                assert calls['wants'][0] == 'emulator-5556', calls
+                assert '实例 1' in ''.join(logs), logs
+
+                # 目标已经在线 → 立刻放行，不启动、一行日志都不写
+                envcheck._devices = lambda adb: {'emulator-5556': 'device'}
+                logs2 = []
+                calls.clear()
+                ok2, why2 = envcheck.ensure(logs2.append, maa_dir='M',
+                                            profile='moren',
+                                            address='emulator-5556')
+                assert ok2 and not logs2 and 'launched' not in calls, \
+                    (ok2, logs2, calls)
+
+                # 关了自动启动 → 只提示，不动手
+                envcheck._devices = lambda adb: {'emulator-5554': 'device'}
+                envcheck._auto_start = lambda: False
+                ok3, why3 = envcheck.ensure(None, maa_dir='M', profile='moren',
+                                            address='emulator-5556')
+                assert not ok3 and '自动启动' in why3, (ok3, why3)
+                assert 'launched' not in calls, calls
+
+                # 反查不到是哪台实例（别的模拟器）→ 不猜、也不乱启动
+                envcheck._auto_start = lambda: True
+                old_idx = envcheck.index_of_address
+                envcheck.index_of_address = lambda c, a: (None, '')
+                try:
+                    calls.pop('launched', None)
+                    ok4, why4 = envcheck.ensure(None, maa_dir='M',
+                                                profile='moren',
+                                                address='emulator-5556')
+                    assert not ok4 and '没在线' in why4, (ok4, why4)
+                    assert 'launched' not in calls, calls
+                finally:
+                    envcheck.index_of_address = old_idx
+            finally:
+                envcheck.launch, envcheck.wait_ready = old_launch, old_wait
+                envcheck._auto_start, envcheck._devices = old_auto, old_dev
+        finally:
+            maa._load_cfg = old_load
+    finally:
+        envcheck._run = old_run
 
 
 def check_client_and_stop(tmp):
@@ -6985,6 +7131,8 @@ def main():
                 lambda: check_emu_binding(tmp))
         r.check('B61 客户端类型进任务参数 / 停止能按账号点名',
                 lambda: check_client_and_stop(tmp))
+        r.check('B62 多开启动（按地址反查实例号/启动那一台/只等那台上线）',
+                lambda: check_emu_auto_start(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

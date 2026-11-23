@@ -3518,23 +3518,33 @@ function openSettings() {
          绑了档案的账号，切号名直接从档案里填上（只改输入框，点保存才落盘）；
          没绑的只在档案恰好有账号名时提示一句——**不替用户猜**：两个游戏账号
          对 MAA 里五份档案，猜错就是切号死循环 4 分钟。 */
-      /* 这个号能选哪些模拟器：在线设备列表由后端读 adb devices 给。
+      /* 这个号能选哪些模拟器：在线设备 + 本机有哪些实例（没开的也列）。
          多开时地址必须明示（后端 skills.device_of 的规则：钉死的地址不在线
-         就报错，绝不自作主张换一台），所以这里把能选的一次列全。 */
+         就按它的实例号启动那一台，绝不换台），所以这里把能选的一次列全——
+         第二台没开的时候也得能选中它，不然用户根本没法把号钉到 5556。 */
       async function paintAddrSelect(card) {
         const sel = $('[data-f="adbAddress"]', card);
         if (!sel) return null;
         const cur = sel.value || sel.dataset.addr || '';
-        let d = { devices: [] };
+        let d = { devices: [], instances: [] };
         try { d = await api('/api/account/devices?file=' + encodeURIComponent(card.dataset.file)); }
-        catch (e2) { d = { devices: [] }; }
+        catch (e2) { d = { devices: [], instances: [] }; }
         const rows = d.devices || [];
+        const insts = d.instances || [];
         const one = (v, label) =>
           `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label)}</option>`;
+        const online = new Set(rows.map(x => x.address));
         let html = one('', '（不指定，按 MAA 档案）');
         html += rows.map(x => one(x.address,
           x.address + (x.state === 'device' ? ' · 在线' : ' · ' + x.state))).join('');
-        if (cur && !rows.some(x => x.address === cur)) html += one(cur, cur + '（不在线）');
+        html += insts.filter(x => !online.has(x.address)).map(x =>
+          one(x.address, x.address + (x.running
+            ? ' · 已启动，adb 还没通'
+            : ' · 未启动（跑任务时自动开）'))).join('');
+        if (cur && !rows.some(x => x.address === cur)
+            && !insts.some(x => x.address === cur)) {
+          html += one(cur, cur + '（不在线）');
+        }
         sel.innerHTML = html;
         return d;
       }
