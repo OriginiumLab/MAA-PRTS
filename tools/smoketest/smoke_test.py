@@ -5514,6 +5514,137 @@ def check_emu_auto_start(tmp):
         envcheck._run = old_run
 
 
+def check_one_engine_per_proc(tmp):
+    """B63 一路一个进程：多开第二个号不许把前面那路跑挂
+
+    2026-11-23 用户报「我多开另一个号，他把我前面的停了」。asst.log 实证：
+    5556 那组 12:59:50 开跑，13:01:37 另一个账号在**同一个进程**里开了第二个
+    MaaCore，13 秒后 5556 的 StartUp 链就自己「结束」了（只发 TaskChainStopped，
+    不是 Error，上层看上去就像「有人按了停止」），接着两边一起报登录失败。
+
+    根因：MaaCore 的 ``AsstSetUserDir`` / ``AsstLoadResource`` /
+    ``AsstCreateEx`` 动的是**进程级**全局资源，同进程第二个实例会把第一个
+    正在跑的链打断。所以跑机前先抢一个「本进程名额」，抢不到就换独立进程。
+    """
+    _reset_config(tmp)
+    from unittest import mock
+
+    from core import maaplan, maacore, multiproc, settings, skills, tasks
+
+    cfg = settings.CONFIG_DIR
+    with io.open(os.path.join(cfg, '示例号.json'), 'w', encoding='utf-8',
+                 newline='') as fh:
+        json.dump({'account': {'uid': '1', 'nickName': '示例号',
+                               'channelName': '官服'}, 'maa': {}}, fh,
+                  ensure_ascii=False)
+
+    def wait_task(tid, timeout=10.0):
+        end = time.time() + timeout
+        t = None
+        while time.time() < end:
+            t = tasks.get(tid)
+            if t and t['status'] != 'running':
+                return t
+            time.sleep(0.02)
+        return t
+
+    # ---- 1) 名额只有一个，抢到的必须还 ----
+    assert maacore.claim_inproc() is True
+    assert maacore.claim_inproc() is False
+    maacore.release_inproc()
+    assert maacore.claim_inproc() is True
+    maacore.release_inproc()
+
+    # ---- 2) live_others：Engine.open 的闸门按它判断「本进程已经有核心了」----
+    class _E(object):
+        def __init__(self):
+            self._handle = 1
+
+    a, b = _E(), _E()
+    old_live = maacore._LIVE
+    maacore._LIVE = {a, b}
+    try:
+        assert maacore.live_others() == 2
+        assert maacore.live_others(exclude=a) == 1
+    finally:
+        maacore._LIVE = old_live
+
+    # 账号文件写进**当前生效的** config（测试夹具会把 settings.CONFIG_DIR
+    # 指到 tmp，别按 tmp/config 硬拼路径）
+    cfg = settings.CONFIG_DIR
+    os.makedirs(cfg, exist_ok=True)
+    with io.open(os.path.join(cfg, '示例号.json'), 'w', encoding='utf-8',
+                 newline='') as fh:
+        json.dump({'account': {'uid': '1', 'nickName': '示例号',
+                               'channelName': '官服'}, 'maa': {}}, fh,
+                  ensure_ascii=False)
+
+    # ---- 3) 本进程已有一路 → run_skill 换独立进程（kind='one'）----
+    calls, ran = [], []
+
+    def fake_group(kind, tid, idx, payload, log, who=''):
+        calls.append((kind, dict(payload)))
+        return {'示例号.json': {'ok': True, 'via': 'worker'}}, [], False
+
+    entry = skills.SKILLS['wakeup']
+    skills.SKILLS['wakeup'] = (entry[0], lambda *x, **k: ran.append(1))
+    assert maacore.claim_inproc()              # 假装另一路正在跑
+    try:
+        with mock.patch.object(multiproc, 'run_group', fake_group), \
+                mock.patch.object(skills, '_skill_body',
+                                  lambda *x, **k: ran.append(1)):
+            t = wait_task(skills.run_skill('wakeup', {}))
+    finally:
+        skills.SKILLS['wakeup'] = entry
+        maacore.release_inproc()
+    assert not ran, '本进程已经有一路在跑了，还在本进程开了第二个 MaaCore'
+    assert calls and calls[0][0] == 'one', calls
+    assert calls[0][1].get('skill') == 'wakeup', calls[0][1]
+    assert t and t['status'] == 'done', (t or {}).get('status')
+    assert (t.get('result') or {}).get('via') == 'worker', t.get('result')
+
+    # ---- 4) 单组批量：本进程忙 → 整组丢给子进程 ----
+    used = []
+    old_rg, old_proc = skills._run_group, skills._run_group_proc
+    skills._run_group = lambda *x, **k: used.append('inproc')
+    skills._run_group_proc = lambda *x, **k: used.append('proc')
+    # 分组要读「这号在哪台模拟器」，这里不真读 MAA 配置（临时 config 里没有）
+    fake_key = lambda f, a='': (('k', tmp), tmp, {'address': 'emulator-5556'})
+    try:
+        with mock.patch.object(skills, '_emulator_key', fake_key):
+            assert maacore.claim_inproc()
+            try:
+                wait_task(skills.run_batch(['示例号.json'],
+                                           [{'skill': 'wakeup'}]))
+            finally:
+                maacore.release_inproc()
+            assert used == ['proc'], used
+            # 没人占名额时照旧在本进程跑（别为单开白起一个进程）
+            used[:] = []
+            wait_task(skills.run_batch(['示例号.json'],
+                                       [{'skill': 'wakeup'}]))
+            assert used == ['inproc'], used
+    finally:
+        skills._run_group, skills._run_group_proc = old_rg, old_proc
+
+    # ---- 5) maaplan.run_plan 单台也一样 ----
+    plan_calls = []
+
+    def fake_plan(kind, tid, idx, payload, log, who=''):
+        plan_calls.append(kind)
+        return [{'file': '示例号.json', 'ok': True}], [{'file': '示例号.json',
+                                                       'ok': True}], False
+
+    assert maacore.claim_inproc()
+    try:
+        with mock.patch.object(multiproc, 'run_group', fake_plan):
+            maaplan.run_plan([{'file': '示例号.json', 'name': '示例号',
+                               'address': 'emulator-5556'}], {'maaDir': tmp})
+    finally:
+        maacore.release_inproc()
+    assert plan_calls == ['plan'], plan_calls
+
+
 def check_client_and_stop(tmp):
     """B61 客户端类型落到任务参数 / 停止能按账号点名
 
@@ -5574,9 +5705,14 @@ def check_client_and_stop(tmp):
             self.owner = owner
             self._handle = 1
             self.stopped = False
+            self.stopped_by_user = False
 
-        def stop(self):
+        def stop(self, external=False):
+            # 点名停（stop_live）传 external=True；超时收尾自己调的 stop()
+            # 不算「用户按了停止」，所以两个标记分开记
             self.stopped = True
+            if external:
+                self.stopped_by_user = True
 
     a = _Fake(file)
     b = _Fake('别的号 官服.json')
@@ -5590,6 +5726,8 @@ def check_client_and_stop(tmp):
         assert maacore.owner_match_any([file, '别的号 官服.json'], ['别的号'])
         assert maacore.stop_live(['测试号 bilibili服']) == 1
         assert a.stopped and not b.stopped and not c.stopped
+        # 点名停要打成「用户按了停止」；别的路不能被带上去
+        assert a.stopped_by_user and not b.stopped_by_user
         assert maacore.stop_live(['不存在的号']) == 0
         assert maacore.stop_live(None) == 2              # 全停：剩下两个
         assert b.stopped and c.stopped
@@ -5611,6 +5749,9 @@ def check_client_and_stop(tmp):
     assert out.get('accounts') == [file] and out.get('stopped') == 0, out
     allstop = api.api_run_stop({}, {'all': True})
     assert allstop.get('accounts') == [], allstop
+    # 既没点名也没说全停 → 拦下，绝不默认全停（右栏按钮没选中账号时会这样）
+    blank = api.api_run_stop({}, {})
+    assert blank.get('stopped') == 0 and blank.get('error'), blank
 
     # 多开时停的是**子进程**：注册表按账号筛，杀不中的不动
     from core import multiproc
@@ -7133,6 +7274,8 @@ def main():
                 lambda: check_client_and_stop(tmp))
         r.check('B62 多开启动（按地址反查实例号/启动那一台/只等那台上线）',
                 lambda: check_emu_auto_start(tmp))
+        r.check('B63 一路一个进程（多开第二个号不再把前面那路跑挂）',
+                lambda: check_one_engine_per_proc(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

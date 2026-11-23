@@ -493,6 +493,25 @@ MaaCore 的 `ClickStageName` 只在关卡列表里 OCR，认不出。这条路�
   `kill`，并把 key 记进 `_STOPPED`（`run_group` 据此返回 `stopped=True`，
   不记「子进程异常」）
 
+### B63 一路一个进程：多开第二个号不把前面那路跑挂（2026-11-23）
+
+用户报「我多开另一个号，他把我前面的停了」。asst.log 里没有 `TaskChainError`，
+只有 `Stop | block` + `~Assistant`：同一进程里开第二个 MaaCore，第一个正在跑的
+链被进程级全局资源重置打断，上层只看到 `TaskChainStopped`。用例钉住：
+
+- **名额只有一个**：`maacore.claim_inproc()` 第二次返回 `False`，`release` 之后
+  又能抢到（不释放就是「以后的跑机永远走子进程」）
+- **`live_others`**：本进程活着的实例计数，`exclude=` 不算自己（`Engine.open`
+  的闸门按它判）
+- **`run_skill` 让位**：主线程先占住名额 → 跑 `wakeup` 时必须走
+  `multiproc.run_group(kind='one')`，`_skill_body` 一次都不能在本进程被调用，
+  结果从子进程的 `results` 取回
+- **单组批量让位**：同样占住名额 → `run_batch` 走 `_run_group_proc`；没人占时
+  仍在本进程跑（别为单开白起一个进程）
+- **`run_plan` 单台同理**：占住名额 → 走 `multiproc.run_group(kind='plan')`
+- **停止不再默认全停**：`/api/run/stop` 既没 `file` 也没 `all` → 回 `error`
+  且 `stopped=0`
+
 ## 什么时候跑
 
 - 改了 `vault.py` / `accounts.py` / `settings.py` / `main.py` 之后

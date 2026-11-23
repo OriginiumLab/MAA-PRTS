@@ -108,7 +108,7 @@ def stop_live(owners=None):
         if owners and not owner_match(e.owner, owners):
             continue
         try:
-            e.stop()
+            e.stop(external=True)
             n += 1
         except Exception:
             pass
@@ -144,6 +144,39 @@ def owner_match_any(owners, wants):
 def stop_all_live():
     """叫停所有直连实例（旧入口，等价于 ``stop_live(None)``）"""
     return stop_live(None)
+
+
+def live_others(exclude=None):
+    """这个进程里还有几个开着的 MaaCore（不含 ``exclude``）→ 数量
+
+    用来防「第二个实例把第一个跑挂」：MaaCore 的 ``AsstLoadResource`` /
+    ``AsstCreateEx`` 动的是**进程级**全局资源，同一个进程里再开一个实例，
+    前一个正在跑的任务链会被直接打断（还只发 ``TaskChainStopped``，不是
+    TaskChainError——上层完全看不出异常）。
+    """
+    with _LIVE_LOCK:
+        return len([e for e in _LIVE if e._handle and e is not exclude])
+
+
+# 「本进程允许跑 MaaCore」的唯一名额。抢不到就说明已经有一路在这个进程里
+# 跑着，新的一路必须换独立进程（见 multiproc 的模块注释）。
+_INPROC = threading.Lock()
+
+
+def claim_inproc():
+    """抢本进程的跑机名额 → True 抢到 / False 已经有一路在跑
+
+    抢到了**必须**在跑完后 ``release_inproc()``（用 try/finally）。这个名额
+    和模拟器、账号都无关：它防的是「同一进程里两个 MaaCore 互相拆台」。
+    """
+    return _INPROC.acquire(blocking=False)
+
+
+def release_inproc():
+    try:
+        _INPROC.release()
+    except RuntimeError:                    # 没抢到过就释放：忽略，别炸调用方
+        pass
 
 
 class Engine:
@@ -187,6 +220,7 @@ class Engine:
         # wait() 返回 False 时靠它区分「真跑满 / 任务卡死」和「用户按了停止」：
         # 2026-11-23 用户手动暂停，日志却写「这一关超时（1200 秒）」，完全对不上。
         self.stopped = False
+        self.stopped_by_user = False   # 只有 stop_live（点名停）才会置位
         self.connected = False
         # 这个实例在替哪个账号干活（账号文件名）。「停止」要能只停某一路：
         # 多开时两台各一个实例，全停等于把另一台正在打的关也砍了。
@@ -400,6 +434,16 @@ class Engine:
     # ---------------------------------------------------------- 开关
     def open(self):
         """建实例 + 加载资源。必须在这之后才能 connect / append。"""
+        # 同进程第二个实例会把第一个正在跑的链「无声打断」（只发 Stopped），
+        # 2026-11-23 用户报「多开另一个号，他把我前面的停了」就是这条：
+        # 5556 那组在跑，另一个号在**同一进程**里开第二个实例，5556 的唤醒链
+        # 13 秒后就莫名结束，接着两边一起报登录失败。宁可这一路明确报错，
+        # 也别把已经在跑的那一路拖死。
+        busy = live_others(exclude=self)
+        if busy:
+            raise EngineError(
+                '这个进程里已经有 %d 个 MaaCore 在跑，不能再开第二个'
+                '（会互相把任务打断）。多开必须一路一个独立进程。' % busy)
         if not self._lib.AsstSetUserDir(_utf8(self.maa_dir)):
             raise EngineError('AsstSetUserDir 失败：%s' % self.maa_dir)
         if not self._lib.AsstLoadResource(_utf8(self.maa_dir)):
@@ -483,8 +527,17 @@ class Engine:
         self._done.clear()
         return bool(self._lib.AsstStart(self._handle))
 
-    def stop(self):
+    def stop(self, external=False):
+        """叫停这个实例
+
+        ``external=True`` = 用户/上层点名停的（:func:`stop_live` 走的这条路）。
+        我们自己的超时收尾也调 ``stop()``，但那是「跑完了/跑不动了」不是
+        「用户按了停止」：以前两者共用 ``stopped``，日志就把超时写成
+        「已停止（你按了停止）」，跟事实完全对不上（2026-11-23 用户报）。
+        """
         self.stopped = True
+        if external:
+            self.stopped_by_user = True
         if self._handle:
             try:
                 self._lib.AsstStop(self._handle)

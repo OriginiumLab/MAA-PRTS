@@ -385,3 +385,5 @@ markdown 渲染：`mdToHtml(src)`（app.js）——整篇先 `esc()` 再按行�
 不能指定，会一起停其他任务」，所以这个按钮永远只传 `CHAT.side.cur`，全停仍
 走聊天（`stop_run` 不带 account）。结果用 `sideSay()` 写进右栏：右栏是数据
 驱动的（按任务存行、按账号过滤），直接 append DOM 切一次账号就没了。
+后端也不再「没给 file 就全停」：既没 `file` 也没 `all=true` 直接回错误
+（`stopped=0`），免得 `CHAT.side.cur` 为空时一按把两台都砍了。

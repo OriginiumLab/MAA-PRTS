@@ -37,6 +37,7 @@ import time
 from . import accounts
 from . import atomicio
 from . import envcheck
+from . import maacore
 from . import maaplan
 from . import multiproc
 from . import resources
@@ -2325,8 +2326,22 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
             g = next(iter(groups.values()))
             log('只有一组（%s）：%d 个号排队切号'
                 % (g.get('address') or '默认模拟器', len(g['files'])))
+            need_game = any(n in _NEEDS_GAME for n, _ in step_list)
+            # 单组默认在本进程跑（省一个进程的启动开销）。但**本进程已经有
+            # 另一路在跑 MaaCore 时必须换独立进程**：同进程第二个实例会把
+            # 前一个正在跑的任务链无声打断（2026-11-23 用户报「多开另一个号，
+            # 他把我前面的停了」）。
+            inproc = (not need_game) or maacore.claim_inproc()
             try:
-                _run_group(g, step_list, names, log, results, lock, tid=tid2)
+                if inproc:
+                    if need_game:
+                        log('本进程开跑（这一步只用本进程这一个 MaaCore）')
+                    _run_group(g, step_list, names, log, results, lock, tid=tid2)
+                else:
+                    log('本机已经有一路在跑模拟器，这一组改用独立进程'
+                        '（同一进程里两个 MaaCore 会互相把任务打断）')
+                    _run_group_proc(tid2, 1, g, step_list, names, results,
+                                    lock, log)
             except Exception as e:                  # noqa: BLE001
                 log('[%s] 这一组出错，后面的号没跑：%s: %s'
                     % (g.get('address') or '默认模拟器', type(e).__name__, e))
@@ -2334,6 +2349,9 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
                     results.setdefault(f, {'ok': False, 'name': f,
                                            'error': '%s: %s'
                                            % (type(e).__name__, e)})
+            finally:
+                if inproc and need_game:
+                    maacore.release_inproc()
         else:
             # 多开：每组一个**独立进程**。同进程里两个 MaaCore 会抢命名管道
             # （asst.log: CreateOverlappablePipe failed, err 231），第二台
@@ -2413,6 +2431,67 @@ def _call_skill(name, params, log, tid=None):
     return fn(params or {}, log, tid=tid)
 
 
+def _skill_body(name, params, log, tid):
+    """真正跑一个 skill：过环境闸 → 交给 skill 函数
+
+    单独抽出来是因为它有两个执行位置：本进程（抢到跑机名额时）和独立子进程
+    （本进程已经有一路在跑时，见 :func:`_skill_in_proc`）。父亲/子进程必须
+    共用同一份实现，否则「单开能跑、多开跑不同步」永远查不完。
+    """
+    if name in _NEEDS_GAME:
+        # 多开：模拟器按**这个账号**绑的 MAA 配置来判断，别拿全局默认那份
+        d = prof = None
+        f = ''
+        try:
+            from . import acctbind
+            f = _account_file((params or {}).get('account') or '')
+            d = acctbind.dir_of(f) or None
+            prof = acctbind.profile_of(f) or None
+        except Exception:
+            pass
+        # 先定「这台号连哪台」：钉死的地址不在线就停下，**绝不**自己换
+        # 一台在线的顶上——那正是「指定 5554 却动了 5556」的来源
+        addr, src, bad = device_of(f, d, prof)
+        if bad:
+            raise RuntimeError('模拟器不对：%s' % bad)
+        _set_addr(f, addr)
+        if addr:
+            log('模拟器 %s（%s）' % (addr, src or '档案'))
+        ok, why = envcheck.ensure(log, maa_dir=d, profile=prof,
+                                  address=addr or None)
+        if not ok:
+            raise RuntimeError('环境没准备好：%s' % why)
+    return _call_skill(name, params, log, tid)
+
+
+def _skill_in_proc(name, params, log, tid):
+    """本进程已经有一路在跑 MaaCore：这一路换成独立进程跑
+
+    不是性能优化，是**正确性**：同一个进程里开第二个 MaaCore 实例，它的
+    ``AsstLoadResource`` 动的是进程级全局资源，第一个实例正在跑的任务链会被
+    直接打断（只发 TaskChainStopped，看上去像「自己停了」），接着两边一起
+    报登录失败。2026-11-23 用户报的就是这个。
+    """
+    owner = ''
+    try:
+        owner = _account_file((params or {}).get('account') or '')
+    except Exception:
+        owner = ''
+    log('本机已经有一路在跑模拟器，这一路改用独立进程'
+        '（同一进程里两个 MaaCore 会互相把任务打断）')
+    got, _rep, stopped = multiproc.run_group(
+        'one', tid, 0,
+        {'group': {'files': [owner] if owner else []},
+         'skill': name, 'params': params or {}},
+        log, who='独立进程')
+    if stopped:
+        return {'ok': False, 'stopped': True, 'why': '你手动停止了这一路'}
+    if not got:
+        return {'ok': False, 'why': '独立进程没交回结果（见上面日志）'}
+    one = got.get(owner) or next(iter(got.values()), {})
+    return one if isinstance(one, dict) else {'ok': True}
+
+
 def run_skill(name, params=None):
     """把一个 skill 跑成后台任务，返回 taskId（前端 / 助手轮询 /api/task）
 
@@ -2436,30 +2515,18 @@ def run_skill(name, params=None):
         tid = threading.current_thread().name.replace('task-', '', 1)
         log = tasks.log_factory(tid)
         log('[%s] %s' % (name, desc))
-        if name in _NEEDS_GAME:
-            # 多开：模拟器按**这个账号**绑的 MAA 配置来判断，别拿全局默认那份
-            d = prof = None
-            f = ''
-            try:
-                from . import acctbind
-                f = _account_file((params or {}).get('account') or '')
-                d = acctbind.dir_of(f) or None
-                prof = acctbind.profile_of(f) or None
-            except Exception:
-                pass
-            # 先定「这台号连哪台」：钉死的地址不在线就停下，**绝不**自己换
-            # 一台在线的顶上——那正是「指定 5554 却动了 5556」的来源
-            addr, src, bad = device_of(f, d, prof)
-            if bad:
-                raise RuntimeError('模拟器不对：%s' % bad)
-            _set_addr(f, addr)
-            if addr:
-                log('模拟器 %s（%s）' % (addr, src or '档案'))
-            ok, why = envcheck.ensure(log, maa_dir=d, profile=prof,
-                                      address=addr or None)
-            if not ok:
-                raise RuntimeError('环境没准备好：%s' % why)
-        return _call_skill(name, params, log, tid)
+        if name not in _NEEDS_GAME:
+            return _skill_body(name, params, log, tid)
+        # 要开游戏就得占「本进程跑机名额」。抢不到说明**另一路已经在跑
+        # MaaCore**：再在这个进程里开一个实例，会把正在跑的那一路无声打断
+        # （MaaCore 的 LoadResource 是进程级全局资源），2026-11-23 用户报的
+        #「多开另一个号，他把我前面的停了」就是这个。换独立进程才是正解。
+        if not maacore.claim_inproc():
+            return _skill_in_proc(name, params, log, tid)
+        try:
+            return _skill_body(name, params, log, tid)
+        finally:
+            maacore.release_inproc()
 
     # 日志按账号分栏：任务要记住自己属于哪个号。没指定账号时按「左侧当前
     # 那个号」算（_account_file('') 就是干这个的），算不出来就当全局任务。

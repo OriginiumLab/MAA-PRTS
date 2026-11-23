@@ -50,6 +50,16 @@ def main(payload_path):
             from . import maaplan
             report = maaplan._run_group(g, payload.get('spec') or {},
                                         wtid, log) or []
+        elif kind == 'one':
+            # 单个 skill（run_skill）：本进程已经有一路在跑 MaaCore 时，
+            # 那一路被搬到这里跑（同一进程两个实例会互相打断）
+            from . import skills
+            got = skills._skill_body(payload.get('skill') or '',
+                                     payload.get('params') or {}, log, wtid)
+            files = [f for f in (g.get('files') or []) if f]
+            if files:
+                results[files[0]] = (got if isinstance(got, dict)
+                                     else {'ok': True})
         else:
             from . import skills
             steps = [(s[0], s[1] if len(s) > 1 else {})

@@ -844,14 +844,44 @@ Engine）一切正常，两台同时跑就只有 5554 能动。
 - `backend/core/multiproc.py`：写 payload → `MAA-PRTS --skill-worker <payload>`
   （源码模式跑 `python backend/main.py --skill-worker ...`）→ tail 子进程的
   日志文件转发进任务日志 → 读回 `{results, report}`；
-- `backend/core/skillworker.py`：子进程入口，`kind` 分 `skill`（run_batch 一组）
-  和 `plan`（run_plan 一组），日志落到父进程指定的
-  `debug/tasks/<tid>-g<i>.log`，任务结束删 payload / 结果，日志留着排障；
+- `backend/core/skillworker.py`：子进程入口，`kind` 分 `skill`（run_batch 一组）、
+  `plan`（run_plan 一组）和 `one`（run_skill 单跑，见 ②e），日志落到父进程
+  指定的 `debug/tasks/<tid>-g<i>.log`，任务结束删 payload / 结果，日志留着排障；
 - `skills.run_batch` / `maaplan.run_plan` 在 `len(groups) > 1` 时全部走子进程；
-  单组仍就地跑（不起进程，省 1~2 秒，日志即时）。
+  单组仍就地跑（不起进程，省 1~2 秒，日志即时），**除非本进程已经有一路在跑**
+  （见 ②e）。
 
 冒烟 B52 里 `multiproc.run_group` 被换成「就地执行」——否则测试里的假 skill
 不会出现在子进程里，会真的去连模拟器。
+
+**②e 一路一个进程：后开的那路必须让位（2026-11-23）**
+
+用户报「我多开另一个号，他把我前面的停了」。两份日志对起来看：5556 那组
+12:59:50 开跑，13:01:37 另一个号**在同一个进程里**开了第二个 MaaCore，13 秒后
+5556 的 StartUp 链就自己「结束」了——`asst.log` 里只有 `Stop | block` 和
+`~Assistant`，没有 `TaskChainError`，上层看到的是 `TaskChainStopped`，于是就写成
+「已停止（你按了停止）」，用户当然以为是新任务把旧的停了。
+
+根因不在「停止」，在**同进程第二个实例**：`AsstSetUserDir` / `AsstLoadResource` /
+`AsstCreateEx` 动的是 MaaCore 的**进程级全局资源**，第二个实例一 open，
+第一个正在跑的链就被打断。err 231 那条（②b）只是它的另一种表现。
+
+落地成三件事：
+
+- `maacore.claim_inproc()` / `release_inproc()`：本进程「跑机名额」只有一个。
+  `skills.run_skill`、`skills.run_batch`（单组）、`maaplan.run_plan`（单台）开跑
+  前抢，抢不到就把这一路交给独立进程（`kind='one'` / `'skill'` / `'plan'`），
+  抢到的用 `try/finally` 还回去；
+- `maacore.Engine.open()` 兜底：本进程已经有活着的实例就直接抛
+  `EngineError`（「多开必须一路一个独立进程」），宁可这一路明着失败，也不许
+  把已经在跑的那一路拖死；
+- `Engine.stopped_by_user`：只有 `stop_live()`（点名停）会置位。超时收尾自己
+  调的 `eng.stop()` 不再冒充「你按了停止」——`run_core` 的 `timed_out` /
+  `paused='手动停止'` 都改看这个标记。顺带把「等了 %d 分钟」改成**实际耗时**
+  （以前打的是时间预算，跑两分钟也能写「等了 60 分钟」）。
+
+客户端这边也收紧了 `/api/run/stop`：既没 `file` 也没 `all=true` 直接回错误，
+不再默认全停——右栏那个按钮没选中账号时就是这种情况。
 
 **②c 官服 / b 服是两个包（2026-11-22）**
 

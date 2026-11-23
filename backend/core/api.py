@@ -891,7 +891,12 @@ def api_run_stop(q, body):
     body = body or {}
     f = str(body.get('file') or q.get('file') or '').strip()
     all_ = bool(body.get('all') or q.get('all'))
-    files = [] if all_ else ([f] if f else [])
+    if not f and not all_:
+        # 没点名就全停太危险：右栏那个按钮传的是「当前账号」，万一没选中
+        # 就会把两台一起砍掉——正是用户报过的「停止会一起停其他任务」。
+        return {'accounts': [], 'engines': 0, 'processes': 0, 'stopped': 0,
+                'error': '要停哪一路？传 file=账号文件名；全停请显式传 all=true'}
+    files = [] if all_ else [f]
     return skills.stop_accounts(files)
 
 

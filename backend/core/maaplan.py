@@ -1056,7 +1056,8 @@ def run_core(spec, tid=None, timeout=None):
 
         # 整轮的时间预算（分段抄作业、换作业重挂都用它算「还剩多少时间」）
         total = timeout or (60 * 60 * 8)
-        budget = time.time() + total
+        t_start = time.time()
+        budget = t_start + total
         finished = True
 
         # 队列头是 StartUp 就先只跑它，剩下的一律等登录完成再排——**绝不能
@@ -1159,7 +1160,12 @@ def run_core(spec, tid=None, timeout=None):
             swapped, chains_mark = _retry_failed(eng, spec, state, log, d, budget,
                                                  conn=conn)
         if not finished and not state.get('pause'):
-            log('等了 %d 分钟还没跑完，先停下' % (total // 60))
+            # 报**实际等了多久**，别拿时间预算当耗时：以前这里打 ``total // 60``，
+            # 明明只跑了两分钟也会写「等了 60 分钟」/「等了 6 分钟」，用户看日志
+            # 只会以为程序算错了时间（2026-11-23）。
+            log('跑了 %d 分 %d 秒还没结束，先停下'
+                % (int(time.time() - t_start) // 60,
+                   int(time.time() - t_start) % 60))
             eng.stop()
         if state.get('pause'):
             log('已暂停：%s' % state['pause'])
@@ -1198,8 +1204,9 @@ def run_core(spec, tid=None, timeout=None):
         failed_why = next((c.get('why') for c in bad if c.get('why')), '') if bad else ''
         # 用户点「停止挂机」时 wait 也返回 False，但这不是超时：以前 timed_out
         # 一律为 True，上层就报「跑满 120 分钟还没结束」（2026-11-23 用户手动
-        # 暂停，日志跟事实完全对不上）。
-        user_stop = bool(getattr(eng, 'stopped', False)) and not finished
+        # 暂停，日志跟事实完全对不上）。注意只认 ``stopped_by_user``：上面
+        # 超时收尾自己也会调 ``eng.stop()``，那不是「你按了停止」。
+        user_stop = bool(getattr(eng, 'stopped_by_user', False)) and not finished
         if user_stop:
             log('已停止（你按了停止），不再往下排')
         return {'ok': (finished and not bad) or bool(state.get('pause')),
@@ -2680,8 +2687,19 @@ def run_plan(rows, spec_base, tid=None):
                                    'error': '子进程异常（没交回结果）'})
 
     if len(groups) <= 1:
+        from . import maacore
+        # 一组时默认在本进程跑；但本进程已经有一路在跑 MaaCore 就必须换
+        # 独立进程（同进程第二个实例会把前一个的任务链无声打断）
         for _, g in groups:
-            run_one(g)
+            if maacore.claim_inproc():
+                try:
+                    run_one(g)
+                finally:
+                    maacore.release_inproc()
+            else:
+                log('本机已经有一路在跑模拟器，这一台改用独立进程'
+                    '（同一进程里两个 MaaCore 会互相把任务打断）')
+                run_one_proc(1, g)
     else:
         log('（每个模拟器一个独立进程）')
         ths = []
