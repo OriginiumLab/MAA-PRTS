@@ -598,7 +598,77 @@ def skill_navigate(params, log, tid=None):
     return {'ok': True, 'stage': stage, 'input': raw, 'why': why}
 
 
+@skill("difficulty", "切换主线 9~14 章的作战环境（剧情 / 标准 / 磨难）",
+       needs_game=True, aliases=("难度", "作战环境", "切换难度"))
+def skill_difficulty(params, log, tid=None):
+    """skill：把主线某一章的作战环境切到指定档
+
+    只有 **第 9~14 章**有这条栏（用户 2026-11-24 说的）：
+    第 9 章两档（剧情体验 / 标准实战），第 10~14 章三档（多一档磨难险地）；
+    0~8 和 15~17 章只有普通 / 突袭，调它会直接报错，别乱点。
+
+    参数：``difficulty``（剧情 / 标准 / 磨难，也认 story / normal / hard）、
+    ``stage``（可选：先导航到这一关所在的章节列表再切；不给就假设界面已经
+    停在目标章节的关卡列表上）、``account``。
+    """
+    from . import mainnav
+    raw = (params.get('difficulty') or params.get('mode')
+           or params.get('env') or params.get('keyword') or '').strip()
+    key = mainnav.norm_mode(raw)
+    if not raw:
+        raise ValueError('缺 difficulty（要切到哪一档：剧情 / 标准 / 磨难）')
+    if not key:
+        raise ValueError('难度只认 剧情 / 标准 / 磨难（收到「%s」）' % raw)
+    file = _account_file(params.get('account') or '')
+    d = _maa_dir_of(file)
+    conn = _conn_of(file, d)
+    t = stagenav.Touch(conn['adb_path'], conn['address'], log,
+                       package=stagenav.game_package(_client_of(file)),
+                       strict=_strict_addr(file))
+    alive, detail = t.ready()
+    if not alive:
+        raise RuntimeError(detail)
+    if not t.game_alive():
+        raise RuntimeError('游戏没在跑——先调 skill_wakeup 唤醒再切难度')
+    stage = ''
+    raw_stage = (params.get('stage') or '').strip()
+    if raw_stage:
+        code, why = norm_stage(raw_stage, log)
+        if not code:
+            raise ValueError(why)
+        ep0 = mainnav.episode_of(code)
+        if ep0 is None:
+            raise ValueError('「%s」不是主线关卡；作战环境只在主线 9~14 章有'
+                             % raw_stage)
+        if not mainnav.modes_of(ep0):
+            raise ValueError('第 %02d 章没有作战环境（只有主线 9~14 章有），'
+                             '这几关只有普通 / 突袭之分' % ep0)
+        ok, why = stagenav.goto_stage_list(t, code, log)
+        if not ok:
+            raise RuntimeError('导航失败：%s' % why)
+        stage = code
+    ok, why = mainnav.set_mode(t, key, log)
+    if not ok:
+        raise RuntimeError(why)
+    return {'ok': True, 'difficulty': key, 'label': mainnav.MODES[key],
+            'stage': stage, 'why': why}
+
+
 # ---------------------------------------------------------------- fight
+
+#: 作战环境 key → 作业站/资源包里的 difficulty 字段
+DIFF_OF_MODE = {'story': 'easy', 'normal': 'normal', 'hard': 'tough'}
+_DIFF_CN = {'easy': '剧情体验', 'normal': '标准实战', 'tough': '磨难险地'}
+
+#: 反过来：资源包的 difficulty → 作战环境 key
+MODE_OF_DIFF = {v: k for k, v in DIFF_OF_MODE.items()}
+#: 难易排序（拿更难的那档顶替才算安全）
+_DIFF_LVL = {'easy': 0, 'normal': 1, 'tough': 2}
+
+
+def _diff_of(row):
+    """作业站一行 → 它的 difficulty（easy / normal / tough / ''）"""
+    return str(((row or {}).get('stage') or {}).get('difficulty') or '')
 
 _VARIANT_ALIASES = {
     'raid': 'raid', '突袭': 'raid', 'only': 'raid', 'onlyraid': 'raid',
@@ -639,7 +709,7 @@ def _parse_stages(raw):
 
 
 def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
-                depth=3, strict=False, prereq=None):
+                depth=3, strict=False, prereq=None, diff=''):
     """挑选每关要用的作业 → ``(picks, pool)``
 
     ``picks`` 是首轮要排的 ``[{'copilotId','stageCode','variant'}]``；
@@ -672,6 +742,12 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
 
     主线「磨难 / 险地」不是突袭（用户 2026-11-19 明确），它们是独立关卡 id，
     各排一条、不展开。
+
+    ``diff`` 是主线第 9~14 章的**作战环境**（``easy`` 剧情 / ``normal`` 标准 /
+    ``tough`` 磨难）。作业站把这三档当成同一代号的三行，以前只挑「第一行
+    非突袭」，结果点了「标准」却拿磨难那份作业去抄（2026-11-24 实测：
+    12-2 排在第一位的就是 tough_12-01）。给了 ``diff`` 就只认这一档；
+    这一档没有作业时如实报警，不悄悄换档。
 
     没有 copilotList 的 spec 里 Copilot 任务会被 core_tasks 直接 continue——
     队列就只剩强制补的 StartUp，noNav 一摘就「没有可执行的任务」
@@ -760,8 +836,32 @@ def _select_ops(stages, file, log, raid='auto', wants=None, fixed=None,
                    == st.upper()]
         if not packeds:
             packeds = [p for p in (res.get('stages') or []) if p.get('ops')]
-        normal_row = next((p for p in packeds
-                           if (p.get('stage') or {}).get('variant') != 'raid'), None)
+        plain = [p for p in packeds
+                 if (p.get('stage') or {}).get('variant') != 'raid']
+        # 先只看「确实带了作业」的行：同一档可能有好几行，第一行 0 份作业
+        # 会被判成「这关没作业」直接跳过（12-2 的标准档就是 0 份）。
+        withops = [p for p in plain if p.get('ops')]
+        if withops:
+            plain = withops
+        if diff and plain:
+            lvl = _DIFF_LVL.get(diff, 1)
+            same = [p for p in plain if _diff_of(p) == diff]
+            if same:
+                plain = same
+            else:
+                # 没有这一档的作业：优先拿**更难**的那档顶上（磨难作业的编队
+                # 拿去打标准基本能过；反过来拿标准作业打磨难一定翻车），
+                # 再不行就拿路上有的，日志里点名用的是哪一档。
+                harder = [p for p in plain
+                          if _DIFF_LVL.get(_diff_of(p), 1) > lvl]
+                pool2 = harder or plain
+                got = _diff_of(pool2[0])
+                if got and got != diff:
+                    log('%s：作业站没有「%s」这档的作业，先拿「%s」那份顶上'
+                        % (st, _DIFF_CN.get(diff, diff),
+                           _DIFF_CN.get(got, got)))
+                plain = pool2
+        normal_row = plain[0] if plain else None
         raid_row = next((p for p in packeds
                          if (p.get('stage') or {}).get('variant') == 'raid'), None)
         n_cands = _ranked(normal_row)
@@ -915,7 +1015,7 @@ def _tidy_stage_list(stages, asked, log):
 
 
 def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
-                 depth=3, strict=False, prereq=None):
+                 depth=3, strict=False, prereq=None, diff=''):
     """``_select_ops`` + 落盘 → ``(copilotList, retry, raid_missing)``
 
     ``retry`` 直接塞进 ``spec['retry']``，run_core 据此在翻车后换作业重挂。
@@ -928,7 +1028,7 @@ def _prepare_ops(stages, file, log, raid='auto', wants=None, fixed=None,
     """
     picks, pool = _select_ops(stages, file, log, raid=raid, wants=wants,
                               fixed=fixed, depth=depth, strict=strict,
-                              prereq=prereq)
+                              prereq=prereq, diff=diff)
     rows = maaplan.prepare_copilot(picks, _maa_dir_of(file), log=log)
     retry = {}
     if any(len(v) > 1 for v in pool.values()):
@@ -1073,12 +1173,40 @@ def skill_fight(params, log, tid=None):
             log('不补前置：%s 在游戏里要先通同分区前面的关；要一起补就说'
                 '「把前置一起补」' % '、'.join(need))
 
+    # ---- 主线 9~14 章的「作战环境」（2026-11-24 用户讲的三档）----
+    # 0~8 章只有普通/突袭，导航到位就能开作业集；9~14 章多一层难度，而且三档
+    # 是**同一个关卡列表的不同档**（磨难那档是独立关卡 id），界面停在别的档上
+    # 打下去就是打错关。所以用户点名了难度就显式切，别指望界面的残留状态。
+    story_mode = ''
+    try:
+        from . import mainnav
+        raw_mode = (params.get('difficulty') or params.get('storyMode') or '')
+        story_mode = mainnav.norm_mode(raw_mode)
+        if str(raw_mode or '').strip() and not story_mode:
+            log('认不出难度「%s」（只认 剧情 / 标准 / 磨难），按界面当前档跑'
+                % raw_mode)
+        if story_mode:
+            eps = {mainnav.episode_of(s) for s in stages} - {None}
+            good = sorted(e for e in eps if mainnav.modes_of(e))
+            if not good:
+                log('这几关不在主线 9~14 章，没有作战环境可切，忽略难度「%s」'
+                    % raw_mode)
+                story_mode = ''
+            else:
+                log('作战环境：%s（第 %s 章，导航到位后自动切）'
+                    % (mainnav.MODES[story_mode],
+                       '、'.join('%02d' % e for e in good)))
+    except Exception as e:                      # noqa: BLE001 别拖垮开打
+        log('难度参数没解析成（%s），按界面当前档跑' % e)
+        story_mode = ''
+
     spec = dict({
         'tasks': ['startup', 'copilot' if mode == 'copy' else 'fight'],
         'stages': stages,
         'accountName': tail,
         'maaDir': _maa_dir_of(file),
         'noNav': not with_nav,
+        'storyMode': story_mode,
         'copilot': {
             'formation': cop.get('formation', True),        # 自动编队
             'support': cop.get('support', True),            # 借助战（缺人时借）
@@ -1107,13 +1235,30 @@ def skill_fight(params, log, tid=None):
                 stages, file, log, raid=params.get('raid', 'auto'),
                 wants=wants, fixed=fixed,
                 depth=int(params.get('swapDepth') or 3),
-                prereq=prereq)
+                prereq=prereq,
+                diff=DIFF_OF_MODE.get(story_mode, ''))
             if retry:
                 spec['retry'] = retry
             if raid_missing:
                 log('这几关要的是突袭，但作业站只有普通版，实际排的是普通：%s'
                     '（要严格只打突袭就传 raid="raid" 并把这几关去掉）'
                     % '、'.join(raid_missing))
+    # 直跑（noNav）没有导航那一步，难度就在这儿就地切：调用方说界面已经停在
+    # 关卡列表上了，而那条栏只在关卡列表上有。
+    if story_mode and not with_nav:
+        try:
+            conn0 = _conn_of(file, _maa_dir_of(file))
+            t0 = stagenav.Touch(conn0['adb_path'], conn0['address'], log,
+                                package=stagenav.game_package(_client_of(file)),
+                                strict=_strict_addr(file))
+            okm, whym = mainnav.set_mode(t0, story_mode, log)
+        except Exception as e:                  # noqa: BLE001
+            raise RuntimeError('切作战环境出错：%s: %s'
+                               % (type(e).__name__, e))
+        if not okm:
+            raise RuntimeError('作战环境没切过去：%s。界面不在第 9~14 章的关卡'
+                               '列表上，就带 wakeup=true 让程序导航过去' % whym)
+
     log('自动战斗（%s）：%s' % (mode, ' '.join(stages)))
 
     # 把**实际要打的难度**单独打成一行。用户 2026-11-23 报障：「说普通 1 到 5，

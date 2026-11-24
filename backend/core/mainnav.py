@@ -299,3 +299,251 @@ def run(touch, stage_code, log=None):
         return False, '章节详情页开了，但点「前往章节」没进去（界面结构可能变了）'
     log('进第 %02d 章的关卡列表了' % ep)
     return True, '已到第 %02d 章「%s」的关卡列表' % (ep, EPISODES.get(ep, ''))
+# ---------------------------------------------------------------- 作战环境（难度）
+#: 主线 9~14 章有「作战环境」切换（用户 2026-11-24 讲的那三档）：
+#:
+#:   第 9 章     剧情体验环境 / 标准实战环境（标准这档有突袭关）
+#:   第 10~14 章 剧情体验环境 / 标准实战环境（没有突袭）/ 磨难险地环境
+#:   0~8、15~17 没有这条栏，只有普通 / 突袭之分，别去点
+#:
+#: 界面行为（真机实测，两台都验过）：
+#:
+#: 1. 关卡列表左下角一直显示**当前**这一档（``标准实战环境`` 那行蓝/红字）。
+#: 2. 点这行 → 底部展开一条 tab 栏，三档等距排在 x=177 / 533 / 860
+#:    （只有两档时也是这个位置，``磨难`` 那个位置空着）。
+#: 3. 点目标 tab 直接切，tab 栏自动收起 —— **第 10~14 章都是这样**。
+#: 4. 第 9 章切到「剧情体验环境」会再弹一个全屏「请选择作战环境」：
+#:    左剧情、右标准，各带一个「进入作战」（当前那档显示「当前选择」且灰着）。
+#:    这时候要再点一下左边那个按钮才真的切过去。
+#:
+#: 所以 :func:`set_mode` 的流程是：看当前是哪一档 → 已经是就返回 → 点开
+#: tab 栏 → 点目标 tab → 如果冒出来弹窗，点弹窗里那一档的按钮 → 再验一次。
+MODES = {
+    'story': '剧情体验环境',
+    'normal': '标准实战环境',
+    'hard': '磨难险地环境',
+}
+
+#: 口语 / 简称 → 内部 key（助手传「磨难」「标准」这种就行）
+MODE_ALIASES = {
+    'story': 'story', '剧情': 'story', '剧情体验': 'story',
+    '剧情体验环境': 'story', 'easy': 'story', '简单': 'story',
+    'normal': 'normal', '标准': 'normal', '标准实战': 'normal',
+    '标准实战环境': 'normal', '普通': 'normal', 'std': 'normal',
+    'standard': 'normal', '常规': 'normal',
+    'hard': 'hard', '磨难': 'hard', '险地': 'hard', '磨难险地': 'hard',
+    '磨难险地环境': 'hard', '困难': 'hard', 'hardcore': 'hard',
+}
+
+#: 章号 → 可选难度。9 章两档，10~14 三档，其余章没有
+_MODE_EPS = {9: ('story', 'normal')}
+for _ep in range(10, 15):
+    _MODE_EPS[_ep] = ('story', 'normal', 'hard')
+
+#: 几何（1920 口径，2026-11-24 真机量）
+_MODE_LABEL = (178, 944, 382, 988)      # 收起态：左下角那一行难度文字
+_MODE_BTN = (275, 970)                  # 点它展开 tab 栏
+_MODE_TAB = {'story': 177, 'normal': 533, 'hard': 860}
+_MODE_TAB_Y = 955
+_POP_TITLE = (812, 136, 1108, 188)      # 弹窗标题「请选择作战环境」
+_POP_HEAD = {'story': (726, 346, 946, 402), 'normal': (1306, 346, 1526, 402)}
+_POP_BTN = {'story': (668, 963), 'normal': (1252, 963)}
+#: 展开态才会出现的「(i)」圆钮（左边缘）。收起态这里是空的，
+#: 实测展开 0~3 分、收起 26~80 分，是判断「tab 栏开没开」最稳的一招
+#: ——别拿「难度文字认不出」当展开的依据：认不出也可能是根本不在这一页。
+_TAB_INFO = (42, 978, 92, 1022)
+
+#: 认得出是哪一档的上限，以及和「第二像那档」的最小差距。
+#: 实测同一帧 0.0、相邻档 16~22（剧情 vs 标准只差头一个字），
+#: 没有这条栏的章节 50~90，弹窗展开态 57~65。
+_MODE_MAX = 30.0
+_MODE_GAP = 8.0
+_POP_MAX = 20.0
+
+
+def modes_of(ep):
+    """第 ``ep`` 章能不能切作战环境 → ``('story','normal',('hard'))`` / ``()``"""
+    return _MODE_EPS.get(ep, ())
+
+
+def norm_mode(raw):
+    """「磨难」「hard」「磨难险地环境」→ ``hard``；认不出返回 ``''``"""
+    s = str(raw or '').strip().lower()
+    return MODE_ALIASES.get(s, '') if s else ''
+
+
+def _mode_tpl(key):
+    name = 'mode_%s.png' % key
+    for d in _tpl_dirs():
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return ''
+
+
+def _fixed_score(data, path, box):
+    """截图里 ``box``（1920 口径）这一块和模板的平均绝对差 → 分数"""
+    from PIL import Image, ImageChops, ImageStat
+    if not (data and path) or not os.path.isfile(path):
+        return 999.0
+    im = Image.open(io.BytesIO(data)).convert('L')
+    k = im.size[0] / 1920.0
+    b = (int(round(box[0] * k)), int(round(box[1] * k)),
+         int(round(box[2] * k)), int(round(box[3] * k)))
+    if b[2] - b[0] < 8 or b[3] - b[1] < 8:
+        return 999.0
+    t = Image.open(path).convert('L')
+    if t.size != (b[2] - b[0], b[3] - b[1]):
+        t = t.resize((b[2] - b[0], b[3] - b[1]), Image.BILINEAR)
+    return ImageStat.Stat(ImageChops.difference(im.crop(b), t)).mean[0]
+
+
+def current_mode(data):
+    """这一屏左下角显示的是哪一档 → ``(key, 分数)``；认不出 ``('', 分数)``
+
+    三张模板定点比一次就够：位置固定（游戏 UI 没给用户挪的余地），
+    而且同一帧自匹配 0.0 分、相邻档 16~22 分，比整屏找稳得多。
+    """
+    scores = []
+    for key in ('story', 'normal', 'hard'):
+        p = _mode_tpl(key)
+        if p:
+            scores.append((_fixed_score(data, p, _MODE_LABEL), key))
+    if not scores:
+        return '', 999.0
+    scores.sort()
+    best, key = scores[0]
+    second = scores[1][0] if len(scores) > 1 else 999.0
+    if best <= _MODE_MAX and (second - best) >= _MODE_GAP:
+        return key, best
+    return '', best
+
+
+def is_popup(data):
+    """这一屏是不是「请选择作战环境」弹窗（第 9 章切剧情时才会冒出来）"""
+    if not data:
+        return False
+    p = ''
+    for d in _tpl_dirs():
+        q = os.path.join(d, 'pop_title.png')
+        if os.path.isfile(q):
+            p = q
+            break
+    return _fixed_score(data, p, _POP_TITLE) <= _POP_MAX
+
+
+def bar_open(data):
+    """底部难度 tab 栏是不是已经展开了（左边缘那个 (i) 圆钮只在这时才有）"""
+    if not data:
+        return False
+    p = ''
+    for d in _tpl_dirs():
+        q = os.path.join(d, 'tab_info.png')
+        if os.path.isfile(q):
+            p = q
+            break
+    return _fixed_score(data, p, _TAB_INFO) <= 12.0
+
+
+def _tap_pt(touch, data, pt):
+    """按 1920 口径点一下（截图不是 1920 宽时按比例换算）"""
+    k = 1.0
+    try:
+        k = Image.open(io.BytesIO(data)).size[0] / 1920.0
+    except Exception:                        # noqa: BLE001 截不开就按原样点
+        pass
+    touch.tap_px(int(round(pt[0] * k)), int(round(pt[1] * k)))
+
+
+def _popup_pick(touch, data, key, log):
+    """在「请选择作战环境」弹窗里点 ``key`` 那一档的「进入作战」"""
+    box = _POP_HEAD.get(key)
+    btn = _POP_BTN.get(key)
+    if not (box and btn):
+        return False, ('「请选择作战环境」里没有「%s」这一档（第 9 章只有剧情 / '
+                       '标准）' % MODES[key])
+    p = ''
+    for d in _tpl_dirs():
+        q = os.path.join(d, 'pop_%s.png' % key)
+        if os.path.isfile(q):
+            p = q
+            break
+    sc = _fixed_score(data, p, box)
+    if sc > _MODE_MAX:
+        return False, ('弹窗里没找到「%s」那张卡（%.0f 分，界面可能改版了）'
+                       % (MODES[key], sc))
+    log('弹窗「请选择作战环境」：点「%s」的进入作战' % MODES[key])
+    _tap_pt(touch, data, btn)
+    time.sleep(2.6)
+    return True, ''
+
+
+def set_mode(touch, mode, log=None):
+    """把当前这一章的作战环境切到 ``mode`` → ``(ok, 说明)``
+
+    调用前界面必须**停在第 9~14 章其中一章的关卡列表**上（导航由
+    :func:`run` / ``stagenav.goto_stage_list`` 负责）。
+
+    两种起点都要认：
+
+    * **收起态**：左下角显示着当前那一档 → 点一下展开 tab 栏（→ 万一点出
+      「请选择作战环境」，就在弹窗里点目标档的「进入作战」）→ 点目标 tab；
+    * **展开态**（上一次没切完 / 用户手动点开过）：直接点目标 tab。这个
+      分支必须有——收起态点按钮是「展开」，展开态点按钮会**选中第一个 tab**
+      （实测：在「标准」展开时点按钮，结果切成了剧情），拿按钮当「收起/展开」
+      用一定会切错档。
+
+    一共两轮，两轮都没切成才报错。
+    """
+    log = log or (lambda *_: None)
+    key = norm_mode(mode)
+    if not key:
+        return False, ('难度只认 剧情 / 标准 / 磨难（收到「%s」）' % mode)
+    label = MODES[key]
+    for attempt in (1, 2):
+        data = stagenav._settled_shot(touch, wait=1.4) or touch.shot()
+        if not data:
+            return False, '截图失败（adb 没回应）'
+        cur, sc = current_mode(data)
+        if cur == key:
+            if attempt == 1:
+                log('作战环境本来就是「%s」，不用切' % label)
+            else:
+                log('作战环境已经切成「%s」了' % label)
+            return True, '当前作战环境：%s' % label
+        if is_popup(data):
+            ok, why = _popup_pick(touch, data, key, log)
+            if not ok:
+                return False, why
+            continue
+        if cur:
+            log('作战环境：%s → %s' % (MODES[cur], label))
+            # 1) 点开 tab 栏
+            _tap_pt(touch, data, _MODE_BTN)
+            time.sleep(1.5)
+            data = touch.shot()
+            if is_popup(data):               # 少见：点一下就弹了
+                ok, why = _popup_pick(touch, data, key, log)
+                if not ok:
+                    return False, why
+                continue
+            # 2) 点目标 tab
+            _tap_pt(touch, data, (_MODE_TAB[key], _MODE_TAB_Y))
+            time.sleep(2.2)
+        elif bar_open(data):
+            log('难度 tab 栏已经展开了，直接点「%s」' % label)
+            _tap_pt(touch, data, (_MODE_TAB[key], _MODE_TAB_Y))
+            time.sleep(2.2)
+        else:
+            return False, ('认不出这一章的作战环境（%.0f 分）——主线只有第 9~14 章'
+                           '有这条栏，先导航到目标章节的关卡列表再切' % sc)
+        data = touch.shot()
+        if is_popup(data):                   # 第 9 章切剧情要再确认一下
+            ok, why = _popup_pick(touch, data, key, log)
+            if not ok:
+                return False, why
+            continue
+    data = touch.shot()
+    cur, sc = current_mode(data)
+    return False, ('切到「%s」没成功（现在认出来是「%s」，%.0f 分）。%s'
+                   % (label, MODES.get(cur, '认不出'), sc, last))

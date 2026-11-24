@@ -4440,7 +4440,7 @@ def check_event_nav(tmp):
     maaplan.time = FakeTime
     talk, naved = [], []
     old_nav = maaplan._navigate
-    maaplan._navigate = lambda conn, st, log, client=None: (
+    maaplan._navigate = lambda conn, st, log, client=None, **kw: (
         naved.append(st) or (True, 'ok'))
     try:
         stagenav.probe_bytes = lambda d: 'map'
@@ -7068,7 +7068,7 @@ def check_pages_skills_logs(tmp):
         old_home, old_nav = pages.to_home, maaplan._navigate
         pages.to_home = lambda *a, **k: True
         naved3 = []
-        maaplan._navigate = (lambda conn, st, log, client=None:
+        maaplan._navigate = (lambda conn, st, log, client=None, **kw:
                              (naved3.append(st) or (True, 'ok')))
         logs_lr3 = []
         try:
@@ -7136,7 +7136,7 @@ def check_cross_zone_segments(tmp):
     conn = {'adb_path': 'x', 'address': 'y'}
     old = (maaplan._navigate, maaplan._leave_result, maaplan._wait_run)
     naved, left = [], []
-    maaplan._navigate = lambda c, st, log, client=None, strict=False: (
+    maaplan._navigate = lambda c, st, log, client=None, strict=False, **kw: (
         naved.append(st) or (True, 'ok'))
     maaplan._leave_result = lambda c, sp, st, log: (left.append(st) or True)
     maaplan._wait_run = lambda eng, total, log, state: True
@@ -7160,7 +7160,7 @@ def check_cross_zone_segments(tmp):
         # ---- ③ 段间导航失败不许 raise（前面几关已经打完了）----
         naved.clear()
         left.clear()
-        maaplan._navigate = lambda c, st, log, client=None, strict=False: (
+        maaplan._navigate = lambda c, st, log, client=None, strict=False, **kw: (
             naved.append(st) or (False, '模拟失败'))
         eng2 = FakeEng()
         talk2 = []
@@ -7174,7 +7174,7 @@ def check_cross_zone_segments(tmp):
         # ---- ④ 抄作业前面还排了别的任务：首段也必须重新导航 ----
         naved.clear()
         left.clear()
-        maaplan._navigate = lambda c, st, log, client=None, strict=False: (
+        maaplan._navigate = lambda c, st, log, client=None, strict=False, **kw: (
             naved.append(st) or (True, 'ok'))
         eng3 = FakeEng()
         talk3 = []
@@ -7598,6 +7598,221 @@ def check_mainstory_nav(tmp):
     assert pages.is_home_bytes(_home_frame(mail_at=(188, 32))) is False
 
 
+def _diff_frame(mode='', open_bar=False, popup=False,
+                modes=('story', 'normal', 'hard')):
+    """合成一帧「主线关卡列表」：收起态的难度文字 / 展开的 tab 栏 / 确认弹窗
+
+    模板就是从真机 1920×1080 截图上原位裁的，所以贴回原位再认，分数必须是 0。
+    """
+    from PIL import Image
+    from core import mainnav
+    im = Image.new('RGB', (1920, 1080), (18, 22, 26))
+    d = mainnav._tpl_dirs()[0]
+    if popup:
+        im.paste(Image.open(os.path.join(d, 'pop_title.png')).convert('RGB'),
+                 (mainnav._POP_TITLE[0], mainnav._POP_TITLE[1]))
+        for key in ('story', 'normal'):
+            head = mainnav._POP_HEAD.get(key)
+            if head and key in modes:
+                im.paste(Image.open(os.path.join(d, 'pop_%s.png' % key)
+                                    ).convert('RGB'), (head[0], head[1]))
+    elif open_bar:
+        im.paste(Image.open(os.path.join(d, 'tab_info.png')).convert('RGB'),
+                 (mainnav._TAB_INFO[0], mainnav._TAB_INFO[1]))
+    elif mode:
+        im.paste(Image.open(os.path.join(d, 'mode_%s.png' % mode)).convert('RGB'),
+                 (mainnav._MODE_LABEL[0], mainnav._MODE_LABEL[1]))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+class _ModeTouch(object):
+    """假的「作战环境」界面：点按钮展开 → 点 tab 切档 → 该弹窗的档弹一下
+
+    行为照真机来：收起态点按钮是**展开**，展开态点按钮会选中第一个 tab（所以
+    程序不能再拿按钮当「收起/展开」用）；切换成功后 tab 栏自动收起。
+    """
+
+    def __init__(self, mode='normal', modes=('story', 'normal', 'hard'),
+                 popup_on=(), open_bar=False):
+        self.mode = mode
+        self.modes = tuple(modes)
+        self.popup_on = tuple(popup_on)
+        self.open = bool(open_bar)
+        self.pending = ''
+        self.taps = []
+
+    def shot(self):
+        if self.pending:
+            return _diff_frame(popup=True, modes=self.modes)
+        return _diff_frame(mode='' if self.open else self.mode,
+                           open_bar=self.open, modes=self.modes)
+
+    def tap_px(self, x, y):
+        from core import mainnav
+        self.taps.append((x, y))
+        if self.pending:
+            key = 'story' if x < 960 else 'normal'     # 弹窗：左剧情 右标准
+            if key == self.pending:
+                self.mode = key
+            self.pending = ''
+            self.open = False
+            return True
+        if not self.open:
+            self.open = True
+            return True
+        key = min(('story', 'normal', 'hard'),
+                  key=lambda k: abs(mainnav._MODE_TAB[k] - x))
+        if key not in self.modes:
+            return True
+        if key in self.popup_on:
+            self.pending = key
+            self.open = False
+        else:
+            self.mode = key
+            self.open = False
+        return True
+
+    def size(self):
+        return (1920, 1080)
+
+
+def check_story_difficulty(tmp):
+    """B68 主线作战环境（剧情 / 标准 / 磨难）：认得出、切得对、不误切
+
+    用户 2026-11-24 讲的三档：第 9 章两档（剧情体验 / 标准实战，标准这档有
+    突袭关），第 10~14 章三档（多一档磨难险地），0~8 / 15~17 章没有这条栏。
+
+    钉住五件事：
+      1. 难度写法（剧情 / 标准 / 磨难 / story / hard…）都能翻成内部 key；
+      2. 只有 9（两档）和 10~14（三档）能切，别的章一档都没有；
+      3. 左下角那行字认得出是哪一档，**认成别的档不行**（三张模板互相比）；
+      4. 切档：收起点按钮展开 → 点 tab；已经展开就直接点 tab；
+         第 9 章切剧情会弹「请选择作战环境」，要在弹窗里再点一下；
+      5. 不在 9~14 章的关卡列表上时明确报错，不瞎点。
+    """
+    from PIL import Image
+    from core import mainnav, stagenav
+
+    # ① 写法 → key
+    for raw, key in (('剧情', 'story'), ('剧情体验环境', 'story'),
+                     ('story', 'story'), ('标准', 'normal'), ('普通', 'normal'),
+                     ('normal', 'normal'), ('磨难', 'hard'),
+                     ('磨难险地环境', 'hard'), ('hard', 'hard')):
+        assert mainnav.norm_mode(raw) == key, (raw, mainnav.norm_mode(raw))
+    for bad in ('', ' ', '困难模式', '噩梦', None):
+        assert mainnav.norm_mode(bad) == '', bad
+
+    # ② 哪些章能切
+    assert mainnav.modes_of(9) == ('story', 'normal'), mainnav.modes_of(9)
+    for ep in range(10, 15):
+        assert mainnav.modes_of(ep) == ('story', 'normal', 'hard'), ep
+    for ep in (0, 1, 8, 15, 16, 17):
+        assert mainnav.modes_of(ep) == (), ep
+
+    # ③ 三档模板齐全、尺寸就是那几个盒子的尺寸（换了模板就得同步改几何）
+    d = mainnav._tpl_dirs()[0]
+    for key in ('story', 'normal', 'hard'):
+        p = os.path.join(d, 'mode_%s.png' % key)
+        assert os.path.isfile(p), p
+        w = mainnav._MODE_LABEL[2] - mainnav._MODE_LABEL[0]
+        h = mainnav._MODE_LABEL[3] - mainnav._MODE_LABEL[1]
+        assert Image.open(p).size == (w, h), (p, Image.open(p).size)
+    for name in ('pop_title.png', 'pop_story.png', 'pop_normal.png',
+                 'tab_info.png'):
+        assert os.path.isfile(os.path.join(d, name)), name
+
+    # ④ 认档：贴哪一档就认哪一档，别的档不许认成它
+    for key in ('story', 'normal', 'hard'):
+        frame = _diff_frame(mode=key)
+        got, sc = mainnav.current_mode(frame)
+        assert got == key and sc <= 1.0, (key, got, sc)
+        for other in ('story', 'normal', 'hard'):
+            if other == key:
+                continue
+            got2, _ = mainnav.current_mode(_diff_frame(mode=other))
+            assert got2 == other, (key, other, got2)
+    assert mainnav.current_mode(_diff_frame(mode=''))[0] == '', '空白页被认成某一档'
+    assert mainnav.current_mode(_diff_frame(open_bar=True))[0] == '', \
+        'tab 栏展开时左下角没有那行字，不该认成某一档'
+
+    # ⑤ 展开态 / 弹窗 的判据
+    assert mainnav.bar_open(_diff_frame(open_bar=True)) is True
+    assert mainnav.bar_open(_diff_frame(mode='hard')) is False
+    assert mainnav.is_popup(_diff_frame(popup=True)) is True
+    assert mainnav.is_popup(_diff_frame(mode='normal')) is False
+
+    # ⑥ 切档：把 sleep 停掉（真机上一次约 10 秒，这里只验状态机）
+    class _NoSleep(object):
+        @staticmethod
+        def sleep(_s):
+            return None
+
+    old_mn, old_sn = mainnav.time, stagenav.time
+    mainnav.time = _NoSleep
+    stagenav.time = _NoSleep
+    try:
+        # 6.1 收起点按钮展开 → 点「磨难」tab
+        t = _ModeTouch('normal')
+        ok, why = mainnav.set_mode(t, '磨难')
+        assert ok, why
+        assert t.mode == 'hard', t.mode
+        assert len(t.taps) >= 2, t.taps
+        assert abs(t.taps[-1][0] - mainnav._MODE_TAB['hard']) <= 2, t.taps[-1]
+
+        # 6.2 已经是这一档：一次都不点
+        t = _ModeTouch('hard')
+        ok, why = mainnav.set_mode(t, 'hard')
+        assert ok and not t.taps, (ok, why, t.taps)
+
+        # 6.3 tab 栏已经展开：直接点 tab，别去点按钮（点按钮会选中第一个 tab）
+        t = _ModeTouch('normal', open_bar=True)
+        ok, why = mainnav.set_mode(t, 'hard')
+        assert ok, why
+        assert t.mode == 'hard', t.mode
+        assert abs(t.taps[0][0] - mainnav._MODE_TAB['hard']) <= 2, t.taps
+
+        # 6.4 第 9 章切剧情：点完 tab 会弹「请选择作战环境」，弹窗里再点左边
+        t = _ModeTouch('normal', modes=('story', 'normal'), popup_on=('story',))
+        ok, why = mainnav.set_mode(t, '剧情')
+        assert ok, why
+        assert t.mode == 'story', t.mode
+        assert any(abs(x - mainnav._POP_BTN['story'][0]) <= 2
+                   and abs(y - mainnav._POP_BTN['story'][1]) <= 2
+                   for x, y in t.taps), t.taps
+
+        # 6.5 不在 9~14 章的关卡列表上（认不出那行字）：明确报错，不瞎点
+        t = _ModeTouch('normal')
+        t.shot = lambda: _diff_frame(mode='')
+        ok, why = mainnav.set_mode(t, 'hard')
+        assert not ok and '9~14' in why, (ok, why)
+        assert not t.taps, t.taps
+
+        # 6.6 认不出的难度写法：报错，不动界面
+        t = _ModeTouch('normal')
+        ok, why = mainnav.set_mode(t, '噩梦')
+        assert not ok and '剧情 / 标准 / 磨难' in why, (ok, why)
+        assert not t.taps, t.taps
+    finally:
+        mainnav.time, stagenav.time = old_mn, old_sn
+
+    # ⑦ skill / 工具接线：新 skill 在册、fight 能带难度、提示词写明 9~14 章
+    from core import agent, skills
+    assert 'difficulty' in skills.SKILLS, sorted(skills.SKILLS)
+    assert skills.ALIASES.get('难度') == 'difficulty'
+    assert skills.DIFF_OF_MODE == {'story': 'easy', 'normal': 'normal',
+                                   'hard': 'tough'}
+    fight = [t for t in agent.TOOLS
+             if t['function']['name'] == 'skill_fight'][0]
+    props = fight['function']['parameters']['properties']
+    assert 'difficulty' in props, list(props)
+    assert props['difficulty']['enum'] == ['story', 'normal', 'hard']
+    names = [t['function']['name'] for t in agent.TOOLS]
+    assert 'skill_difficulty' in names, '没把切难度暴露成工具'
+    assert '9~14' in agent.SYSTEM and '作战环境' in agent.SYSTEM
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -7697,6 +7912,8 @@ def main():
                 lambda: check_pause_stops(tmp))
         r.check('B67 主线导航（章号解析/18 张卡模板/格子定位/主页图标标定）',
                 lambda: check_mainstory_nav(tmp))
+        r.check('B68 主线作战环境（剧情/标准/磨难：认得准、切得对、不误切）',
+                lambda: check_story_difficulty(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

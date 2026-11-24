@@ -886,7 +886,7 @@ def _seg_label(seg):
     return '%s %d 关（%s）' % (head, len(seg.get('rows') or []), span)
 
 
-def _navigate(conn, stage, log, client=None, strict=False):
+def _navigate(conn, stage, log, client=None, strict=False, mode=None):
     """把界面带到关卡列表，返回 ``(ok, 说明)``
 
     导航要连点好几下，而 MaaCore 的 ``AsstAsyncClick`` 一次连接只能点中第一下
@@ -910,6 +910,18 @@ def _navigate(conn, stage, log, client=None, strict=False):
             return False, detail
         ok, why = stagenav.goto_stage_list(touch, stage, log)
         log('导航%s：%s' % ('完成' if ok else '失败', why))
+        # 主线 9~14 章还有一层「作战环境」（剧情 / 标准 / 磨难）：导航只把界面
+        # 带到那一章的关卡列表，档位得在这儿切。**必须在导航之后**——那条栏只
+        # 在关卡列表上有；也必须在 Copilot 之前，不然打的不是用户点的那一档。
+        if ok and mode:
+            from . import mainnav
+            ep = mainnav.episode_of(stage)
+            if ep is not None and mainnav.modes_of(ep):
+                okm, whym = mainnav.set_mode(touch, mode, log)
+                log('作战环境%s：%s' % ('切换完成' if okm else '没切过去', whym))
+                if not okm:
+                    return False, ('到第 %02d 章了，但作战环境没切过去：%s'
+                                   % (ep, whym))
         if not ok:
             d = str(conn.get('maa_dir') or '')
             path = os.path.join(d or '.', 'debug',
@@ -1109,7 +1121,8 @@ def run_core(spec, tid=None, timeout=None):
                 log('MAA 已停下，开始我们的导航')
                 nav_ok, nav_why = _navigate(
                     conn, first, log, client=spec.get('clientType'),
-                    strict=bool(spec.get('profile') or spec.get('adbAddress')))
+                    strict=bool(spec.get('profile') or spec.get('adbAddress')),
+                    mode=spec.get('storyMode'))
                 if not nav_ok:
                     # 老故事集/自建模板的关卡，MAA 自己 100% 找不到（它的入口
                     # 模板在当前 UI 上全失效，只会横向滑主线）。主线章节也一样：
@@ -1142,7 +1155,8 @@ def run_core(spec, tid=None, timeout=None):
             if first:
                 nav_ok, nav_why = _navigate(
                     conn, first, log, client=spec.get('clientType'),
-                    strict=bool(spec.get('profile') or spec.get('adbAddress')))
+                    strict=bool(spec.get('profile') or spec.get('adbAddress')),
+                    mode=spec.get('storyMode'))
                 if not nav_ok:
                     from . import stagenav, eventnav, mainnav
                     if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
@@ -2160,7 +2174,8 @@ def _run_tail(eng, tail, spec, state, log, conn, d, deadline, can_reuse_nav=Fals
                 finished = False
                 break
             nav_ok, nav_why = _navigate(conn, seg['from'], log,
-                                       client=spec.get('clientType'))
+                                       client=spec.get('clientType'),
+                                       mode=spec.get('storyMode'))
             log('切到新分区%s：%s' % ('完成' if nav_ok else '失败', nav_why))
             if not nav_ok:
                 # 前面几关已经打完了，这里 raise 会把整轮记成失败。照样排下去
@@ -2169,7 +2184,8 @@ def _run_tail(eng, tail, spec, state, log, conn, d, deadline, can_reuse_nav=Fals
                     % seg['from'])
         elif not can_reuse_nav:
             nav_ok, nav_why = _navigate(conn, seg['from'], log,
-                                       client=spec.get('clientType'))
+                                       client=spec.get('clientType'),
+                                       mode=spec.get('storyMode'))
             log('导航%s：%s' % ('完成' if nav_ok else '失败', nav_why))
 
         log('第 %d/%d 段：%s' % (i + 1, len(segs), _seg_label(seg)))
@@ -2357,7 +2373,8 @@ def _leave_result(conn, spec, stage, log):
         # 兜底：先回主页（认得基建确认框/剧情页，不会盲按返回），再走一遍
         # 完整导航。多花十几秒，换「一定在关卡菜单上」。
         pages.to_home(touch, log)
-        ok, why = _navigate(conn, stage, log, client=spec.get('clientType'))
+        ok, why = _navigate(conn, stage, log, client=spec.get('clientType'),
+                            mode=spec.get('storyMode'))
         log('重挂前重新导航%s：%s' % ('完成' if ok else '失败', why))
         return ok
     except Exception as e:              # noqa: BLE001 点结算页不能拖垮挂机
@@ -2526,7 +2543,8 @@ def _retry_failed(eng, spec, state, log, d, deadline, conn=None):
                     log('重挂时没能离开结算页，剩下的段不跑了')
                     break
                 nav_ok, nav_why = _navigate(conn, seg['from'], log,
-                                           client=spec.get('clientType'))
+                                           client=spec.get('clientType'),
+                                           mode=spec.get('storyMode'))
                 log('重挂切到新分区%s：%s'
                     % ('完成' if nav_ok else '失败', nav_why))
                 if state.get('pause'):
