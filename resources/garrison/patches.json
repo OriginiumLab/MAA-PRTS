@@ -110,9 +110,21 @@
     },
     {
       "id": "std-upgrade-price-table-v114",
-      "why": "v1.1.4 标准模式升级价表切换（不改极速模式），并初始化刷新容错计数器 _tr/_rec/_rm。",
-      "find": "let L=null,le=!1,K=!1,X=!0,Pe=!1,_e=null,ue=!1,he=!1,Be=!1,Te=0,ke=!1,tt=!1;gr=!1,ne=!0,F=null;const Ye=new Set,ut=Object.fromEntries(Object.values(c.shop??{}).map(Ae=>[Ae.shopLevel,Ae.initialUpgradePrice]));",
-      "replace": "let L=null,le=!1,K=!1,X=!0,Pe=!1,_e=null,ue=!1,he=!1,Be=!1,Te=0,ke=!1,tt=!1,_tr=0,_rec=0,_rm=0;gr=!1,ne=!0,F=null;const Ye=new Set,ut=Ht.mode===\"standard\"?{1:5,2:8,3:11,4:12,5:13,6:99}:Object.fromEntries(Object.values(c.shop??{}).map(Ae=>[Ae.shopLevel,Ae.initialUpgradePrice]));"
+      "why": "v1.1.4 标准模式升级价表切换（不改极速模式），初始化刷新容错计数器 _tr/_rec/_rm，并在干员已满锁店时跳过商店循环直接部署。",
+      "find": "let q=i.level===null;const W=Fu();let L=null,le=!1,K=!1,X=!0,Pe=!1,_e=null,ue=!1,he=!1,Be=!1,Te=0,ke=!1,tt=!1;gr=!1,ne=!0,F=null;const Ye=new Set,ut=Object.fromEntries(Object.values(c.shop??{}).map(Ae=>[Ae.shopLevel,Ae.initialUpgradePrice]));for(let Ae=0;i.level!==null&&Ae<80;Ae++)try{",
+      "replace": "let q=i.level===null||_full0;_full0&&_(\"干员已满导致商店无法展开，跳过购买直接部署\");const W=Fu();let L=null,le=!1,K=!1,X=!0,Pe=!1,_e=null,ue=!1,he=!1,Be=!1,Te=0,ke=!1,tt=!1,_tr=0,_rec=0,_rm=0;gr=!1,ne=!0,F=null;const Ye=new Set,ut=Ht.mode===\"standard\"?{1:5,2:8,3:11,4:12,5:13,6:99}:Object.fromEntries(Object.values(c.shop??{}).map(Ae=>[Ae.shopLevel,Ae.initialUpgradePrice]));for(let Ae=0;i.level!==null&&!_full0&&Ae<80;Ae++)try{"
+    },
+    {
+      "id": "fix-full-bench-shop-lock-v114",
+      "why": "修复备战席 10/10 满员出现「干员已满，无法继续调度干员」时，商店被游戏锁定无法展开、qt() 连续抛「尚未确认商店已展开，暂不冻结或部署」死循环的 Bug：进入 prep 与商店循环异常捕获均检测干员已满，跳过商店直接进入部署与开战。",
+      "find": "a&&j&&(e.setRoundHint(a+1),j=!1,A=!0),b=await qt(b),A||await e.snapshot({force:!0});",
+      "replace": "const _full0=je(b,/干员已满|无法继续调度/)&&!je(b,/^收起|LEVEL|升级|冻结|刷新/);a&&j&&(e.setRoundHint(a+1),j=!1,A=!0),_full0||(b=await qt(b)),A||await e.snapshot({force:!0});"
+    },
+    {
+      "id": "fix-full-bench-shop-catch-v114",
+      "why": "修复商店循环中途满员导致 qt() 抛 _r 时被重新抛出重进 it() 死循环的 Bug：检测画面「干员已满/无法继续调度」则干净跳出商店循环继续部署。",
+      "find": "catch(De){if(!(De instanceof ft)||De instanceof _r)throw De;",
+      "replace": "catch(De){if(De instanceof _r&&je(await Ie(),/干员已满|无法继续调度/)){_(\"干员已满导致商店无法展开，跳过剩余商店操作，继续部署\"),q=!0,fe=!1,await e.closeDetail();break}if(!(De instanceof ft)||De instanceof _r)throw De;"
     },
     {
       "id": "std-entry-ps-and-resume-v114",
