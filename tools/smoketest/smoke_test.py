@@ -2830,7 +2830,13 @@ def check_stagenav(tmp):
     assert stagenav.probe(png(0.50, 0.40)) == 'store', \
         '中部成片纯白（商品卡片）应判成活动商店'
 
-    # 4) 主线关不点：直接返回 False，绝不能对主线关乱点活动入口
+    # 4) 主线关：交给 mainnav（2026-11-24 之前是直接返回 False「不导航」，
+    #    现在真导航了）。**绝不能掉进活动分支去点活动入口**——那才是乱点。
+    from core import mainnav
+    called = []
+    old_run = mainnav.run
+    mainnav.run = lambda t, code, log=None: (called.append(code), (True, 'stub'))[1]
+
     class NullTouch:
         def __init__(self):
             self.hits = []
@@ -2842,10 +2848,13 @@ def check_stagenav(tmp):
         def shot(self):
             return b''
 
-    nt = NullTouch()
-    ok, why = stagenav.goto_stage_list(nt, '1-7')
-    assert ok is False and '不是活动关' in why, (ok, why)
-    assert nt.hits == [], '主线关不该产生任何点击：%s' % (nt.hits,)
+    try:
+        nt = NullTouch()
+        ok, why = stagenav.goto_stage_list(nt, '1-7')
+        assert ok is True and called == ['1-7'], (ok, why, called)
+        assert nt.hits == [], '主线关不该产生任何点击：%s' % (nt.hits,)
+    finally:
+        mainnav.run = old_run
 
 
 # ---------------------------------------------------------------- B35 老故事集导航
@@ -2938,7 +2947,9 @@ def check_story_nav(tmp):
     p = stagenav.points()
     assert 'tabProgress' in p and len(p['tabProgress']) == 2, \
         ('要有一个「默认进度」标签的点击点', p.get('tabProgress'))
-    src = inspect.getsource(stagenav.goto_story_activity)
+    # 2026-11-24：「主界面→曲谱→乐章收录→默认进度」抽成了 to_score_grid，
+    # 活动卡和主线导航共用，所以这条断言要打在它身上。
+    src = inspect.getsource(stagenav.to_score_grid)
     assert "p['tabProgress']" in src, '进网格后必须点一下「默认进度」'
     assert 'in_score_grid' in src, '点完「乐章收录」要确认真的进了网格'
 
@@ -2951,7 +2962,8 @@ def check_story_nav(tmp):
     # 3.7) 回顶要甩够（旧写法从列表底部到不了顶，扫描会从中间开始漏上半张表），
     #      卡片位置缓存读不到时要安静返回 0（不能因为少个 json 就导航不了）。
     assert hasattr(stagenav, '_scroll_top'), '要有「甩到顶」的辅助函数'
-    assert '_scroll_top' in src, '整页扫之前必须先回顶'
+    assert '_scroll_top' in inspect.getsource(stagenav.goto_story_activity), \
+        '整页扫之前必须先回顶'
     assert stagenav._load_card_offset('ZZZ') == 0, '缓存读不到要返回 0'
 
     # 4) 九张老活动的卡片模板都在（少一张就意味着那个活动导航不了）
@@ -6672,9 +6684,15 @@ def check_pages_skills_logs(tmp):
         im.save(buf, 'PNG')
         return buf.getvalue()
 
-    home = compose([(gear, (20, 4)), (mail, (160, 4))])
-    only_gear = compose([(gear, (20, 4))])
-    only_mail = compose([(mail, (160, 4))])
+    # 贴图坐标跟标定表走（2026-11-24 重标后是 (71,80)/(291,80)）。写死的话
+    # 标定一改这里就假红，反而看不出真正的问题。
+    gx, gy = pages._HOME_ICONS[0][1]
+    mx, my = pages._HOME_ICONS[1][1]
+    gear_at = (gx - 28, gy - 28)
+    mail_at = (mx - 28, my - 28)
+    home = compose([(gear, gear_at), (mail, mail_at)])
+    only_gear = compose([(gear, gear_at)])
+    only_mail = compose([(mail, mail_at)])
     assert pages.is_home_bytes(home), '两个图标都在还不认主页'
     assert not pages.is_home_bytes(only_gear), '只认到齿轮就当主页（设置页会误判）'
     assert not pages.is_home_bytes(only_mail), only_mail
@@ -7470,6 +7488,114 @@ def check_pause_stops(tmp):
     assert yi.get('ok') is True, yi                     # 乙号一点没被打断
     assert len(yi.get('steps') or []) == 3, yi
     assert any('这个号剩下的' in str(x) for x in said), said
+def _grid_frame(cards, width=1920, height=1080):
+    """合成一帧「乐章收录」网格：暗底 + 顶部标题条 + 目标卡片原位贴上去
+
+    用真模板贴，所以定点比对必然是 0 分；行间暗带的位置由 ``cards`` 的 y 决定。
+    顶部那条亮色是模拟「Main Story / 主题曲」标题区——没有它，第 1 章卡上方
+    就是一整片 261px 的暗区，超过行暗带的上限（250）反而检不出来，跟真机不符。
+    """
+    from PIL import Image
+    from core import mainnav
+    im = Image.new('RGB', (width, height), (20, 20, 20))
+    im.paste(Image.new('RGB', (width, 70), (150, 150, 150)), (0, 0))
+    for ep, (x, y) in cards:
+        t = Image.open(mainnav.tpl_of(ep)).convert('RGB')
+        im.paste(t, (x, y))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def _home_frame(mail_at=None):
+    """合成一帧主页左上角图标（默认按 ``pages._HOME_ICONS`` 的标定贴）"""
+    from PIL import Image
+    from core import pages
+    im = Image.new('RGB', (1920, 1080), (30, 30, 30))
+    for name, (cx, cy) in pages._HOME_ICONS:
+        if mail_at and name == 'home_mail.png':
+            cx, cy = mail_at
+        t = pages._tpl(name)
+        assert t is not None, name
+        t = t.convert('RGB')
+        im.paste(t, (cx - t.width // 2, cy - t.height // 2))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def check_mainstory_nav(tmp):
+    """B67 主线导航：章号 → 网格格子 → 点卡 → 「前往章节」
+
+    2026-11-24 用户标注的四步（终端 → 曲谱 → 乐章收录 → 默认进度）和活动卡
+    导航共用同一段，之后分岔：主线 18 张卡的位置在网格最顶上、固定 5 列，
+    按章号能算出来，所以不用像活动卡那样整页翻；点开是章节详情页，还得再点
+    一次右下「前往章节」。
+
+    这里钉住四件事：
+      1. 代号解析（``15-3`` / ``0-11`` / 突袭 ``H15-1`` 都算主线，活动代号不算）；
+      2. 18 张整卡模板齐全（缺一张就是「第 N 章导航失败」）；
+      3. 格子定位：行靠「行间暗带」找、卡靠整卡定点比对认，别的章不会被认成它；
+      4. ``goto_stage_list`` 把主线分给 mainnav，活动代号照旧走老路径。
+    """
+    from PIL import Image
+    from core import mainnav, stagenav
+
+    # ① 代号 → 章号
+    assert mainnav.episode_of('15-3') == 15
+    assert mainnav.episode_of('0-11') == 0
+    assert mainnav.episode_of('17-4') == 17
+    assert mainnav.episode_of('H15-1') == 15, '突袭关也属于这一章'
+    for bad in ('GT-1', 'MN-1-7', 'TR-1', 'EP-1', '18-1', '17', ''):
+        assert mainnav.episode_of(bad) is None, bad
+
+    # ② 18 张整卡模板都在、尺寸一致（1920 口径按白边框裁的 265×265）
+    assert len(mainnav.EPISODES) == 18
+    for ep in range(18):
+        p = mainnav.tpl_of(ep)
+        assert p, '第 %02d 章没有卡片模板' % ep
+        assert Image.open(p).size == (265, 265), p
+
+    # ③ 网格定位：第 0 章在第 1 行第 1 列、第 17 章在第 2 行第 3 列
+    frame = _grid_frame([(0, (100, 261)), (5, (1360, 261)), (17, (730, 576))])
+    im = Image.open(io.BytesIO(frame)).convert('L')
+    rows = mainnav._rows_of(im)
+    assert any(abs(r - 261) <= 3 for r in rows), rows
+    assert any(abs(r - 576) <= 3 for r in rows), rows
+    tpl17 = Image.open(mainnav.tpl_of(17)).convert('L')
+    sc, x, y = mainnav._best_in(frame, tpl17)
+    assert sc <= mainnav._MAX_SCORE, sc
+    assert abs(x - 862) <= 2 and abs(y - 708) <= 2, (x, y)
+
+    # ④ 最像的别的章也不许放行（EP00 / EP01 都是「黑暗时代」，实测 22.6 分）
+    tpl01 = Image.open(mainnav.tpl_of(1)).convert('L')
+    sc2, _, _ = mainnav._best_in(frame, tpl01)
+    assert sc2 > mainnav._MAX_SCORE, sc2
+
+    # ⑤ 分派：主线交给 mainnav，活动代号不碰它
+    calls = []
+    old_run = mainnav.run
+    old_story = stagenav.goto_story_activity
+    mainnav.run = lambda t, code, log=None: (calls.append(code), (True, 'stub-main'))[1]
+    stagenav.goto_story_activity = lambda *a, **k: (True, 'stub-activity')
+    try:
+        ft = _FakeTouch([_plain_frame()])
+        ok, why = stagenav.goto_stage_list(ft, '17-3', lambda *_: None)
+        assert calls == ['17-3'], calls
+        assert why == 'stub-main', why
+        ok, why = stagenav.goto_stage_list(ft, 'GT-1', lambda *_: None)
+        assert calls == ['17-3'], '活动代号被主线导航接管了'
+        assert why == 'stub-activity', why
+    finally:
+        mainnav.run = old_run
+        stagenav.goto_story_activity = old_story
+
+    # ⑥ 主页图标标定（2026-11-24 重标）：按标定位置贴得出来就认主页；
+    #    邮件图标挪回旧坐标（2026-11-22 那份错的）就认不出——这条防的是
+    #    「坐标又跟真实 UI 脱节，所有回主页的导航退化成一味按 ESC」。
+    from core import pages
+    assert pages.is_home_bytes(_home_frame()) is True
+    assert pages.is_home_bytes(_home_frame(mail_at=(188, 32))) is False
 
 
 def main():
@@ -7569,6 +7695,8 @@ def main():
                 lambda: check_raid_variant(tmp))
         r.check('B66 暂停真停（按账号记账 / 段循环收手 / 不误伤别的号）',
                 lambda: check_pause_stops(tmp))
+        r.check('B67 主线导航（章号解析/18 张卡模板/格子定位/主页图标标定）',
+                lambda: check_mainstory_nav(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

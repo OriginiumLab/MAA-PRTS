@@ -1112,11 +1112,14 @@ def run_core(spec, tid=None, timeout=None):
                     strict=bool(spec.get('profile') or spec.get('adbAddress')))
                 if not nav_ok:
                     # 老故事集/自建模板的关卡，MAA 自己 100% 找不到（它的入口
-                    # 模板在当前 UI 上全失效，只会横向滑主线）。这种情况宁可
-                    # 明确报错，也别把作业排下去让它乱滑 30 秒再失败。
-                    from . import stagenav, eventnav
+                    # 模板在当前 UI 上全失效，只会横向滑主线）。主线章节也一样：
+                    # MAA 从主页出发滑不到第 15 章（章节切换是底部 EPISODE 分页
+                    # 点击，不是横向滑动）。这种情况宁可明确报错，也别把作业排
+                    # 下去让它乱滑 30 秒再失败。
+                    from . import stagenav, eventnav, mainnav
                     if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
-                            or eventnav.has(first)):
+                            or eventnav.has(first)
+                            or mainnav.episode_of(first) is not None):
                         raise RuntimeError('导航没到位（%s），不再把作业交给 MAA'
                                            % nav_why)
                     log('导航没成功，交给 MAA 自己试（当期活动它认得）')
@@ -1141,9 +1144,10 @@ def run_core(spec, tid=None, timeout=None):
                     conn, first, log, client=spec.get('clientType'),
                     strict=bool(spec.get('profile') or spec.get('adbAddress')))
                 if not nav_ok:
-                    from . import stagenav, eventnav
+                    from . import stagenav, eventnav, mainnav
                     if (stagenav.tpl_path_of(first) or stagenav.event_of(first)[0]
-                            or eventnav.has(first)):
+                            or eventnav.has(first)
+                            or mainnav.episode_of(first) is not None):
                         raise RuntimeError('导航没到位（%s），不再把作业交给 MAA'
                                            % nav_why)
             finished = _wait_run(eng, max(1.0, budget - time.time()), log, state)

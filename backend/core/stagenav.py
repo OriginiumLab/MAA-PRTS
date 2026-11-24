@@ -92,6 +92,9 @@ DEFAULT_POINTS = {
     'tabProgress': [741, 45],
     # 活动详情页右下「进入活动」
     'enterActivity': [1140, 616],
+    # 主线章节详情页右下「前往章节」（2026-11-24 真机 1920 口径 (1590,934) →
+    # /1.5）。按钮很宽（约 300px），挪个 40 也还在按钮上，容错够。
+    'mainChapterEnter': [1060, 623],
     # 活动地图右下角那一排「分区图标」：**不是一个 EX 开关，是 2~4 个分区**
     # （基础关 / EX / S / MO），点哪个就切到哪个分区，选中的那个会亮起来。
     # 以前只记了一个点（exSwitch），默认活动里 EX 恰好在最右边那个位置才蒙对；
@@ -1629,55 +1632,24 @@ def _prefix_of(stage_code):
     return m.group(1).upper() if m else ''
 
 
-def goto_story_activity(touch, stage_code, log=None, tpl=None):
-    """老故事集：主界面 → 曲谱 → 乐章收录 → 网格找卡片 → 进入活动
+def reach_home(touch, log):
+    """不管现在在哪一页，收敛到「真的主界面」→ ``(ok, 说明)``
 
-    这条路是 2026-11-17 在真机上按截图点出来的：
+    为什么不能只看 ``at_home``：曲谱那几层（网格 / 时间轴 / 活动详情）背景
+    都是暗的，主界面是亮的，而 ``at_home`` 只看底部功能格够不够白。只看它会在
+    三处翻车：带白色 EX 徽章的活动地图（TW 右下角大白按钮把白像素撑过阈值，
+    2026-11-17 EX 抽查实测）；去咧嘴谷那种明亮沙地 CG 回放（整屏都是亮的，
+    底部白像素照样过线，2026-11-17 复测实测：从第 15 个活动起连续 34 屏 999
+    就是它）；登录页浅灰底 + 白 logo（2026-11-17 重启实测：误报回主界面，
+    导航全程空转）。
 
-        主界面   --中央「终端」大字------> 带底部 tab 的那一页
-        底部 tab --第 2 个（曲谱）-------> 曲谱：左边 Story Line 时间轴
-        曲谱     --右上「乐章收录」------> 网格视图（一行几个活动卡片）
-        网格     --往下滑 + 模板匹配-----> 目标活动的卡片
-        卡片     --「进入活动」---------> 该活动的关卡地图
-
-    到关卡地图就不用管了：Copilot 的 ``ClickStageName`` 会在整屏 OCR 找
-    ``MN-7`` 这种代号，点进去开打。
-
-    **为什么必须模板匹配、不能用固定坐标**：网格里卡片的位置取决于滚到哪
-    了，而滚到哪又取决于上次退出时的位置；新活动还会插进来把顺序挤动。
-    实测把网格滚到顶后位置是稳定的，但活动一多就会变，所以按图找。
+    所以判据是四个条件的与：底部功能格够白 **且** 不在暗底页上 **且** 不在
+    剧情回放里 **且** 不在登录页。**确认到了才停手**——多按一次返回就弹
+    「退出游戏」了。
     """
     log = log or (lambda *_: None)
-    tpl = tpl or tpl_path_of(stage_code)
-    if not tpl:
-        m = re.match(r'^([A-Za-z][A-Za-z0-9]*)-', stage_code or '')
-        return False, ('没有「%s」的卡片模板：需要一张 1920×1080 截图里该活动'
-                       '卡片的裁图，存成 navtpl/%s.png'
-                       % (stage_code, (m.group(1) if m else stage_code)))
-
     p = points()
-    # 游戏没在运行时，返回键 / ESC / 模板匹配全是在安卓桌面上空转——
-    # 2026-11-17 中午实测：StartUp 假成功后导航照跑，nav-fail 现场图就是一张
-    # 桌面截图。进程不在就先拉起来；restart_app 里的 force-stop 对没开着的
-    # 游戏是无害 no-op。
-    if not touch.game_alive():
-        log('游戏进程不在运行，先启动游戏')
-        if not touch.restart_app(log):
-            return False, '游戏没能启动（检查模拟器是否开着）'
 
-    _code, _name = event_of(stage_code)
-    log('走曲谱：曲谱 → 乐章收录 → 找卡片 %s%s'
-        % (os.path.basename(tpl), ('（%s）' % _name) if _name else ''))
-
-    # 0) 不管起点在哪，先回到主界面。曲谱那几层（网格 / 时间轴 / 活动详情）
-    #    背景都是暗的，主界面是亮的，所以用「亮不亮」当判据，**确认到了主界面
-    #    才停手**——多按一次返回就弹「退出游戏」了。
-    # 「真的回到主界面」= 底部功能格够白 **且** 不在暗底页上 **且** 不在剧情
-    # 回放里 **且** 不在登录页。只看第一条件会在三处翻车：带白色 EX 徽章的
-    # 活动地图（TW 右下角大白按钮把白像素撑过阈值，2026-11-17 EX 抽查实测）；
-    # 去咧嘴谷那种明亮沙地 CG 回放（整屏都是亮的，底部白像素照样过线，
-    # 2026-11-17 复测实测：从第 15 个活动起连续 34 屏 999 就是它）；登录页
-    # 浅灰底 + 白 logo（2026-11-17 重启实测：误报回主界面，导航全程空转）。
     def really_home():
         return (at_home(touch) and not in_story_page(touch)
                 and not in_story_dialog(touch) and not on_login_page(touch))
@@ -1760,6 +1732,18 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
         home = really_home()
     if not home:
         return False, '回不到主界面（可能卡在某个弹窗里）'
+    return True, '在主界面'
+
+
+def to_score_grid(touch, log):
+    """主界面 →「终端」大卡 → 曲谱 tab → 右上「乐章收录」→「默认进度」
+
+    活动卡（``goto_story_activity``）和主线章节（:mod:`mainnav`）都从这一页
+    的网格里找卡片，所以这一段必须只有一份实现——分头写两份的话，改一处忘
+    另一处就会出现「活动能进、主线进不去」（2026-11-24 抽出来时的情况）。
+    """
+    log = log or (lambda *_: None)
+    p = points()
 
     # 1) 主界面 → 曲谱。
     #    第一步是**按 16:9 固定位置点「终端」大卡**，不去认「终端」两个字：
@@ -1804,6 +1788,57 @@ def goto_story_activity(touch, stage_code, log=None, tpl=None):
     touch.tap(*p['tabProgress'])
     time.sleep(STEP_DELAY)
     log('切到「默认进度」标签（保证卡片上没有进度徽章）')
+    return True, '在乐章收录网格'
+
+
+def goto_story_activity(touch, stage_code, log=None, tpl=None):
+    """老故事集：主界面 → 曲谱 → 乐章收录 → 网格找卡片 → 进入活动
+
+    这条路是 2026-11-17 在真机上按截图点出来的：
+
+        主界面   --中央「终端」大字------> 带底部 tab 的那一页
+        底部 tab --第 2 个（曲谱）-------> 曲谱：左边 Story Line 时间轴
+        曲谱     --右上「乐章收录」------> 网格视图（一行几个活动卡片）
+        网格     --往下滑 + 模板匹配-----> 目标活动的卡片
+        卡片     --「进入活动」---------> 该活动的关卡地图
+
+    到关卡地图就不用管了：Copilot 的 ``ClickStageName`` 会在整屏 OCR 找
+    ``MN-7`` 这种代号，点进去开打。
+
+    **为什么必须模板匹配、不能用固定坐标**：网格里卡片的位置取决于滚到哪
+    了，而滚到哪又取决于上次退出时的位置；新活动还会插进来把顺序挤动。
+    实测把网格滚到顶后位置是稳定的，但活动一多就会变，所以按图找。
+    """
+    log = log or (lambda *_: None)
+    tpl = tpl or tpl_path_of(stage_code)
+    if not tpl:
+        m = re.match(r'^([A-Za-z][A-Za-z0-9]*)-', stage_code or '')
+        return False, ('没有「%s」的卡片模板：需要一张 1920×1080 截图里该活动'
+                       '卡片的裁图，存成 navtpl/%s.png'
+                       % (stage_code, (m.group(1) if m else stage_code)))
+
+    p = points()
+    # 游戏没在运行时，返回键 / ESC / 模板匹配全是在安卓桌面上空转——
+    # 2026-11-17 中午实测：StartUp 假成功后导航照跑，nav-fail 现场图就是一张
+    # 桌面截图。进程不在就先拉起来；restart_app 里的 force-stop 对没开着的
+    # 游戏是无害 no-op。
+    if not touch.game_alive():
+        log('游戏进程不在运行，先启动游戏')
+        if not touch.restart_app(log):
+            return False, '游戏没能启动（检查模拟器是否开着）'
+
+    _code, _name = event_of(stage_code)
+    log('走曲谱：曲谱 → 乐章收录 → 找卡片 %s%s'
+        % (os.path.basename(tpl), ('（%s）' % _name) if _name else ''))
+
+    # 0) 先回主界面，再一路点到「乐章收录」网格的「默认进度」标签。
+    #    这两段主线导航也要用（见 mainnav），所以抽成了模块级函数。
+    ok, why = reach_home(touch, log)
+    if not ok:
+        return False, why
+    ok, why = to_score_grid(touch, log)
+    if not ok:
+        return False, why
 
     # 3) 先看当前这一屏：网格会记住上次浏览的位置，用户刚看过这个活动的话
     #    一次就中，省掉「滚到顶 + 翻十几屏」那一两分钟。
@@ -2065,6 +2100,16 @@ def goto_stage_list(touch, stage_code, log=None):
     # 活动去点区域列表（2026-11-17 打包版实测）；反过来只看 EVENTS 又会让
     # 用户自己加的模板活动落空。不能靠 ``zone_rows_of`` 判断——它对没收录的
     # 代号一律兜底成「第 1 区」，会把老故事集错当成当期活动。
+    # 主线（主题曲 EP 00~17）：同一页「乐章收录」网格里，但卡片位置按章号
+    # 能算出来，而且点开是章节详情页（要再点「前往章节」），和活动卡不是一条
+    # 路，所以交给 mainnav。
+    try:
+        from . import mainnav
+        if mainnav.episode_of(stage_code) is not None:
+            return mainnav.run(touch, stage_code, log)
+    except Exception as e:                       # noqa: BLE001 别把人卡在这
+        return False, ('主线导航出错（%s: %s）' % (type(e).__name__, e))
+
     _code, _name = event_of(stage_code)
     if tpl_path_of(stage_code) or _code:
         return goto_story_activity(touch, stage_code, log)

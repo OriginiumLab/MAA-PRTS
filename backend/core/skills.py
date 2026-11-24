@@ -15,7 +15,8 @@
   skill        对应能力                                    依托
   ----------  ------------------------------------------  ----------------
   wakeup      唤醒游戏到主界面（按尾号切号）               maaplan StartUp
-  navigate    从主界面导航到任意活动（含 EX / S / MO）     stagenav.goto_stage_list
+  navigate    从主界面导航到任意活动 / 主线章节            stagenav.goto_stage_list
+              （活动含 EX / S / MO；主线 EP00~17 走 mainnav）
   fight       自动战斗：编队 / 借助战 / 吃理智药 / 开打    maaplan.run_core
   skip_story  过剧情关（mn-st-1 这类 ST 关）               stagenav + 跳幕
   signin      森空岛签到（单号 / 全部）                    signin.run
