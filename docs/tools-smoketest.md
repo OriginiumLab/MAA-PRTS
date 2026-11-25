@@ -730,3 +730,41 @@ Python 跑即可；C 组会真实调用 Windows DPAPI，换电脑/换用户跑 B
 
 真机复验：深色 → 白色 → 卫戍协议 → 白色 连续切换，无报错；刷新后仍是最后一次
 选的主题；切回白色时 `<link id="theme-pack">` 和桌宠 `<video>` 都正确移除。
+
+### B75 国内源 Mirror 酱（2026-11-25 接入）
+
+对方 PR #137 加了上传 workflow（RID `MAA-PRTS`、`os=win`、`arch=x64`），
+这里测的是客户端那半。**一个网络请求都不发**：`mirror._request` 换成假响应。
+
+- **更新源**：`DEFAULTS['updateSource'] == 'auto'`；`' MIRROR '` 归一成 `mirror`；
+  `'nonsense'` 回落到 `auto`（拼错一个字段不该把更新检查弄死）。
+- **版本名格式**：`_fmt_current('2.7.0') == 'v2.7.0'`（我们发的 tag 带 v，
+  `current_version` 格式不一致就永远命中不了增量包）；`'dev'` → 空
+  （源码模式不该拿去问服务端）。
+- **错误码**：7001→expired / 7002→invalid / 7003→quota / 7004→mismatch /
+  7005→blocked，8001、1001、0、未知码一律 `error`。界面只认这几个词，
+  错误码表变了不用动前端。`cdk_error` 只为 7001~7005 为真。
+- **到期时间戳**：秒和毫秒都归一成同一个日期；空值返回空串。
+- **响应解析**：不填 CDK 时能拿到 `version_name` 但没有 `url`（所以**不能拿
+  url 判断有没有更新**）；`sha256` 转小写、`filesize` 转 int；
+  缺 `version_name` 必须抛错（不能当成「已是最新」）。
+- **不泄露**：7002 的错误信息是中文，且**不含 `cdk=` 也不含完整 API URL**；
+  `probe()` 的返回里搜不到传进去的明文 CDK。
+- **CDK 存储**（Windows 才测，非 Windows 跳过）：`mirror.key` 里搜不到明文、
+  只回掩码且露得不超后 4 位、`settings.json` 里搜不到、清除后密文文件消失、
+  带空格的 CDK 被拒。
+- **时效链接不落盘**：`_persistable()` 剥掉 mirror 源的 `asset.urls`，
+  但保留 `sha256` / `size`，GitHub 兜底的 `github.urls` 不能被剥；
+  GitHub 直链的 asset 原样保留。落盘后 `appupdate.json` 里搜不到加速域名。
+- **按源校验**：`_download_plan()` 里 mirror 地址配 mirror 的 sha256，
+  GitHub 兜底配空 sha256（降级成结构校验）。这条是「混用哈希 → 稳定报
+  sha256 不匹配 → 用户以为下载坏了」的唯一防线。
+- **接线**：`/api/mirror/cdk`、`/api/mirror/probe`、`/api/mirror/status`
+  三个路由都在；`mirror.py` 里 `OS = 'win'` / `ARCH = 'x64'`（不是文档里的
+  `windows` / `amd64`）；`app.js` 有 `updateSource` / 三个接口 / `mirrorMsgText` /
+  `data-src=`；`style.css` 有 `.src-opt`。上传 workflow 还没合并时跳过那三条断言。
+
+真机复验（2026-11-25）：`mirror.check()` 直达 `mirrorchyan.com` 返回
+`v2.7.0` + 完整 release_note，无 CDK 时 `url` 为空；假 CDK 返回 7002
+并被翻成「CDK 不对，请检查后重新填写」；`POST /api/mirror/cdk` 存完掩码是
+`········1234`，清除后 `hasCdk: false`。

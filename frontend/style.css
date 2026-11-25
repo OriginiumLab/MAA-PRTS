@@ -2723,3 +2723,28 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .theme-act { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 11px 11px; margin-top: auto; }
 .theme-act .btn-plain[disabled] { opacity: .55; cursor: default; }
 .theme-warn { grid-column: 1 / -1; font-size: 12px; color: var(--amber); line-height: 1.6; }
+
+/* ============================================================ 设置 → 版本更新 → 下载源 */
+.src-pick {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+  gap: 8px;
+}
+.src-opt {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: rgba(var(--tint), 0.03); cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.src-opt:hover { background: rgba(var(--tint), 0.06); }
+.src-opt.on {
+  border-color: rgba(94, 234, 212, .55);
+  background: rgba(94, 234, 212, .07);
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, .16) inset;
+}
+.src-opt input { display: none; }        /* 点整张卡片就是选它 */
+.src-opt b { font-size: 13px; line-height: 1.3; }
+.src-opt span { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.mirror-box { margin-top: 12px; }
+.mirror-box[hidden] { display: none; }
+.mirror-box .set-tip { margin-top: 6px; }
+.set-maarow-foot .set-tip { flex: 1 1 auto; margin: 0; }

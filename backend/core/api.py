@@ -8,9 +8,9 @@ import traceback
 import urllib.parse
 
 from . import (accounts, agent, appupdate, asstlog, autostart, copilot, gacha,
-               garrison, maa, maaplan, multiacct, operbox, packsync, paradox,
-               resources, scheduler, settings, signin, skills, sklogin, tasks,
-               themes, updater, version, watch)
+               garrison, maa, maaplan, mirror, multiacct, operbox, packsync,
+               paradox, resources, scheduler, settings, signin, skills, sklogin,
+               tasks, themes, updater, version, watch)
 
 WEB = settings.static_dir()
 
@@ -500,6 +500,46 @@ def api_app_install(_q, _body):
 def api_app_open(q, _body):
     """用系统浏览器打开 Release 页（前端跨域拿不到）"""
     return appupdate.open_page((q or {}).get('url') or '')
+
+
+def api_mirror_cdk(_q, body):
+    """国内源（Mirror 酱）的 CDK：GET 只读状态，POST 保存（空串 = 清除）
+
+    CDK 是用户花钱买的凭证，等同密码：DPAPI 加密存 config/mirror.key，
+    接口**永远不回传明文**，只回掩码和「配没配」。保存时顺手验一下格式，
+    别把一个粘多的串默默存进去——每次下载报 7002 用户根本猜不到原因。
+    """
+    body = body if isinstance(body, dict) else {}
+    if 'cdk' in body:
+        out = mirror.save_cdk(body.get('cdk'))
+        out['ok'] = True
+        return out
+    return mirror.status()
+
+
+def api_mirror_probe(_q, body):
+    """设置页「验证」：用（可能还没保存的）CDK 查一次
+
+    只探测，不落盘。返回能不能加速下载、到期时间、以及错误原因。
+    """
+    body = body if isinstance(body, dict) else {}
+    key = body.get('cdk')
+    return mirror.probe(key if isinstance(key, str) else None)
+
+
+def api_mirror_status(_q, _body):
+    """国内源概况：CDK 有没有配、上次检查走的哪个源、CDK 状态
+
+    设置页打开时调一次，比等 /api/app/status 的 6 小时缓存快得多。
+    """
+    out = mirror.status()
+    st = appupdate._state()
+    out['source'] = st.get('source') or 'github'
+    out['updateSource'] = settings.load().get('updateSource') or 'auto'
+    out['cdkState'] = st.get('cdkState') or ''
+    out['cdkExpiredAt'] = st.get('cdkExpiredAt') or ''
+    out['mirrorError'] = st.get('mirrorError') or ''
+    return out
 
 
 def api_op(q, _body):
@@ -1063,6 +1103,10 @@ ROUTES = {
     '/api/app/download': api_app_download,
     '/api/app/install': api_app_install,
     '/api/app/open': api_app_open,
+    # 国内源（Mirror 酱）
+    '/api/mirror/cdk': api_mirror_cdk,
+    '/api/mirror/probe': api_mirror_probe,
+    '/api/mirror/status': api_mirror_status,
     '/api/op': api_op,
     '/api/maa/status': api_maa_status,
     '/api/maa/running': api_maa_running,
