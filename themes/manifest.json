@@ -1,14 +1,14 @@
 {
-  "generatedAt": "2026-11-25T09:40:00Z",
+  "generatedAt": "2026-11-25T19:10:00Z",
   "themes": [
     {
       "id": "closure",
       "name": "卫戍协议 · 可露希尔",
       "desc": "深色终端配色 + CRT 扫描线 + 像素字体 + 可露希尔桌宠",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "file": "themes/closure.zip",
-      "bytes": 844560,
-      "sha256": "789cb8d1ed099bcb5c97ff53abbabb75dea4ebd08c3733a60cbbb11241b0b209",
+      "bytes": 849683,
+      "sha256": "f36d8e2e06bb3b5d3e8ded70003d3e53903f0241062f6540774d2217de780aed",
       "preview": "closure-preview.jpg",
       "license": "配色/样式取自 dsh-closure-skin（MIT）；字体 Ark Pixel（OFL 1.1）；桌宠动画版权归原作者，仅本机使用"
     }
