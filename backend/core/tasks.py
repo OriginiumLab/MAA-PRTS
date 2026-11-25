@@ -16,6 +16,12 @@ _tasks = {}
 _lock = threading.Lock()
 _keep = 40
 
+# 创建序号：Windows 上 time.time() 的粒度约 15.6ms，连着建两个任务很可能拿到
+# **完全相同**的 startedAt。`_wait_idle` 靠「谁更早」决定谁等谁，光比时间会
+# 把同一毫秒建的兄弟任务判成「不比我早」→ 该等的没等（CI 上 B69 就是这样挂的：
+# 线程立刻返回 True，一行日志都没有）。序号单调递增，同毫秒也能分出先后。
+_seq = 0
+
 # 每个任务的日志同时落一份到 debug/tasks/<tid>.log（2026-11-22 加）：
 # 以前只存在内存里，窗口一关就全没了——用户报「多开只有一台在跑」时，
 # 5556 那组一行日志都没有，想查也没现场。文件很小（几 KB），顺手就写。
@@ -74,11 +80,13 @@ def create(title: str, fn=None, owners=None, log_path=None, prefix='') -> str:
     owners = [str(x) for x in (owners or []) if str(x).strip()]
     tid = uuid.uuid4().hex[:12]
     fh = _open_log(tid, title, log_path)
+    global _seq
     with _lock:
+        _seq += 1
         _tasks[tid] = {
             'id': tid, 'title': title, 'status': 'running',
             'logs': [], 'result': None, 'error': None,
-            'owners': owners,
+            'owners': owners, 'seq': _seq,
             'startedAt': time.time(), 'endedAt': None, '_fh': fh,
             '_prefix': str(prefix or ''),
         }
@@ -201,6 +209,13 @@ def for_owner(file, limit=8):
 def running():
     with _lock:
         return [t for t in _tasks.values() if t['status'] == 'running']
+
+
+def seq_of(tid):
+    """任务的创建序号（同毫秒建的两个任务也能分出谁先谁后）"""
+    with _lock:
+        t = _tasks.get(tid)
+        return (t or {}).get('seq') or 0
 
 
 def wait_all(timeout=5.0):

@@ -7850,7 +7850,8 @@ def check_parallel_guard(tmp):
 
     钉住五件事：
       1. ``_wait_idle``：同账号有更早的任务在跑就等；别的账号不等；比自己晚
-         开工的不等（互相等会死锁）；等到了会接着跑；
+         开工的不等（互相等会死锁）；等到了会接着跑；**同一毫秒建的任务**
+         靠创建序号分先后（Windows 时钟粒度 15.6ms，CI 上必现）；
       2. ``_ensure_game``：游戏没在跑要**自己叫唤醒**（不干等），轮询走安静
          模式别每三秒刷一行「adb 返回 1：」；唤醒报错但进程起来了照样放行；
       3. ``skill_navigate`` 带 difficulty：导航完顺带切档，一路到位；
@@ -7894,6 +7895,27 @@ def check_parallel_guard(tmp):
         tasks.finish(tid_wait, result={})
         assert got.get('r') is True, got
         assert _wait_log('前面的任务跑完了'), logs
+
+        # 1.1b 同一毫秒建的两个任务（Windows time.time() 粒度 ~15.6ms）：光比
+        #      startedAt 会判成「不比我早」→ 该等的没等。靠创建序号仍要能分出先后。
+        a = tasks.create('甲（假）', None, owners=[f])
+        b = tasks.create('乙（假）', None, owners=[f])
+        got2 = {}
+        try:
+            with tasks._lock:
+                tasks._tasks[a]['startedAt'] = 1.0
+                tasks._tasks[b]['startedAt'] = 1.0
+            del logs[:]
+            th2 = threading.Thread(target=lambda: got2.update(
+                r=skills._wait_idle(b, [f], log, cap=20, step=0.05)))
+            th2.start()
+            assert _wait_log('等它跑完'), logs
+            tasks.finish(a, result={})
+            th2.join(20)
+            assert got2.get('r') is True, got2
+        finally:
+            tasks.finish(a, result={})
+            tasks.finish(b, result={})
 
         # 1.2 只有别的账号在跑：不等（多开就该并行）
         me = tasks.create('导航（假）', None, owners=[f])

@@ -2786,6 +2786,11 @@ def _wait_idle(tid, files, log, cap=1800.0, step=2.0):
     if not want:
         return True
     mine = (tasks.get(tid) or {}).get('startedAt') or time.time()
+    # Windows 的 time.time() 只有 ~15.6ms 精度：连着建的两个任务 startedAt 可能
+    # 一模一样，光比时间会把「更早开工」的那个判成「不比我早」→ 该等的没等
+    # （2026-11-25 CI 上 B69 就栽在这：线程立刻返回 True，一行日志都没有）。
+    # 有创建序号就按序号比，一定能分出先后。
+    mine_seq = tasks.seq_of(tid)
     t0 = time.time()
     told = False
     while True:
@@ -2795,7 +2800,11 @@ def _wait_idle(tid, files, log, cap=1800.0, step=2.0):
                 continue
             if not (set(t.get('owners') or []) & want):
                 continue
-            if (t.get('startedAt') or 0) >= mine:    # 比自己晚的不等（防死锁）
+            seq = t.get('seq') or 0
+            if mine_seq and seq:
+                if seq >= mine_seq:                  # 比自己晚的不等（防死锁）
+                    continue
+            elif (t.get('startedAt') or 0) >= mine:
                 continue
             busy.append(t)
         if not busy:
