@@ -2350,6 +2350,43 @@ def _nav_first(step_list, many):
     return out
 
 
+def _wakes_itself(step_list):
+    """第一步会不会自己「开始唤醒」切号
+
+    多账号时程序要给每个号补一步 ``wakeup``，但第一步本来就带唤醒的
+    （sweep / weekly / train 默认 ``wakeup=true``，fight 显式传了）再补一次
+    就是白等一两分钟——MAA 的 StartUp 每次都要重启一遍客户端。
+    """
+    if not step_list:
+        return False
+    name, p = step_list[0]
+    p = p or {}
+    if name == 'wakeup':
+        return True
+    if name in ('sweep', 'weekly', 'train'):
+        return p.get('wakeup', True) is not False
+    if name == 'fight':
+        return bool(p.get('wakeup')) and not p.get('noSwitch') \
+            and not p.get('assumeStageList')
+    if name == 'claim':
+        # 领奖也能带 wakeup（游戏停在登录页时先唤醒）
+        return bool(p.get('wakeup'))
+    return False
+
+
+def _with_auto_wake(step_list, many, switch=None):
+    """多账号时给每个号补第一步 ``wakeup``（返回 ``(步骤表, 补了没有)``）
+
+    2026-11-25 用户口径：任务一涉及多账号，**一个账号的流程开始必须是
+    「开始唤醒」切号**——界面停在哪、登的是谁，从上一个号身上推不出来。
+    第一步自己会唤醒的（``_wakes_itself``）不重复补；用户明说不用切号时
+    传 ``switch=False``。
+    """
+    if not (many and switch is not False and not _wakes_itself(step_list)):
+        return step_list, False
+    return [('wakeup', {})] + list(step_list), True
+
+
 def _emulator_key(file, address=''):
     """账号 → 它在哪台模拟器上 ``((maa目录, 地址), MAA目录, 连接参数)``
 
@@ -2523,7 +2560,7 @@ def _run_group_proc(tid, idx, g, step_list, names, results, lock, log):
 
 
 
-def run_batch(accounts_list, steps, names=None, emulators=None):
+def run_batch(accounts_list, steps, names=None, emulators=None, switch=None):
     """按账号跑同一组 skill：**同一模拟器串行，不同模拟器并行**
 
     用户 2026-11-22 的口径：
@@ -2537,6 +2574,10 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
 
     ``emulators`` 是 ``{账号文件名: 'emulator-5556'}``：用户说「这个号用第二台」
     时传进来，覆盖档案里的地址（分组和实际连接都用它）。不传就看档案。
+
+    ``switch`` 是「每个号开跑前要不要切号」：多账号时**默认要**（2026-11-25
+    用户口径：任务一涉及多账号，一个号的流程开始就必须是自动唤醒切号），
+    用户明说「不用切号 / 都是同一个号 / 已经切好了」才传 ``False``。
 
     返回 taskId（后台跑，进度进任务日志）。
     """
@@ -2560,6 +2601,13 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
     step_list = _nav_first(step_list, len(files) > 1)
     nav_added = [n for (n, p), b in zip(step_list, before)
                  if p.get('wakeup') and not b.get('wakeup')]
+
+    # 多账号：**每个号的流程开始必须是「开始唤醒」切号**（2026-11-25 用户
+    # 口径）。界面停在哪、现在登的是谁，从上一个号身上根本推不出来——上一个
+    # 号可能停在关卡列表、主页、基建、结算页，甚至是别人的号。第一步自己
+    # 会唤醒的（wakeup / sweep / weekly / train / fight 带 wakeup）就不重复
+    # 补，免得白等一遍客户端重启；用户明说「不用切号」时传 switch=False。
+    step_list, auto_wake = _with_auto_wake(step_list, len(files) > 1, switch)
 
     # 分组：同模拟器的号必须排队
     groups = {}
@@ -2590,6 +2638,9 @@ def run_batch(accounts_list, steps, names=None, emulators=None):
         log = tasks.log_factory(tid2)
         log('步骤：' + ' → '.join(SKILLS[n][0].split('：')[0] for n, _ in step_list))
         log('模拟器分组：' + plan)
+        if auto_wake:
+            log('多账号：每个号开跑前先「开始唤醒」切号'
+                '（用户说不用切号时传 switchAccount=false）')
         if nav_added:
             log('多账号：%s 默认先唤醒 + 导航（界面状态未知；用户说'
                 '「已在关卡列表」才直跑）' % '、'.join(nav_added))

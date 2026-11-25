@@ -643,3 +643,21 @@ Python 跑即可；C 组会真实调用 Windows DPAPI，换电脑/换用户跑 B
 真机复验（5554，2026-11-25）：`run_tool('shop', prefix='TL')` 12 秒进
 「炮火所掩埋的」商店（关闭时间 2026/11/29 03:59），日志「点活动提示条
 （3.0 分，(1145,540)）」→「图像识别到「炮火所掩埋的」（2.7 分）」。
+
+### B72 多账号每个号先唤醒切号（2026-11-25）
+
+用户第三次报「助手又没有加切号自动唤醒」，所以这条从提示词升级成程序兜底，
+用例把判定逻辑和接线一起钉住：
+
+- `_wakes_itself`：`wakeup` / `sweep` / `weekly` / `train` / `claim`（带
+  `wakeup=true`）/ `fight`（带 `wakeup` 且没有 `noSwitch` / `assumeStageList`）
+  算自己会唤醒；`sweep` 显式 `wakeup=false`、`fight` 不带 wakeup、
+  `tool` / `navigate` / 空步骤都算不会唤醒；
+- `_with_auto_wake`：多账号 + 不唤醒的步骤要在最前面补一步 `wakeup`；连跑两次
+  不能叠两个；单账号 / `switch=False` / 第一步是 `sweep` 都不补；**补的时候不许
+  改动传进来的原列表**（纯函数，调用方还要拿原表算 `nav_added`）；
+- 接线：`run_steps` 工具暴露 `switchAccount`、`_tool_run_steps` 源码里必须有
+  `switch=sw`（防「参数加了但没传下去」）、`SYSTEM` 里有「一次任务涉及两个及
+  以上账号」这句硬规矩；
+- 引导卡片：第一条仍是「你可以帮我干什么？」，并且有「TL 活动商店清空」那条，
+  黑名单正好三样（数据增补条 / 数据增补 / 家具零件），**不能混进龙门币**。

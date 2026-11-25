@@ -662,6 +662,9 @@ TOOLS = [
           '{"skill":"tool","name":"event_shop","prefix":"OS"}。'
           '可用 skill：wakeup navigate fight skip_story sweep tool claim '
           'weekly train signin。**steps 里不用写 account**（程序按账号循环）。'
+          '**两个以上账号时，每个号开跑前程序会自动补一步「开始唤醒」切号**'
+          '（第一步本身带唤醒的 sweep/weekly/train 不重复补），别自己再写 '
+          'wakeup 步骤；用户明说不用切号才传 switchAccount=false。'
           '**调用前先跟用户确认：哪些号、按什么顺序做哪几步**。',
           {'accounts': {'type': 'array', 'items': {'type': 'string'},
                         'description': '账号文件名列表；空数组 = 当前选中的账号'},
@@ -694,7 +697,12 @@ TOOLS = [
                                         '"emulator-5556"}。**只覆盖这一次**；'
                                         '用户说「这个号固定用第二台」时应该先'
                                         '调 bind_emulator 钉进账号，别指望每次'
-                                        '都记得传这个参数'}},
+                                        '都记得传这个参数'},
+           'switchAccount': {
+               'type': 'boolean',
+               'description': '多账号时每个号开跑前要不要「开始唤醒」切号。'
+                              '**默认 true，别传**；只有用户明说「不用切号 / '
+                              '都是同一个号 / 已经切好了」才传 false'}},
           ['steps']),
 ]
 
@@ -1847,6 +1855,9 @@ def _tool_run_steps(args, session=None):
 
     accounts = [str(x) for x in (args.get('accounts') or []) if str(x).strip()]
     names = {str(k): v for k, v in (args.get('names') or {}).items()}
+    sw = args.get('switchAccount')
+    if isinstance(sw, str):
+        sw = sw.strip().lower() not in ('0', 'false', 'no', 'off')
     emus_raw = {str(k): str(v or '').strip()
                 for k, v in (args.get('emulators') or {}).items() if str(v or '').strip()}
     d = multiacct._maa_dir({}) or (settings.load().get('maaDir') or '')
@@ -1877,6 +1888,8 @@ def _tool_run_steps(args, session=None):
                       for n, _ in skills._norm_steps(steps))
     lines = ['%d 个账号 / %d 台模拟器' % (len(rows), len(groups)),
              '每步：' + desc]
+    if len(rows) > 1 and sw is not False:
+        lines.append('每个号开跑前先「开始唤醒」切号（用户说不用切号才关）')
     for key, g in groups:
         who = '、'.join(r['name'] for r in g['rows'])
         lines.append('· %s ← %s（%s）'
@@ -1893,12 +1906,12 @@ def _tool_run_steps(args, session=None):
 
     payload = {'accounts': [r['file'] for r in rows], 'steps': steps,
                'names': {r['file']: r['accountName'] for r in rows},
-               'emulators': emus}
+               'emulators': emus, 'switchAccount': sw}
     blocked = _guard(session, 'run_steps', dict(payload, _confirmed=True), summary)
     if blocked:
         return blocked
     tid = skills.run_batch(payload['accounts'], steps, names=payload['names'],
-                           emulators=emus)
+                           emulators=emus, switch=sw)
     out = {'started': True, 'taskId': tid, 'accounts': len(rows),
            'emulators': len(groups),
            'note': '已在后台跑：同一台模拟器的号排队切号，不同模拟器同时开跑。'
@@ -2176,7 +2189,10 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   三项都自己导航到活动地图再点入口。只给「小游戏」这种泛称时**必须带 prefix**
   （OS / TL）——两个活动的小游戏是 MAA 里两条不同的任务，选错进去也是白跑。
   活动商店必须给黑名单（默认四个：数据增补条 / 数据增补 / 龙门币 / 家具零件），
-  **空黑名单会把无限池也买掉**，别传空数组。
+  **空黑名单会把无限池也买掉**，别传空数组。用户说「把快关闭的 TL 商店清空，
+  黑名单：数据增补条、数据增补、家具零件」就是
+  `skill_tool(name="event_shop", prefix="TL", blacklist=["数据增补条","数据增补","家具零件"])`
+  ——**「黑名单」是不要买的**，别理解成要买的清单。
   小游戏第一次进要过教程/引导，MAA 不会点教程对话：任务里 `stuck` / 超时的时候，
   明确告诉用户「先在模拟器里手动把教程过一遍，过完再让我挂一次」，不要说
   「任务失败请重试」这种空话
@@ -2184,6 +2200,10 @@ run_status。state 是 stalled 就说卡在哪个节点，failed 就说原因。
   不用 MAA 任务；游戏没开就先 skill_wakeup 或传 wakeup=true
 
 **多账号怎么跑（2026-11-22）**：
+- **每个号的流程开始都是「开始唤醒」切号**（2026-11-25 用户口径）：走
+  `run_steps` 程序会自动补第一步，你**不用**往 steps 里写 wakeup；一个号一个号
+  调 skill 时，每个号的第一条必须是 `skill_wakeup(account=...)` 或
+  fight/sweep 带 `wakeup=true`。只有用户明说「不用切号」才省掉。
 - 一个号一段连续操作 → 单独调 skill
 - **多个号做同一套事** → 用 `run_steps`，把步骤写成列表交给我，程序自己
   按模拟器分组：同一台模拟器排队切号，不同模拟器多开并行
@@ -2335,6 +2355,17 @@ MAA 的 StartUp 三次「回到主界面」也全认错（两路一起点，界�
 0~8 / 15~17 章没有这条栏，别传 difficulty、也别调 skill_difficulty。
 
 ## 硬规矩
+- **一次任务涉及两个及以上账号 → 每个号的流程开始必须「开始唤醒」切号**
+  （2026-11-25 用户口径）。上一个号可能停在关卡列表 / 主页 / 基建 / 结算页，
+  那台模拟器上登的也未必是你要的号——不唤醒就接着点，打到的是别人的号。
+  - 走 `run_steps`：程序自动补第一步 wakeup（第一步是 sweep / weekly / train
+    或带 wakeup 的 fight 就不重复补），**别自己再往 steps 里加 wakeup**，
+    也别传 `switchAccount=false`（用户没说不用切号就不要关）。
+  - 一个号一个号地调 skill（只在用户要求「先跑这个号我看看」时）：每个号的
+    第一条都必须 `skill_wakeup(account=...)`，或 fight / sweep 传 `wakeup=true`。
+    **刚唤醒过一次不等于一直有效**——中间换了号就失效了。
+  - 单账号不强制：界面本来就是那个号，别为了「保险」白重启一遍客户端
+    （2026-11-17 用户吐槽过单号被强行唤醒）。
 - **点名了账号就默认要切号**：用户指定了某个号（「挂一下 5505 那个」），
   只要没明说「不用切号 / 别换号 / 已经开着这个号」，**一律先唤醒切号**
   （skill_fight 传 wakeup=true，或先 skill_wakeup 再打）。**别把界面上正在

@@ -8224,6 +8224,83 @@ def check_closed_shop_nav(tmp):
     assert eventnav._find(b4.getvalue(), shop)[0] == 0
 
 
+def check_multi_account_wake(tmp):
+    """B72 多账号每个号先「开始唤醒」切号（2026-11-25 用户口径）
+
+    用户报「agent 又又又没有加切号自动唤醒」：一次任务里两个以上账号时，
+    上一个号留在关卡列表 / 主页 / 基建 / 结算页都正常，界面上的号甚至可能
+    是别人的。所以**一个账号的流程开始必须是自动唤醒切号**。
+
+    钉住四件事：
+      1. ``_wakes_itself``：wakeup / sweep / weekly / train / fight(wakeup=true)
+         算自己会唤醒；fight 的 noSwitch / assumeStageList、sweep 显式
+         ``wakeup=false`` 一票否决；
+      2. ``_with_auto_wake``：多账号 + tool/claim 这种不唤醒的步骤要在最前面
+         补一步 wakeup；单账号不补；``switch=False``（用户说不用切号）不补；
+         第一步是 sweep 不重复补；补的时候不许改动传进来的原列表；
+      3. 接线：run_steps 暴露 switchAccount、``_tool_run_steps`` 真的把它传给
+         run_batch（写成 ``switch=sw``，别接一半又丢掉）、SYSTEM 里有这条硬规矩；
+      4. 引导卡片：第一条还是「你可以帮我干什么？」，并且有 TL 商店清空那条
+         （黑名单正好三样，且不含龙门币——用户点名的那三样）。
+    """
+    from core import skills, agent
+
+    for s in ([('wakeup', {})],
+              [('sweep', {'stage': 'OS'})],
+              [('sweep', {'stage': 'OS', 'wakeup': True})],
+              [('weekly', {'stage': 'MN'})],
+              [('train', {'operators': []})],
+              [('claim', {'prefix': 'OS', 'wakeup': True})],
+              [('fight', {'wakeup': True})]):
+        assert skills._wakes_itself(s) is True, s
+
+    for s in ([('sweep', {'stage': 'OS', 'wakeup': False})],
+              [('weekly', {'wakeup': False})],
+              [('train', {'wakeup': False})],
+              [('fight', {})],
+              [('fight', {'wakeup': True, 'noSwitch': True})],
+              [('fight', {'wakeup': True, 'assumeStageList': True})],
+              [('tool', {'name': 'event_shop', 'prefix': 'TL'})],
+              [('claim', {'prefix': 'OS'})],
+              [('navigate', {'stage': '13-1'})],
+              []):
+        assert skills._wakes_itself(s) is False, s
+
+    base = [('tool', {'name': 'event_shop', 'prefix': 'TL'})]
+    out, added = skills._with_auto_wake(base, True)
+    assert added is True and out[0][0] == 'wakeup' and out[1:] == base, out
+    assert base == [('tool', {'name': 'event_shop', 'prefix': 'TL'})], '改动了原列表'
+    # 再跑一次不能叠两个 wakeup
+    out2, _ = skills._with_auto_wake(out, True)
+    assert [n for n, _ in out2].count('wakeup') == 1, out2
+
+    for many, sw in ((True, False), (False, None), (False, True)):
+        got, added = skills._with_auto_wake(base, many, sw)
+        assert added is False and got == base, (many, sw, got)
+    got, added = skills._with_auto_wake([('sweep', {'stage': 'OS'})], True)
+    assert added is False and [n for n, _ in got] == ['sweep'], got
+
+    # 接线：工具参数 + 真的传下去 + 提示词硬规矩
+    rs = next(t for t in agent.TOOLS if t['function']['name'] == 'run_steps')
+    props = rs['function']['parameters'].get('properties') or {}
+    assert 'switchAccount' in props, 'run_steps 没暴露 switchAccount'
+    src = inspect.getsource(agent._tool_run_steps)
+    assert 'switch=sw' in src, 'switchAccount 没传给 run_batch'
+    assert '一次任务涉及两个及以上账号' in agent.SYSTEM, 'SYSTEM 里没有多账号唤醒硬规矩'
+
+    # 引导卡片
+    js = open(os.path.join(REPO, 'frontend', 'app.js'), encoding='utf-8').read()
+    block = js.split('const CHAT_STARTERS = [', 1)[1].split('];', 1)[0]
+    first = block.split('[', 1)[1].split(']', 1)[0]
+    assert '你可以帮我干什么' in first, first
+    hit = [x for x in block.split('\n')
+           if '帮我将快关闭的 TL 活动商店清空' in x]
+    assert hit, '引导卡片没有「TL 商店清空」那条'
+    for w in ('数据增补条', '数据增补', '家具零件'):
+        assert w in hit[0], (w, hit[0])
+    assert '龙门币' not in hit[0], hit[0]
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -8331,6 +8408,8 @@ def main():
                 lambda: check_game_wake(tmp))
         r.check('B71 结束活动的商店导航（TL：卡片灰条/节点剩余时间，模板与 roi 绑死）',
                 lambda: check_closed_shop_nav(tmp))
+        r.check('B72 多账号每个号先唤醒切号（不重复补、不改原步骤、引导卡片接线）',
+                lambda: check_multi_account_wake(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
