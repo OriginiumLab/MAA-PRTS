@@ -6,6 +6,7 @@
 #   - PR 标题「Release vX.Y.Z」即版本号；用 merge commit 合入 release，
 #     合并关闭 PR 时触发：
 #       meta    从标题提取版本号；严格 X.Y.Z 为正式版，带 -后缀 视为预发布
+#       sync-main 与 release 并行：把合并提交合回 main（能快进就快进）
 #       release 在合并提交上：冒烟 → 打包 → 把版号写进包内 version.json →
 #               zip 命名 MAA-PRTS-vX.Y.Z-win-<架构>.zip →
 #               changelog 取上一个 tag 以来的全部 commits → 发布 Release，
@@ -61,6 +62,38 @@ jobs:
           else
             echo "prerelease=true" | tee -a $GITHUB_OUTPUT
           fi
+
+  # Release PR 合入即把 release 的合并提交合回 main（抄 MAA pr-auto-tag.yml），
+  # 只依赖 meta、与构建发布并行：合并提交在 PR 合入时就已落在 release 上，
+  # 同步不该被构建/发布/Mirror 酱的失败卡住。main 没动过则快进，两边指向
+  # 同一个合并提交；动过则在 main 上生成一个 merge 节点。这样 tag 从 main
+  # 也可达，main 也不再显示「落后 release」。
+  # main 的 ruleset 禁止直接推送，这里用写权限 deploy key（secret
+  # MAIN_SYNC_DEPLOY_KEY）推送，两个 main ruleset 的 bypass 里都放了 Deploy keys
+  sync-main:
+    name: 合回 main
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.MAIN_SYNC_DEPLOY_KEY }}
+          show-progress: false
+
+      - name: Merge release into main and push
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$MERGE_SHA"
+          git merge --no-edit -m "Merge release $TAG into main" "$MERGE_SHA"
+          git push origin HEAD:main
 
   release:
     name: 构建并发布（Windows）
@@ -170,33 +203,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
-
-  # 发版后把 release 的合并提交合回 main（抄 MAA pr-auto-tag.yml）：
-  # main 没动过则快进，两边指向同一个合并提交；动过则在 main 上生成一个
-  # merge 节点。这样 tag 从 main 也可达，main 也不再显示「落后 release」。
-  # main 的 ruleset 禁止直接推送，这里用写权限 deploy key（secret
-  # MAIN_SYNC_DEPLOY_KEY）推送，两个 main ruleset 的 bypass 里都放了 Deploy keys
-  sync-main:
-    name: 合回 main
-    needs: [meta, release]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v7
-        with:
-          ref: main
-          fetch-depth: 0
-          ssh-key: ${{ secrets.MAIN_SYNC_DEPLOY_KEY }}
-          show-progress: false
-
-      - name: Merge release into main and push
-        env:
-          TAG: ${{ needs.meta.outputs.tag }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$MERGE_SHA"
-          git merge --no-edit -m "Merge release $TAG into main" "$MERGE_SHA"
-          git push origin HEAD:main
