@@ -243,6 +243,7 @@ config/themes/<id>/
   "autoUpdatePack": true,
   "autoCheckAppUpdate": true,
   "acceptPrerelease": false,
+  "updateSource": "auto",
   "lastAccount": "示例昵称#6408 官服.json"
 }
 ```
@@ -255,7 +256,8 @@ config/themes/<id>/
 | `autoStartMaa` | 写完作业后是否自动启动 MAA |
 | `autoUpdatePack` | 启动后是否自动下载新的游戏资源包（新关卡 / 新干员 / 新活动），默认开。关掉不影响使用，只是要等发新版才有新数据 |
 | `autoCheckAppUpdate` | 启动后是否检查程序新版本，默认开。6 小时最多一次，且**只提醒不自动装**——下载与重启都要用户自己点 |
-| `acceptPrerelease` | 是否接收 `vX.Y.Z-beta.N` 预发布版，默认关。关掉时预发布版本不会提示 |
+| `acceptPrerelease` | 是否接收 `vX.Y.Z-beta.N` 预发布版，默认关。关掉时预发布版本不会提示；同时决定 Mirror 酱那条链路查 `stable` 还是 `beta` 通道 |
+| `updateSource` | 程序更新走哪个源：`auto`（默认，先问国内源 Mirror 酱，没更新/连不上再走 GitHub）/ `mirror`（只走国内源）/ `github`（只走海外源）。**CDK 不在这里**——它加密存在 `config/mirror.key` |
 | `lastAccount` | 上次选中的账号文件，下次启动直接恢复 |
 | `emulatorPath` | 模拟器安装目录，**留空就用 MAA 配置里那个**（`ConnectSettings.Extras.<类型>.EmulatorPath`）。只有 MAA 里没配、或者想指另一个实例时才填 |
 | `emulatorAutoStart` | 任务开跑前发现模拟器没启动，是否替用户启动，默认开（见 `docs/backend.md` 的「开跑前的环境闸」）。关掉后只提示不动手 |

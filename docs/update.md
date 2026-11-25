@@ -157,13 +157,98 @@ MAA-PRTS/                    ← 程序本体整个换掉
 | 下载很慢或超时 | GitHub 直链慢，会自动退到 `gh-proxy` / `ghfast`；都失败就是网络问题，用下载页手动下 |
 | 源码模式点不了安装 | 正常。源码运行不替换文件，要测请用打包版 |
 
-## 以后接国内源
+## 国内源：Mirror 酱（2026-11-25 接入）
 
-`appupdate.py` 里的下载地址是列表形式（`DOWNLOAD_TEMPLATES`），检查逻辑也只依赖
-「一个能返回版本号 + 下载地址的源」。要接 MirrorChyan（Mirror酱）时：
+GitHub 那条路在国内经常超时，所以接了一条国内加速链路。**两条路并存**，
+设置 → 版本更新里的「下载源」三选一：
 
-1. 加一个 `MirrorChyanSource`，命中就用它的 URL 替换 `asset.urls`；
-2. 检查顺序改成「先 Mirror酱（不带 CDK 也能查版本），超时再 GitHub」；
-3. 前端不用动——它只认 `status()` 返回的那几个字段。
+| 选项 | 检查顺序 | 下载走谁 |
+|---|---|---|
+| 自动（默认） | 先问 Mirror 酱，没更新 / 连不上再走 GitHub | 有 CDK 走 Mirror，没有就 GitHub |
+| 国内源 | 同上，Mirror 失败也照样去 GitHub 兜 | 同上 |
+| 海外源 | 只走 GitHub（老行为） | GitHub 三源反代 |
 
-前提是先拿到 RID 和上传 token，并且给 13 MB 的 zip 单独开一个 RID（资源包没必要走 Mirror酱）。
+### 一定要记住的四条
+
+**1. 不填 CDK 也能查版本。** Mirror 的响应里 `version_name` 一定有，`url`
+只在 CDK 有效时才给。所以**不能拿「有没有 url」判断有没有新版本**——那是
+官方文档专门写的一条。没 CDK 的用户体验不会变差，只是不快。
+
+**2. 两个源取更新的那个。** Mirror 的上传是发版后由 workflow 异步触发的
+（`workflow_dispatch`），某一次 CI 挂了那边就停在旧版本。只信它会静默漏更新，
+所以 mirror 没更新时**必须**再问一次 GitHub。
+
+**3. 校验值不能串源。** 对面会重新打容器，Mirror 上的 zip 和 GitHub 上的
+zip 不是同一份字节。`_download_plan()` 返回 `[(url, verify_meta)]`，
+Mirror 的地址配 Mirror 返回的 `sha256`，GitHub 兜底那份没有哈希就降级成
+只校验 zip 结构。混用会稳定报「sha256 不匹配」，用户看到的就是「下载失败」。
+
+**4. 加速链接不落盘。** `url` 带时效（文档原话：取得后尽快下载，不持久缓存）。
+`_persistable()` 在写 `appupdate.json` 前把 `asset.urls` 剥掉，只留版本号、
+大小、sha256。`download()` 发现「源是 mirror 但没有 urls」会强制重查一次拿
+新链接——所以隔天再点「下载并安装」不会拿到过期地址。
+
+### 平台参数（和文档里的通用写法不一样）
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `res_id` | `MAA-PRTS` | 对方分配的 RID |
+| `os` | `win` | **不是** `windows`，传错拿 8002 |
+| `arch` | `x64` | **不是** `amd64`，传错拿 8003 |
+| `channel` | `stable` / `beta` | 跟着「接收预发布版」走 |
+| `current_version` | 一期传空 | 留空 = 请求完整包 |
+
+### 一期为什么只走全量
+
+增量包能压到几 MB，但要额外写一套「按 `changes.json` 删文件 + 覆盖式复制」
+的安装流程，而且 `install.ps1` 现在对 `_internal` 用 `robocopy /MIR`——
+对增量包用 `/MIR` 会把没变的几千个文件全删了，装完直接起不来。26 MB 的包
+在加速链路上是几秒到十几秒的事，先把「下载慢」这个主要痛点解决掉，增量留到
+包明显变大时再做（`mirror.check(current_version=...)` 的参数已经留好了）。
+
+### 错误码 → 界面提示
+
+`mirror.HINTS` 是唯一出处，`cdk_state()` 把它们翻成前端认的词
+（`expired` / `invalid` / `quota` / `mismatch` / `blocked` / `error`）。
+界面只认词不认数字，所以错误码表变了不用动前端。
+
+| code | 含义 | 界面显示 |
+|---|---|---|
+| 7001 | CDK 过期 | CDK 已过期，请续费或换一个 |
+| 7002 | CDK 错误 | CDK 不对，请检查后重新填写 |
+| 7003 | 今日次数用完 | 这个 CDK 今天的下载次数用完了 |
+| 7004 | 类型不匹配 | 这个 CDK 不适用于 MAA-PRTS |
+| 7005 | 被封禁 | 请联系 Mirror 酱客服 |
+| 8001 | 平台没包 | 本地记 `mirrorError`，静默回落 GitHub |
+| 8002~8004 | 我们的参数写错了 | 不回给用户看，回落 GitHub |
+
+CDK 全部错误（7001~7005）都**不回滚下载**：只是这一次走 GitHub，不让用户
+因为 CDK 过期就完全不能更新。
+
+### CDK 怎么存
+
+`vault.protect()`（Windows DPAPI）→ `config/mirror.key`，和内置助手的
+`agent.key` 一个待遇。`settings.json` 里**一个字都不留**（它不在 `DEFAULTS`
+里），所以用户把 `settings.json` 贴到 issue 里也不会泄露。接口
+`GET/POST /api/mirror/cdk` 只回掩码（`········1234`），日志和报错里也
+不拼带 `cdk=` 的完整 URL。
+
+设置页显示「✓ 已配置 ········1234（2027-02-01 到期）」，到期时间取
+`cdk_expired_time`。**没有新版本的那次检查也要带回来**（`status()` 的
+GitHub 兜底分支里写进 `cdkExpiredAt`），否则有效期只在碰巧有新版本时
+才看得到，用户没法判断该不该续费（B75 第 10 段钉住这条）。
+
+### 发版上传（CI 侧）
+
+`.github/workflows/mirrorchyan_release.yml` 由对方 PR（#137）提供，挂在
+`release.yml` 的发布成功之后用 `workflow_dispatch` 触发，把 GitHub Release
+上的 zip **原样**传给 Mirror 酱（`filetype: latest-release`，不重新打包），
+顺便同步更新日志。
+
+- 仓库 `Settings → Secrets and variables → Actions` 必须有
+  **`MirrorChyanUploadToken`**，否则上传 job 会失败并**自动在仓库开一个
+  issue**（action 自带的行为，不是我们写的）。
+- `auto_channel` 默认 true：版本名含 `beta` → `beta` 通道，否则 `stable`。
+  所以预发布包会进 beta 通道，`stable` 用户查不到，符合预期。
+- 上传失败不影响 GitHub Release，用户只是这条版本暂时不走加速。
+

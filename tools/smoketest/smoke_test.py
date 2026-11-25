@@ -8574,8 +8574,8 @@ def check_theme_switch(tmp):
         assert 'function saveSettings(patch) {' in js
         body = js.split('function saveSettings(patch) {', 1)[1].split('\n  };', 1)[0]
         assert 'return d;' in body, 'saveSettings 不返回响应，d.settings 会抛 TypeError'
-        assert js.count('(d && d.settings) || S.settings') == 2, \
-            'theme / maaDir 两处调用没有空值防御'
+        assert js.count('(d && d.settings) || S.settings') >= 2, \
+            'theme / maaDir 两处调用没有空值防御（数量只增不减，新增调用点也要带）'
         assert '/api/themes?local=1' in js, '没先拉本地主题清单（远端慢时第三方主题会消失）'
         assert 'function paintThemeGrid' in js
         assert 'if (S.themes && !themeInfoOf(cur)) cur' in js, \
@@ -8583,6 +8583,218 @@ def check_theme_switch(tmp):
         assert "先点卡片上的「下载」" in js, '切到未下载的主题时没有明确提示'
     finally:
         st.CONFIG_DIR, st.SETTINGS_PATH, st._cache, themes.THEMES_DIR = keep
+
+
+def check_mirror_source(tmp):
+    """B75 国内源（Mirror 酱）接入：默认值 / 错误码 / 按源校验 / 时效链接不落盘
+
+    2026-11-25 接 PR #137（workflow 上传包到 Mirror 酱）+ 客户端适配。
+    这里**一个网络请求都不发**：_request 换成假响应，验的是我们自己的逻辑。
+
+    几条被钉死的规矩（都是官方文档写明、违反就会出事的）：
+
+    - 不填 CDK 也能查到版本（没有 url），所以「查版本」不能拿 url 判断；
+    - 两个源的包不是同一份字节，**校验值不能串源**；
+    - Mirror 的下载 url 有时效，**不许落盘**；
+    - CDK 等同密码：只落 DPAPI 密文，`settings.json` 里一个字都不留，
+      报错信息里也不许出现带 cdk 的 URL。
+    """
+    from core import api, appupdate, mirror, settings
+
+    keep = (settings.CONFIG_DIR, settings.SETTINGS_PATH, settings._cache,
+            appupdate._cache[0], mirror.KEY_PATH)
+    try:
+        cfg = os.path.join(tmp, 'cfg-mirror')
+        os.makedirs(cfg, exist_ok=True)
+        settings.CONFIG_DIR = cfg
+        settings.SETTINGS_PATH = os.path.join(cfg, 'settings.json')
+        settings._cache = None
+        appupdate._cache[0] = None
+        mirror.KEY_PATH = os.path.join(cfg, 'mirror.key')
+
+        # ---------- 1. 更新源设置：默认 auto，脏值不许把更新检查弄死 ----------
+        assert settings.DEFAULTS['updateSource'] == 'auto', '默认更新源改了'
+        settings.save({'updateSource': ' MIRROR '})
+        assert settings.load()['updateSource'] == 'mirror'
+        settings.save({'updateSource': 'nonsense'})
+        assert settings.load()['updateSource'] == 'auto', '脏值没回落到 auto'
+        assert appupdate._update_source() == 'auto'
+
+        # ---------- 2. 版本名格式（current_version 必须同格式才有增量） ----------
+        assert mirror._fmt_current('2.7.0') == 'v2.7.0', '我们发的 tag 带 v'
+        assert mirror._fmt_current('v2.7.0') == 'v2.7.0'
+        assert mirror._fmt_current('dev') == '', 'dev 版不该拿去问服务端'
+        assert mirror._fmt_current('') == ''
+
+        # ---------- 3. 错误码 → 界面用的状态词 ----------
+        for code, word in ((7001, 'expired'), (7002, 'invalid'), (7003, 'quota'),
+                           (7004, 'mismatch'), (7005, 'blocked'),
+                           (8001, 'error'), (1001, 'error'), (0, 'error'),
+                           (12345, 'error')):
+            assert mirror.cdk_state(code) == word, (code, mirror.cdk_state(code))
+        assert mirror.MirrorError(7002).cdk_error is True
+        assert mirror.MirrorError(8001).cdk_error is False
+        assert 'CDK' in str(mirror.MirrorError(7002)), '7002 没给中文提示'
+
+        # ---------- 4. 到期时间戳：秒 / 毫秒都吃 ----------
+        sec = 1765000000
+        want = time.strftime('%Y-%m-%d', time.localtime(sec))
+        assert mirror.expires_text(sec) == want
+        assert mirror.expires_text(sec * 1000) == want, '毫秒时间戳没归一'
+        assert mirror.expires_text('') == '' and mirror.expires_text(None) == ''
+
+        # ---------- 5. 响应解析（假网络） ----------
+        old_req = mirror._request
+        try:
+            # 5a. 不填 CDK：能拿版本号，但没有 url —— 文档第一条规矩
+            mirror._request = lambda url, timeout: {
+                'version_name': 'v2.9.0', 'url': '', 'sha256': '', 'filesize': 0,
+                'update_type': 'full', 'release_note': '## 更新内容',
+                'cdk_expired_time': sec,
+            }
+            r1 = mirror.check(current_version='')
+            assert r1['version'] == 'v2.9.0' and r1['url'] == '', r1
+            assert r1['withCdk'] is False and r1['updateType'] == 'full'
+            assert r1['expiredAt'] == want
+
+            # 5b. 有 url 时字段规整（sha256 小写、size 转 int）
+            mirror._request = lambda url, timeout: {
+                'version_name': 'v2.9.0',
+                'url': 'https://cdn.example.com/p.zip?e=1',
+                'sha256': 'AB' * 32, 'filesize': 12345, 'update_type': 'full',
+            }
+            r2 = mirror.check(current_version='2.8.0')
+            assert r2['sha256'] == 'ab' * 32 and r2['size'] == 12345, r2
+            assert r2['queryVersion'] == 'v2.8.0', 'current_version 没补 v'
+            assert r2['url'].startswith('https://cdn.example.com/')
+
+            # 5c. code != 0 抛 MirrorError，提示是中文，且不含 cdk 参数
+            def boom(url, timeout):
+                raise mirror.MirrorError(7002, 'KEY_INVALID')
+            mirror._request = boom
+            try:
+                mirror.check()
+                assert False, '7002 应该抛错'
+            except mirror.MirrorError as e:
+                assert e.code == 7002 and 'CDK' in str(e)
+                assert 'cdk=' not in str(e), '错误信息里不许出现 cdk 参数'
+                assert 'mirrorchyan.com/api' not in str(e), '错误信息里不许出现完整 URL'
+
+            # 5d. 没有 version_name = 失败，不能当「已是最新」
+            mirror._request = lambda url, timeout: {}
+            try:
+                mirror.check()
+                assert False, '没有 version_name 应该抛错'
+            except mirror.MirrorError:
+                pass
+
+            # 5e. probe 不该把明文 CDK 带出来
+            p = mirror.probe('some-secret-cdk')
+            assert 'some-secret-cdk' not in json.dumps(p, ensure_ascii=False), p
+        finally:
+            mirror._request = old_req
+
+        # ---------- 6. CDK：DPAPI 加密、只回掩码、不进 settings.json ----------
+        try:
+            saved = mirror.save_cdk('abcd-1234-efgh-5678')
+            assert saved['hasCdk'] is True
+            assert saved['masked'].endswith('5678'), saved
+            assert 'abcd' not in saved['masked'], '掩码露太多了'
+            raw = open(mirror.KEY_PATH, 'rb').read()
+            assert b'abcd-1234' not in raw, 'CDK 是明文落盘的'
+            txt = open(settings.SETTINGS_PATH, encoding='utf-8').read()
+            assert 'efgh-5678' not in txt, 'settings.json 里出现了 CDK'
+            assert mirror.save_cdk('')['hasCdk'] is False
+            assert not os.path.isfile(mirror.KEY_PATH), '清除后密文文件还在'
+            try:
+                mirror.save_cdk('has space')
+                assert False, '带空格的 CDK 应该被拒'
+            except ValueError:
+                pass
+        except OSError:
+            pass          # 非 Windows（没有 DPAPI）：这部分跳过，别的照测
+
+        # ---------- 7. 带时效的链接不许落盘 ----------
+        asset = {
+            'name': 'MAA-PRTS-v2.9.0-win-x64.zip', 'size': 100,
+            'sha256': 'aa' * 32, 'origin': 'mirror',
+            'urls': ['https://cdn.example.com/p.zip?e=1'],
+            'github': {'urls': ['https://github.com/x'], 'size': 0, 'sha256': ''},
+        }
+        st = appupdate._persistable({'tag': 'v2.9.0', 'asset': asset})
+        assert 'urls' not in st['asset'], 'Mirror 的加速链接被落盘了（隔天必过期）'
+        assert st['asset']['sha256'] == 'aa' * 32 and st['asset']['size'] == 100
+        assert st['asset']['github']['urls'], 'GitHub 兜底地址不该被剥'
+        gh = {'urls': ['https://github.com/x'], 'sha256': 'bb' * 32}
+        assert appupdate._persistable({'asset': gh})['asset']['urls'], \
+            'GitHub 的稳定直链被误删了'
+
+        # ---------- 8. 下载计划：**每个源用自己那套校验值** ----------
+        plan = appupdate._download_plan(asset)
+        assert plan[0][0].startswith('https://cdn.example.com/')
+        assert plan[0][1]['sha256'] == 'aa' * 32, 'Mirror 的包没用 Mirror 的哈希'
+        assert plan[1][0] == 'https://github.com/x'
+        assert plan[1][1]['sha256'] == '', \
+            'GitHub 兜底用了 Mirror 的哈希（会稳定报 sha256 不匹配）'
+        plain = appupdate._download_plan(gh)
+        assert len(plain) == 1 and plain[0][1]['sha256'] == 'bb' * 32
+
+        # ---------- 9. 状态文件里不许出现明文 CDK / 加速链接 ----------
+        appupdate._save_state({'tag': 'v2.9.0', 'latest': '2.9.0',
+                               'source': 'mirror', 'asset': dict(asset)})
+        on_disk = open(appupdate.state_path(), encoding='utf-8').read()
+        assert 'cdn.example.com' not in on_disk, '加速链接落盘了'
+        assert 'efgh' not in on_disk
+
+        # ---------- 10. 国内源「没有更新」时也要带回到期时间 ----------
+        # 用户配了 CDK 但当时恰好没有新版本，设置页也要能显示「（2027-02-01 到期）」，
+        # 否则有效期只在有更新那一刻看得到，判断不了该不该续费。
+        keep_chk, keep_head, keep_cur, keep_state5 = (
+            appupdate.mirror.check, appupdate._head_tag, appupdate._current,
+            appupdate._cache[0])
+        try:
+            appupdate._cache[0] = None
+            appupdate._current = lambda: 'v2.9.0'
+            appupdate.mirror.check = lambda **kw: {
+                'version': 'v2.9.0', 'url': '', 'sha256': '', 'size': 0,
+                'updateType': 'full', 'notes': '', 'expiredAt': want,
+                'channel': 'stable', 'queryVersion': '', 'withCdk': True,
+            }
+            appupdate._head_tag = lambda: 'v2.9.0'
+            same = appupdate.status(force=True)
+            assert same['hasUpdate'] is False, same
+            assert same['cdkState'] == 'ok' and same['cdkExpiredAt'] == want, same
+        finally:
+            (appupdate.mirror.check, appupdate._head_tag, appupdate._current,
+             appupdate._cache[0]) = (keep_chk, keep_head, keep_cur, keep_state5)
+
+        # ---------- 11. 接线：路由 / 平台参数 / 前端 ----------
+        for r in ('/api/mirror/cdk', '/api/mirror/probe', '/api/mirror/status'):
+            assert r in api.ROUTES, r
+
+        py = open(os.path.join(REPO, 'backend', 'core', 'mirror.py'),
+                  encoding='utf-8').read()
+        assert "OS = 'win'" in py and "ARCH = 'x64'" in py, \
+            '平台参数要和上传 workflow 的 os=win / arch=x64 一致（不是 windows/amd64）'
+        assert "'MAA-PRTS'" in py, 'RID 不对'
+
+        js = open(os.path.join(REPO, 'frontend', 'app.js'), encoding='utf-8').read()
+        for need in ('updateSource', '/api/mirror/cdk', '/api/mirror/probe',
+                     'mirrorMsgText', 'data-src='):
+            assert need in js, 'app.js 少了 %s' % need
+        css = open(os.path.join(REPO, 'frontend', 'style.css'), encoding='utf-8').read()
+        assert '.src-opt' in css, '下载源卡片没有样式'
+
+        # 上传 workflow 是对方 PR 带的文件：还没合并时跳过（不影响本地开发）
+        yml_path = os.path.join(REPO, '.github', 'workflows', 'mirrorchyan_release.yml')
+        if os.path.isfile(yml_path):
+            yml = open(yml_path, encoding='utf-8').read()
+            assert 'mirrorchyan_rid: MAA-PRTS' in yml, 'workflow 里的 RID 和我们不一致'
+            assert 'MirrorChyanUploadToken' in yml
+            assert 'os: win' in yml or 'os: ${{ matrix.os }}' in yml
+    finally:
+        (settings.CONFIG_DIR, settings.SETTINGS_PATH, settings._cache,
+         appupdate._cache[0], mirror.KEY_PATH) = keep
 
 
 def main():
@@ -8698,6 +8910,8 @@ def main():
                 lambda: check_theme_autostart(tmp))
         r.check('B74 主题切换不报错（保存回值/本地快照/已装不消失）',
                 lambda: check_theme_switch(tmp))
+        r.check('B75 国内源 Mirror 酱（默认值/错误码/按源校验/时效链接不落盘）',
+                lambda: check_mirror_source(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

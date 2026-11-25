@@ -131,3 +131,11 @@ html[data-theme="light"] .badge-on {
 @media (prefers-reduced-motion: reduce) {
   #theme-pet.float { animation: none; }
 }
+
+/* 设置 → 下载源：浅色下 --mint 是亮青，选中态几乎看不出来。
+   换成深青（同样的色相，压到能跟白底拉开对比） */
+html[data-theme="light"] .src-opt.on {
+  border-color: #0e9f8f;
+  background: rgba(13, 148, 136, 0.09);
+  box-shadow: 0 0 0 1px rgba(13, 148, 136, 0.25) inset;
+}

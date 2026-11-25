@@ -197,6 +197,13 @@ DEFAULTS = {
     'autoUpdatePack': True,  # 启动后自动拉取新的游戏资源包（关卡/干员/活动）
     'autoCheckAppUpdate': True,   # 启动后检查程序本体有没有新版本（6 小时一次）
     'acceptPrerelease': False,    # 要不要接收 vX.Y.Z-beta.N 这类预发布版
+    # 程序更新走哪个源（2026-11-25 接 Mirror 酱）：
+    #   auto   先问国内源（Mirror 酱，不用 CDK 也能查版本），没更新/连不上
+    #          再走 GitHub——国内 github.com 常超时，这一步能省 6 秒
+    #   mirror 只走国内源（可填 CDK 加速下载）
+    #   github 只走海外源（老行为，网络好的用户可选）
+    # CDK 不在这里：DPAPI 加密存 config/mirror.key，见 core/mirror.py
+    'updateSource': 'auto',
     'proxy': '',                  # 更新链路（程序/资源包检查下载）走的代理，空=直连
     'charBlacklist': [],          # 干员黑名单：干员名，纯显示层不再出现
     'authorBlacklist': [],        # 作者黑名单：[{id, name}]，按作业站数字 id 屏蔽作业
@@ -436,6 +443,10 @@ def save(patch: dict) -> dict:
                 v = bool(v) and str(v).strip().lower() not in ('0', 'false', 'no', '')
             elif k == 'theme':
                 v = str(v or '').strip().lower() or 'dark'
+            elif k == 'updateSource':
+                # 手改 settings.json 写错值一律回 auto，不能把更新检查弄死
+                v = str(v or '').strip().lower()
+                v = v if v in ('auto', 'mirror', 'github') else 'auto'
             elif k == 'agent':
                 v = _norm_agent(v)
             cur[k] = v

@@ -235,8 +235,19 @@ async function boot() {
     startPing();
     setTimeout(scheduleWatch, 7000);
     // ?open=settings 直接展开设置（截图自测 / 给用户发链接用）
-    if (new URLSearchParams(location.search).get('open') === 'settings') {
-      setTimeout(() => { try { openSettings(); } catch (e) { } }, 400);
+    // ?open=settings&set=update 再切到指定页签（自测时不用手点）
+    const _q0 = new URLSearchParams(location.search);
+    if (_q0.get('open') === 'settings') {
+      const _tab = _q0.get('set') || '';
+      setTimeout(() => {
+        try { openSettings(); } catch (e) { }
+        if (_tab) {
+          setTimeout(() => {
+            const b = document.querySelector(`.set-tab[data-tab="${_tab}"]`);
+            if (b) b.click();
+          }, 150);
+        }
+      }, 400);
     }
     setInterval(scheduleWatch, 20000);
     // 资源包后台自动更新：晚几秒，别和首屏渲染抢网络
@@ -857,7 +868,7 @@ function appVerSuffix() {
 /* 设置页「检查更新」：强制查一次（跳过 6 小时节流），返回给按钮用的文案 */
 async function appCheckNow() {
   const st = await appAutoCheck(true);
-  if (!st) return { text: '检查失败：连不上 GitHub', ok: false };
+  if (!st) return { text: '检查失败：连不上更新服务', ok: false };
   if (!st.ok) return { text: '检查失败：' + (st.error || '网络不可用'), ok: false };
   if (!st.hasUpdate) return { text: `已是最新（${st.current}）`, ok: true };
   return { text: `发现新版本 ${st.tag}`, ok: true, hasUpdate: true };
@@ -873,12 +884,17 @@ function openUpdateDialog() {
   const frozen = !!u.frozen;
   const when = u.publishedAt ? String(u.publishedAt).slice(0, 10) : '';
   const size = asset.size ? (asset.size / 1048576).toFixed(1) + ' MB' : '';
+  const srcName = u.sourceName || 'GitHub';
 
   modal(`
     <h3>发现新版本 ${esc(tag)}</h3>
     <div class="sub">当前 ${esc(cur)}${when ? ` · 发布于 ${esc(when)}` : ''}${
-      u.prerelease ? ' · 预发布版' : ''}${size ? ` · 安装包 ${esc(size)}` : ''}</div>
+      u.prerelease ? ' · 预发布版' : ''}${size ? ` · 安装包 ${esc(size)}` : ''}${
+      ` · 下载源 ${esc(srcName)}`}</div>
     <div class="upd-notes">${notes ? esc(notes) : (u.degraded ? '（网络受限，没取到更新说明）' : '（这个版本没有写更新说明）')}</div>
+    ${u.source === 'mirror' && u.cdkState === 'none'
+      ? '<div class="onb-hint" style="margin:10px 0 0">这个版本是从 Mirror 酱查到的，但没填 CDK——点下载会退回 GitHub。想走加速去「设置 → 版本更新」填 CDK。</div>'
+      : ''}
     ${u.degraded ? '<div class="onb-hint" style="margin:10px 0 0">拿不到 GitHub API（可能被网络拦了），已按发版命名直接拼出安装包地址；下载后只校验压缩包结构，没有官方 sha256。</div>' : ''}
     ${frozen ? '' : '<div class="onb-hint bad" style="margin:10px 0 0">源码模式不支持自动替换，请用「前往下载页」手动覆盖</div>'}
     <div class="modal-foot">
@@ -2894,6 +2910,24 @@ const SET_TABS = [
 
 let _setSchedTimer = null;   // 设置 → 定时任务页的 5 秒轮询
 
+/* 国内源（Mirror 酱）状态行：没配 / 已配 / 具体错误，各说一句人话。
+   错误码由后端翻成 cdkState（expired/invalid/quota/mismatch/blocked），
+   前端不认数字——数字变了不用动界面。 */
+function mirrorMsgText(m) {
+  m = m || {};
+  if (!m.hasCdk) return '没填 CDK：能查到新版本，但下载会走 GitHub。';
+  const bad = {
+    expired: 'CDK 已过期，请续费或换一个',
+    invalid: 'CDK 不对，请检查后重新填写',
+    quota: '这个 CDK 今天的下载次数用完了，明天再试',
+    mismatch: '这个 CDK 不适用于 MAA-PRTS，请换一个',
+    blocked: 'CDK 已被封禁，请联系 Mirror 酱客服',
+  };
+  if (bad[m.cdkState]) return '✗ ' + bad[m.cdkState];
+  const exp = m.cdkExpiredAt ? `（${m.cdkExpiredAt} 到期）` : '';
+  return `✓ 已配置 ${m.masked || ''}${exp}`;
+}
+
 function openSettings() {
   const s = S.settings;
   const p = S.paths || {};
@@ -2909,6 +2943,16 @@ function openSettings() {
   const pm = pv.match(/^(.*?):(\d+)$/);
   const proxyHost = pm ? pm[1] : 'http://127.0.0.1';
   const proxyPort = pm ? pm[2] : '';
+  // 更新源：auto 先问国内源（Mirror 酱）再回 GitHub；mirror 只用国内源；
+  // github 是老行为。CDK 状态由 /api/mirror/status 单独拉（不走 6 小时缓存）。
+  const srcNow = ['auto', 'mirror', 'github'].includes(String(s.updateSource || '').toLowerCase())
+    ? String(s.updateSource).toLowerCase() : 'auto';
+  const mst = S.mirror || {};
+  const srcRow = (val, name, desc) => `
+    <label class="src-opt${srcNow === val ? ' on' : ''}" data-src="${val}">
+      <input type="radio" name="set-upd-src" value="${val}" ${srcNow === val ? 'checked' : ''}>
+      <b>${name}</b><span>${desc}</span>
+    </label>`;
 
   const acctRows = game => (S.accounts || []).filter(a => gameOf(a) === game).map(a => {
     const st = a.stats || {};
@@ -3179,7 +3223,7 @@ function openSettings() {
             <div class="set-head">
               <h3>版本更新</h3>
               <p>两条链各自独立：<b>游戏资源</b>是关卡 / 干员 / 活动数据（几百 KB，随程序发版更新），
-                <b>程序本体</b>是 MAA-PRTS 自己（从 GitHub Releases 取，有新版本只提醒，装不装你说了算）。</p>
+                <b>程序本体</b>是 MAA-PRTS 自己（国内源 / 海外源都能取，有新版本只提醒，装不装你说了算）。</p>
             </div>
             <div class="set-card">
               <div class="set-ver">
@@ -3208,6 +3252,30 @@ function openSettings() {
                 <span>启动后检查程序新版本（6 小时最多一次，只提醒）</span>
               </label>
             </div>
+
+            <div class="set-sub-title">下载源</div>
+            <div class="set-card">
+              <div class="src-pick">
+                ${srcRow('auto', '自动', '先国内源，后 GitHub')}
+                ${srcRow('mirror', '国内源', 'Mirror 酱加速，可填 CDK')}
+                ${srcRow('github', '海外源', '直接连 GitHub')}
+              </div>
+              <div class="mirror-box" id="set-mirror-box"${srcNow === 'github' ? ' hidden' : ''}>
+                <label class="field"><span>Mirror 酱 CDK</span>
+                  <div class="path-row">
+                    <input type="password" id="set-mirror-cdk" value="" autocomplete="off" spellcheck="false"
+                           placeholder="粘贴 CDK（可留空）">
+                    <button class="btn-plain mini" id="set-mirror-save">保存并验证</button>
+                    <button class="btn-plain mini" id="set-mirror-clear" ${mst.hasCdk ? '' : 'disabled'}>清除</button>
+                  </div></label>
+                <div class="set-maarow-foot">
+                  <span class="set-tip" id="set-mirror-msg">${esc(mirrorMsgText(mst))}</span>
+                  <button class="btn-plain mini" id="set-mirror-buy">购买 CDK</button>
+                </div>
+                <div class="set-tip">CDK 加密存本机（config/mirror.key），不上传、也不进日志。</div>
+              </div>
+            </div>
+
             <div class="set-sub-title">网络代理</div>
             <div class="set-card">
               <div class="set-tip" style="margin-bottom:10px">只在连不上 GitHub 时才需要。仅用于上面两条检查 / 下载链路；
@@ -4369,6 +4437,81 @@ function openSettings() {
         try { await saveSettings({ autoCheckAppUpdate: ev.target.checked }); }
         catch (e2) { ev.target.checked = !ev.target.checked; toast('保存失败：' + e2.message, 'err'); }
       });
+      /* ---------------- 下载源：国内源（Mirror 酱）/ 海外源 ---------------- */
+      const mBox = $('#set-mirror-box', el);
+      const mMsg = $('#set-mirror-msg', el);
+      const mClear = $('#set-mirror-clear', el);
+      const paintMirror = d => {
+        if (!d) return;
+        S.mirror = Object.assign({}, S.mirror, d);
+        if (mMsg) mMsg.textContent = mirrorMsgText(S.mirror);
+        if (mClear) mClear.disabled = !S.mirror.hasCdk;
+      };
+      // 卡片选中态是 CSS 画的，radio 自己不会改 class → 手动同步，
+      // 顺带把 CDK 那一块按源显示/隐藏（只走 GitHub 时它没意义）
+      const paintSrc = v => {
+        $$('.src-opt', el).forEach(o => o.classList.toggle('on', o.dataset.src === v));
+        if (mBox) mBox.hidden = (v === 'github');
+      };
+      $$('input[name="set-upd-src"]', el).forEach(r => {
+        r.addEventListener('change', async ev => {
+          const v = ev.target.value;
+          const prev = (S.settings && S.settings.updateSource) || 'auto';
+          paintSrc(v);
+          try {
+            const d = await saveSettings({ updateSource: v });
+            S.settings = (d && d.settings) || S.settings;
+            S.appUpdate = null;      // 换了源，上次检查的结论作废
+            renderAppDot();
+            if (v !== 'github') appAutoCheck(true);
+          } catch (e2) {
+            paintSrc(prev);
+            toast('保存失败：' + e2.message, 'err');
+          }
+        });
+      });
+      $('#set-mirror-clear', el).addEventListener('click', async () => {
+        const ok = await askConfirm('清除 CDK？',
+          '清掉之后还能查新版本，但下载会走 GitHub（国内可能很慢）。', '清除');
+        if (!ok) return;
+        try {
+          paintMirror(await api('/api/mirror/cdk', { cdk: '' }));
+          toast('已清除 CDK');
+        } catch (e2) { toast('清除失败：' + e2.message, 'err'); }
+      });
+      $('#set-mirror-buy', el).addEventListener('click', () => {
+        openUrl('https://mirrorchyan.com?source=maaprts');
+      });
+      $('#set-mirror-save', el).addEventListener('click', async () => {
+        const inp = $('#set-mirror-cdk', el);
+        const btn = $('#set-mirror-save', el);
+        const val = inp.value.trim();
+        btn.disabled = true;
+        try {
+          const d = await api('/api/mirror/cdk', { cdk: val });
+          paintMirror(d);
+          inp.value = '';
+          if (!d.hasCdk) {
+            toast('已清除 CDK，下载会走 GitHub');
+          } else {
+            // 存上不等于能用：立刻用刚存的那串查一次。7001 过期 / 7002 填错
+            // 要当场说清，否则用户只会在下一次点下载时看到一句「下载失败」
+            const p = await api('/api/mirror/probe', {});
+            paintMirror({
+              cdkState: p.cdkState || '',
+              cdkExpiredAt: p.expiredAt || (S.mirror || {}).cdkExpiredAt || '',
+            });
+            toast(p.hint || (p.ok ? 'CDK 已保存' : 'CDK 验证失败'),
+              p.ok ? 'ok' : 'err', 6000);
+          }
+          appAutoCheck(true);
+        } catch (e2) {
+          toast('保存失败：' + e2.message, 'err');
+        } finally { btn.disabled = false; }
+      });
+      // 打开设置页时补一次真实状态（S.mirror 可能是上次渲染的旧值）
+      api('/api/mirror/status').then(d => paintMirror(d)).catch(() => { });
+
       $('#set-proxy-save', el).addEventListener('click', async () => {
         const host = $('#set-proxy-host', el).value.trim();
         const port = $('#set-proxy-port', el).value.trim();
