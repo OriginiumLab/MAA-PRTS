@@ -3536,6 +3536,18 @@ def check_settings_panel(tmp):
     assert {'root', 'accounts', 'config', 'logs', 'appLog'} <= set(boot['paths']), boot['paths']
     assert boot['paths']['logs'].replace('/', '\\').endswith('debug')
 
+    # 6) 主窗口几何：只收合法数值/布尔，坏值丢弃（位置是否还在屏幕上由
+    #    main.py 启动时用 webview.screens 判断）
+    from core import settings
+    settings.save({'windowGeom': {'x': '-100', 'y': 'bad', 'width': 1600,
+                                  'height': 900, 'max': 'yes'}})
+    g = settings.load()['windowGeom']
+    assert g == {'x': -100, 'width': 1600, 'height': 900, 'max': True}, g
+    settings.save({'windowGeom': {'x': 1e9, 'width': 10, 'height': 900}})
+    assert settings.load()['windowGeom'] == {'height': 900}, settings.load()['windowGeom']
+    settings.save({'windowGeom': 'nope'})
+    assert settings.load()['windowGeom'] == {}, settings.load()['windowGeom']
+
 
 # ---------------------------------------------------------------- B39 培养干员
 def check_oper_train(tmp):
