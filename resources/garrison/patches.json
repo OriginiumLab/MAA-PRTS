@@ -3,7 +3,8 @@
   "adaptedVersions": [
     "1.1.4",
     "1.1.5",
-    "1.1.7"
+    "1.1.7",
+    "1.1.11"
   ],
   "patches": [
     {
@@ -72,11 +73,59 @@
       "find": "return y.find(P=>O(x).includes(O(P.name)))",
       "replace": "return y.find(P=>O(x).includes(O(P.name))||Rn(O(x),O(P.name)))"
     },
-{
+    {
       "id": "reward-zero-inline-v117",
       "why": "奖励候选卡兜底识别（合成精锐后「请选择奖励」三选一）。v1.1.7 把奖励面板判定统一改成 _o 的价格扫描：要固定价格位读到 ≥2 个数字 0 才算 reward。实测该界面上三张候选卡不显示数字价格，OCR 读不到 0 → reward=false；同时绿色「请选择奖励」横幅正好盖住右上角「准备就绪」→ ready=false，外层守卫 if(!it&&Pr.reward||!Pr.ready) 抛「尚未确认普通购买界面」→ 整备重来 → 死循环（合成后领奖励卡住）。这里按 v1.1.5 的老办法补一条兜底：对每张商店卡的名字区（left=x+40v, top=1080-328v, 130v×72v）OCR，读到 0/O 标记的卡即为奖励候选（≥2 张且不少于非候选数），交给原有领取分支（pt(card.x,name,true)），点击/名字核对/确认仍走核原本逻辑。只补识别，不改任何点击行为。",
       "find": "async function qt(B,x,y=!1){const O=await $u(B.png,B.pc,B.pcUiScale??ne.pcUiScale),P=Lo(x,O,{allowSingleZero:y,pc:B.pc,pcUiScale:B.pcUiScale??ne.pcUiScale});return{scan:O,reward:O.reward,cards:P}}",
       "replace": "async function qt(B,x,y=!1){const O=await $u(B.png,B.pc,B.pcUiScale??ne.pcUiScale),P=Lo(x,O,{allowSingleZero:y,pc:B.pc,pcUiScale:B.pcUiScale??ne.pcUiScale});if(!O.reward)try{const v=B.pc?(B.pcUiScale??90)/100:1,M=Math.round(1080-328*v),W=Math.round(130*v),H=Math.round(72*v),rg=x.filter(c=>!!c.name).map(c=>({card:c,region:{left:Math.round(c.x+40*v),top:M,width:W,height:H}})).filter(r=>r.region.left>=0&&r.region.top>=0&&r.region.left+r.region.width<=1920&&r.region.top+r.region.height<=1080);if(rg.length){const tt=await Oa(B.png,rg.map(r=>r.region)),hit=rg.filter((r,i)=>(tt[i]||[]).some(u=>/^[0OoＯ〇]$/.test(u.text.trim())&&u.score>=.6)).map(r=>r.card);if(hit.length>=2&&hit.length>=rg.length-hit.length){console.error(\"[reward-inline] 按卡名区 0 标记识别到奖励候选：\"+hit.map(c=>c.name).join(\",\"));return{scan:O,reward:!0,cards:hit}}}}catch(Qx){}return{scan:O,reward:O.reward,cards:P}}"
+    },
+    {
+      "id": "latin-tolerance-v1111",
+      "why": "v1.1.11 同款：名字比对 un（上游自带 ≥3 字 1 字容差）拉丁名仍只容 1 字差——小字号拉丁名（Miss.Christine、赛季数据里没有的新预备干员 Mist 系 7-8 字母名）OCR 常错 2+ 字。≥6 字拉丁/数字名放宽到 2 字（数据里拉丁名两两编辑距离远大于 2，无混淆）。注：v1.1.11 非调试模式会跳过购买/免费领取的名字核对，这条主要作用于策略页核对补丁（un）与调试模式。",
+      "find": "if(N.length<3)return!1;for(let Y=0;Y+N.length<=O.length;Y++){let de=0;for(let Q=0;Q<N.length;Q++)O[Y+Q]!==N[Q]&&de++;if(de<=1)return!0}return!1}",
+      "replace": "if(N.length<3)return!1;const ya=/^[A-Za-z0-9]/.test(N)&&N.length>=6?2:1;for(let Y=0;Y+N.length<=O.length;Y++){let de=0;for(let Q=0;Q<N.length;Q++)O[Y+Q]!==N[Q]&&de++;if(de<=ya)return!0}return!1}"
+    },
+    {
+      "id": "free-claim-trust-detail-v1111",
+      "why": "v1.1.11 同款：购买函数 vt 在核对开启（verifyPurchase）时，免费领取（第三参 C=true，如三合一赠送高星干员、寻呼模块领人）卡片名与详情名对不上会关弹窗弃领。改为免费且详情栏读出了非空文本（ze）时信详情继续领；购买/出售核对标准不变。v1.1.11 非调试模式本来就关掉核对，这条是调试模式与上游回退时的兜底。",
+      "find": "if(!N&&!un(ze,M))return Ie(",
+      "replace": "if(!N&&!un(ze,M)&&!(C&&ze))return Ie("
+    },
+    {
+      "id": "strategy-detail-tolerance-v1111",
+      "why": "v1.1.11 同款：策略页详情核对（zu 函数）纯 includes 零容差——缪尔赛思等策略名 OCR 错一个形近字即跳过该卡、拉黑后滚到列表末尾报「尚有策略进度未核实」整局停止。改为 includes 不中再走 un 容差。",
+      "find": "return C.find(N=>O(M).includes(O(N.name)))",
+      "replace": "return C.find(N=>O(M).includes(O(N.name))||un(O(M),O(N.name)))"
+    },
+    {
+      "id": "unknown-diag-helper-v1111",
+      "why": "unknown 诊断与主页重试需要的模块级状态：__prtsUnkShot（每段 unknown 只存一张截图）、__prtsHomeTries（Banner 重试计数）、__prtsSaveUnknown（把当前截图写到临时目录 garrison-medal-diagnostics/unknown-<pid>.png，失败只返回文字不抛）。挂在 var _i 声明处。",
+      "find": "var _i={",
+      "replace": "var __prtsUnkShot=0,__prtsHomeTries=0,__prtsSaveUnknown=function(_c){try{const _d=bu(wr(),\"garrison-medal-diagnostics\");Rr(_d,{recursive:!0});const _f=bu(_d,\"unknown-\"+process.pid+\".png\");nr(_f,_c.png);return _f}catch(_e){return \"save-fail: \"+(_e&&_e.message||_e)}},_i={"
+    },
+    {
+      "id": "unknown-diag-log-v1111",
+      "why": "进入 unknown 时把 OCR 到的文字写进日志（每次进入一段 unknown 记一次）——被游戏踢回主页/活动页卡住时，日志能直接看出是哪个页面、缺了哪句话。",
+      "find": "if(C.screen===\"unknown\"){if(M||=Date.now(),",
+      "replace": "if(C.screen===\"unknown\"){if(M||=(__prtsUnkShot=0,console.error(\"[unknown] texts: \"+C.texts.map(O=>O.text.trim()).filter(Boolean).join(\" | \")),Date.now()),"
+    },
+    {
+      "id": "unknown-diag-shot-v1111",
+      "why": "unknown 持续 15 秒仍未恢复时存一张截图到 %TEMP%\\garrison-medal-diagnostics\\unknown-<pid>.png（同一段 unknown 只存一次，文件名按宿主进程区分、覆盖旧图），并在日志里给出路径。90 秒中止前的现场就有了。",
+      "find": "Date.now()-M>=15e3&&Ie(\"\\u753B\\u9762\\u6682\\u65F6\\u65E0\\u6CD5\\u8BC6\\u522B\\uFF0C\\u8BF7\\u786E\\u8BA4\\u505C\\u7559\\u5728\\u6D3B\\u52A8\\u4E3B\\u9875\\uFF1B\\u6301\\u7EED 90 \\u79D2\\u672A\\u6062\\u590D\\u5C06\\u4E2D\\u6B62\"),await Ke(1200);",
+      "replace": "Date.now()-M>=15e3&&(__prtsUnkShot||(__prtsUnkShot=1,console.error(\"[unknown] shot: \"+__prtsSaveUnknown(C))),Ie(\"\\u753B\\u9762\\u6682\\u65F6\\u65E0\\u6CD5\\u8BC6\\u522B\\uFF0C\\u8BF7\\u786E\\u8BA4\\u505C\\u7559\\u5728\\u6D3B\\u52A8\\u4E3B\\u9875\\uFF1B\\u6301\\u7EED 90 \\u79D2\\u672A\\u6062\\u590D\\u5C06\\u4E2D\\u6B62\")),await Ke(1200);"
+    },
+    {
+      "id": "home-banner-retry-v1111",
+      "why": "游戏热更新/重登会把客户端踢回游戏主页。核心原来只盲点一次右上角 Banner（轮播），点到的不是卫戍协议就会停在别的活动页 unknown 90 秒。改为：点完 Banner 检查是否到 lobby/mode/info，不是就按「返回/返回主页」（没有文字就点左上角）回主页再点，每轮最多 3 次；累计 9 次仍失败才抛错中止，避免无限循环。",
+      "find": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){H(\"\\u56DE\\u5230\\u6E38\\u620F\\u4E3B\\u9875\\uFF0C\\u4ECE\\u53F3\\u4E0A\\u89D2 Banner \\u8FDB\\u5165\\u536B\\u620D\\u534F\\u8BAE\"),await st(1750,215,4e3);continue}",
+      "replace": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){if(__prtsHomeTries>=9)throw new Error(\"反复从主页 Banner 进入卫戍协议失败，已中止；请确认活动入口是否还在\");__prtsHomeTries++;H(\"\\u56DE\\u5230\\u6E38\\u620F\\u4E3B\\u9875\\uFF0C\\u4ECE\\u53F3\\u4E0A\\u89D2 Banner \\u8FDB\\u5165\\u536B\\u620D\\u534F\\u8BAE\");for(let _bt=0;_bt<3;_bt++){await st(1750,215,4e3);await Ke(800);const _bs=await qe();if([\"lobby\",\"mode\",\"info\"].includes(_bs.screen)){__prtsHomeTries=0;break}console.error(\"[home-retry] banner miss screen=\"+_bs.screen+\" try=\"+_bt);const _bb=Ue(_bs,/^返回$|^返回主页$/);if(_bb)await st(...Ou(_bb),1200);else await st(60,60,1200);await Ke(800);let _bh=await qe();if(!(Ue(_bh,/^终端$/)&&Ue(_bh,/理智/))){await st(60,60,1500);await Ke(800);_bh=await qe()}if(!(Ue(_bh,/^终端$/)&&Ue(_bh,/理智/))){console.error(\"[home-retry] 返回后不在主页，停止盲点 Banner\");break}}continue}"
+    },
+    {
+      "id": "speed-nondebug-revert-v1111",
+      "why": "操作间隔选项已从界面移除。之前一版把非调试分支的 speed:1 改成跟随用户设置，这条把已经打过的核心恢复成 speed:1（未打过的核心 find 不中，自动跳过），避免账号里残留的旧 speed 值在无界面可调的情况下继续生效。",
+      "find": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:Math.min(5,Math.max(.5,Math.round((Number(n.speed)||1.5)*2)/2)),forceStrategy:void 0}",
+      "replace": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:1,forceStrategy:void 0}"
     }
   ]
 }

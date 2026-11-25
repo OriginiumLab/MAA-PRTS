@@ -4824,7 +4824,8 @@ def check_garrison(tmp):
 
     _write_maa('MuMuEmulator12', '127.0.0.1:16416', r'C:\MuMu\adb.exe')
     o, src = garrison.defaults('g-acc.json')
-    assert o == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'speed': 1.5, 'medalWins': 3,
+    assert o == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
+                 'medalWins': 3,
                  'adbAddress': '127.0.0.1:16416', 'adbPath': r'C:\MuMu\adb.exe',
                  'screenshotMethod': 'fast', 'pcUiScale': 90}, o
     assert src['kind'] == 'MuMuEmulator12' and src['profile'] == 'P1', src
@@ -4837,18 +4838,32 @@ def check_garrison(tmp):
     assert o['device'] == 'pc' and o['adbAddress'] == '127.0.0.1:16384', o
     # 没绑 MAA / 配置读不到：兜底值不炸
     o, src = garrison.defaults('ghost.json')
-    assert o['device'] == 'mumu' and o['mode'] == 'quick' and o['speed'] == 1.5, o
+    assert o['device'] == 'mumu' and o['mode'] == 'quick', o
     assert src['kind'] == '' and src['maaDir'] == '', src
 
     # 4) sanitize：越界值全部收进合法枚举/范围
     bad = garrison.sanitize({'device': 'hack', 'mode': 'zzz', 'medalWins': '6',
-                             'speed': '99', 'screenshotMethod': 'x',
+                             'screenshotMethod': 'x',
                              'adbAddress': '  ', 'pcUiScale': '120'})
-    assert bad == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal',
+    assert bad == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
                    'medalWins': 6,
-                   'speed': 5.0, 'adbAddress': '127.0.0.1:16384',
+                   'adbAddress': '127.0.0.1:16384',
                    'adbPath': '', 'screenshotMethod': 'auto',
                    'pcUiScale': 90}, bad
+    # 模拟模式/规程等级（v1.1.10 起：策略徽章固定等级 1，叠层任务 1/5/12，
+    # 阿戈尔组 task-2 没有极速与等级 1，统一落到标准·等级 5）
+    s = garrison.sanitize({'goal': 'medal', 'mode': 'standard', 'level': 12})
+    assert s['mode'] == 'standard' and s['level'] == 1, s
+    s = garrison.sanitize({'goal': 'task-3', 'mode': 'standard', 'level': 12})
+    assert s['mode'] == 'standard' and s['level'] == 12, s
+    s = garrison.sanitize({'goal': 'task-3', 'mode': 'quick', 'level': 5})
+    assert s['mode'] == 'quick' and s['level'] == 5, s     # 叠层也能跑极速
+    s = garrison.sanitize({'goal': 'task-2', 'mode': 'quick', 'level': 1})
+    assert s['mode'] == 'standard' and s['level'] == 5, s
+    s = garrison.sanitize({'goal': 'task-2', 'level': 12})
+    assert s['mode'] == 'standard' and s['level'] == 12, s
+    s = garrison.sanitize({'goal': 'task-1', 'level': '7'})
+    assert s['level'] == 1, s
     # goal 白名单：非法值回 medal，合法叠层目标透传
     ok_goal = garrison.sanitize({'goal': 'task-3', 'device': 'mumu'})
     assert ok_goal['goal'] == 'task-3', ok_goal
@@ -4985,23 +5000,25 @@ def check_garrison(tmp):
         assert f.read() == 'untouched core', '脱靶时一个字节都不能动'
 
     # 9) 速刷选项按账号持久化：save_opts 只存差异键、defaults 生效 overlay、
-    #    改回默认自动剔除——用户「调了 2.5×/6 胜重启全回默认」的病根
+    #    改回默认自动剔除——用户「调的档位重启全回默认」的病根
     assert '/api/garrison/opts' in api.ROUTES
     _write_maa('MuMuEmulator12', '127.0.0.1:16416')
-    r = garrison.save_opts('g-acc.json', {'mode': 'standard', 'speed': 2.5,
-                                          'medalWins': 6})
-    assert set(r['saved']) == {'mode', 'speed', 'medalWins'}, r['saved']
+    r = garrison.save_opts('g-acc.json', {'goal': 'task-3', 'mode': 'standard',
+                                          'level': 5, 'medalWins': 6})
+    assert set(r['saved']) == {'goal', 'mode', 'level', 'medalWins'}, r['saved']
     with open(acc, encoding='utf-8') as f:
         snap = json.load(f)
     assert snap['garrisonOpts'] == r['saved'], snap.get('garrisonOpts')
     # 重启语义：重新读账号（defaults）就能拿回用户改动，未改的键跟随 MAA
     d2, _src = garrison.defaults('g-acc.json')
-    assert d2['mode'] == 'standard' and d2['speed'] == 2.5 and d2['medalWins'] == 6, d2
+    assert (d2['goal'] == 'task-3' and d2['mode'] == 'standard'
+            and d2['level'] == 5 and d2['medalWins'] == 6), d2
     assert d2['device'] == 'mumu' and d2['screenshotMethod'] == 'fast'
     assert d2['adbAddress'] == '127.0.0.1:16416', d2
     # 改回默认值的键自动剔除
-    r = garrison.save_opts('g-acc.json', {'mode': 'quick', 'speed': 2.5, 'medalWins': 6})
-    assert set(r['saved']) == {'speed', 'medalWins'}, r['saved']
+    r = garrison.save_opts('g-acc.json', {'goal': 'medal', 'mode': 'quick',
+                                          'level': 1, 'medalWins': 6})
+    assert set(r['saved']) == {'medalWins'}, r['saved']
     assert '/api/garrison/opts' in api.ROUTES
 
     # 10) 保持最新：_pick_candidate 选「适配表内且比已装新」的目标——
@@ -5018,8 +5035,8 @@ def check_garrison(tmp):
                                   startedAt=None, endedAt=None)
         adapted = garrisondl._adapted_versions()
         assert adapted and '1.1.4' in adapted and '1.1.5' in adapted
-        assert '1.1.7' in adapted, adapted
-        assert garrisondl._is_adapted('1.1.5') and not garrisondl._is_adapted('1.1.6')
+        assert '1.1.7' in adapted and '1.1.11' in adapted, adapted
+        assert garrisondl._is_adapted('1.1.11') and not garrisondl._is_adapted('1.1.6')
 
         # 已最新（候选=已装）→ start() 短路 done，不起线程
         old_svc = os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core')
@@ -5048,16 +5065,17 @@ def check_garrison(tmp):
                                                'medal-farm-v1.1.5')), '失败版本不能落盘'
         assert os.path.isfile(os.path.join(old_svc, 'service.mjs')), '旧版必须原样保留'
 
-        # _pick_candidate（真实直链链）：记录只有表外 1.1.6 → 选表内最新 1.1.5
+        # _pick_candidate（真实直链链）：记录只有表外 1.1.6 → 选表内最新 1.1.11
         garrisondl.candidates = real_cands
         garrisondl.record_candidates = lambda: [
             {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
              'files': None, 'source': '小黑盒扩展记录'}]
-        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.7', '表外新版应回退表内最新'
-        assert garrisondl._pick_candidate('')['version'] == '1.1.7'
-        assert garrisondl._pick_candidate('1.1.7') is None
+        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.11', '表外新版应回退表内最新'
+        assert garrisondl._pick_candidate('')['version'] == '1.1.11'
+        assert garrisondl._pick_candidate('1.1.7')['version'] == '1.1.11'
+        assert garrisondl._pick_candidate('1.1.11') is None
         # check_update：候选只剩表外新版（连直链一起屏蔽）→ 不起线程零流量；
-        # （真实链路里记录 1.1.6 + 已装 1.1.4 会经直链升 1.1.5——上面
+        # （真实链路里记录 1.1.6 + 已装 1.1.4 会经直链升 1.1.11——上面
         #   _pick_candidate 断言已覆盖该选版，这里不再真下载）
         garrisondl.candidates = lambda: [
             {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
@@ -8912,6 +8930,8 @@ def main():
                 lambda: check_theme_switch(tmp))
         r.check('B75 国内源 Mirror 酱（默认值/错误码/按源校验/时效链接不落盘）',
                 lambda: check_mirror_source(tmp))
+        r.check('B76 桌宠点一下播随机动作（点击与定时共用 / 播不起来也回待机）',
+                lambda: check_theme_pet(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -8923,6 +8943,41 @@ def main():
         return 1
     print('结果：全部通过')
     return 0
+
+
+def check_theme_pet(tmp):
+    """B76 桌宠点一下播随机动作（点击与定时共用一份 / 播不起来也回待机）
+
+    素材（pet/idle.webm 加 pet.actions 里的动作）由主题包自己提供，前端只
+    负责随机挑一个、播完回待机。这里一个视频都不加载，验的是接线：
+
+    - 定时触发和点击触发共用 playPetAction，不许各写一份——「播完回待机」
+      和「播不起来也回待机」这两条分支写两遍，早晚会有一边漏掉；
+    - play() reject 时必须回待机，否则停在动作最后一帧不动；
+    - 容器 #theme-pet 保持 pointer-events:none，只让视频本体接点击，不然
+      右下角那块会把右栏按钮挡住。
+    """
+    js = open(os.path.join(REPO, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(REPO, 'frontend', 'themes.css'),
+               encoding='utf-8').read()
+
+    assert 'function playPetAction(acts, base, idle) {' in js, '没有抽 playPetAction'
+    assert js.count('playPetAction(') >= 3, '定时器 / 点击没有共用 playPetAction'
+    body = js.split('function playPetAction(acts, base, idle) {', 1)[1].split(
+        'function syncThemePet', 1)[0]
+    assert 'v.onended = back' in body, '动作播完没回待机'
+    assert 'v.play().catch(back)' in body, '动作播不起来时没回待机'
+    assert 'Math.floor(Math.random()' in body, '没随机挑动作'
+
+    assert 'el.onclick = acts.length' in js, '桌宠没接点击'
+    assert 'el.onclick = null' in js, '关桌宠 / 换主题后没摘掉点击'
+    tail = js.split('_petTimer = setInterval', 1)[1][:240]
+    assert 'document.hidden' in tail, '后台标签页还在播动作'
+
+    # 容器不许放开（右栏照常可点），只放视频本体
+    container = css.split('#theme-pet {', 1)[1].split('}', 1)[0]
+    assert 'pointer-events: none' in container, '桌宠容器放开了点击，会拦住右栏'
+    assert '#theme-pet.on video { pointer-events: auto' in css, '桌宠视频没接点击'
 
 
 if __name__ == '__main__':
