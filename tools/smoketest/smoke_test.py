@@ -8912,6 +8912,8 @@ def main():
                 lambda: check_theme_switch(tmp))
         r.check('B75 国内源 Mirror 酱（默认值/错误码/按源校验/时效链接不落盘）',
                 lambda: check_mirror_source(tmp))
+        r.check('B76 桌宠点一下播随机动作（点击与定时共用 / 播不起来也回待机）',
+                lambda: check_theme_pet(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -8923,6 +8925,41 @@ def main():
         return 1
     print('结果：全部通过')
     return 0
+
+
+def check_theme_pet(tmp):
+    """B76 桌宠点一下播随机动作（点击与定时共用一份 / 播不起来也回待机）
+
+    素材（pet/idle.webm 加 pet.actions 里的动作）由主题包自己提供，前端只
+    负责随机挑一个、播完回待机。这里一个视频都不加载，验的是接线：
+
+    - 定时触发和点击触发共用 playPetAction，不许各写一份——「播完回待机」
+      和「播不起来也回待机」这两条分支写两遍，早晚会有一边漏掉；
+    - play() reject 时必须回待机，否则停在动作最后一帧不动；
+    - 容器 #theme-pet 保持 pointer-events:none，只让视频本体接点击，不然
+      右下角那块会把右栏按钮挡住。
+    """
+    js = open(os.path.join(REPO, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(REPO, 'frontend', 'themes.css'),
+               encoding='utf-8').read()
+
+    assert 'function playPetAction(acts, base, idle) {' in js, '没有抽 playPetAction'
+    assert js.count('playPetAction(') >= 3, '定时器 / 点击没有共用 playPetAction'
+    body = js.split('function playPetAction(acts, base, idle) {', 1)[1].split(
+        'function syncThemePet', 1)[0]
+    assert 'v.onended = back' in body, '动作播完没回待机'
+    assert 'v.play().catch(back)' in body, '动作播不起来时没回待机'
+    assert 'Math.floor(Math.random()' in body, '没随机挑动作'
+
+    assert 'el.onclick = acts.length' in js, '桌宠没接点击'
+    assert 'el.onclick = null' in js, '关桌宠 / 换主题后没摘掉点击'
+    tail = js.split('_petTimer = setInterval', 1)[1][:240]
+    assert 'document.hidden' in tail, '后台标签页还在播动作'
+
+    # 容器不许放开（右栏照常可点），只放视频本体
+    container = css.split('#theme-pet {', 1)[1].split('}', 1)[0]
+    assert 'pointer-events: none' in container, '桌宠容器放开了点击，会拦住右栏'
+    assert '#theme-pet.on video { pointer-events: auto' in css, '桌宠视频没接点击'
 
 
 if __name__ == '__main__':

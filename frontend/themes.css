@@ -109,6 +109,9 @@ html[data-theme="light"] .badge-on {
   object-position: bottom right;
   display: block;
 }
+/* 点桌宠播一个随机动作（素材来自主题包的 pet.actions）。容器保持
+   pointer-events:none，只让视频本体接点击——右栏的按钮照常可按。 */
+#theme-pet.on video { pointer-events: auto; cursor: pointer; }
 /* 小人待机动作：轻微上下浮动 + 呼吸；视频本身在播 idle.webm，
    这一层是「视频解码前的空窗期」和不支持视频时的兜底 */
 #theme-pet.float {

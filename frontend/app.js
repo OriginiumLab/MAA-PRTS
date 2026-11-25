@@ -2700,12 +2700,31 @@ function petEnabled() {
   try { return localStorage.getItem('maaprts.pet') !== '0'; } catch (e) { return true; }
 }
 
+/* 播一次随机动作，播完回待机。定时触发和点击触发共用这一份——两处各写
+   一遍的话，「播完回待机」「播不起来也要回待机」这些分支迟早走岔。
+   连点就重播：每次重新随机，比"动作没播完就不理你"更像在戳它。 */
+function playPetAction(acts, base, idle) {
+  const v = document.getElementById('theme-pet-v');
+  if (!v || !acts.length) return;
+  const back = () => {
+    v.onended = null;
+    v.loop = true;
+    v.src = base + idle;
+    v.play().catch(() => { });
+  };
+  v.onended = back;
+  v.loop = false;
+  v.src = base + acts[Math.floor(Math.random() * acts.length)];
+  // 素材坏了 / 解码不支持时 play() 会 reject，别停在动作的最后一帧
+  v.play().catch(back);
+}
+
 function syncThemePet(id) {
   let el = document.getElementById('theme-pet');
   const info = id && !THEME_FIXED[id] ? themeInstalled[id] : null;
   const pet = info && info.pet;
   if (!pet || !pet.video || !petEnabled()) {
-    if (el) { el.classList.remove('on'); el.innerHTML = ''; }
+    if (el) { el.classList.remove('on'); el.innerHTML = ''; el.onclick = null; }
     stopPetLoop();
     return;
   }
@@ -2721,20 +2740,13 @@ function syncThemePet(id) {
   el.classList.toggle('float', pet.float !== false);
   stopPetLoop();
   const acts = Object.values(pet.actions || {}).filter(Boolean);
+  // 点桌宠立刻播一个随机动作。容器仍然不拦界面点击，只有视频这一块接
+  // 事件，见 themes.css 的 #theme-pet.on video。
+  el.onclick = acts.length ? () => playPetAction(acts, base, pet.video) : null;
   if (!acts.length || !(pet.every > 0)) return;
   _petTimer = setInterval(() => {
-    const v = document.getElementById('theme-pet-v');
-    if (!v || document.hidden) return;
-    const pick = acts[Math.floor(Math.random() * acts.length)];
-    v.onended = () => {
-      v.onended = null;
-      v.loop = true;
-      v.src = base + pet.video;
-      v.play().catch(() => { });
-    };
-    v.loop = false;
-    v.src = base + pick;
-    v.play().catch(() => { });
+    if (document.hidden) return;
+    playPetAction(acts, base, pet.video);
   }, Math.max(8000, Number(pet.every) * 1000));
 }
 
