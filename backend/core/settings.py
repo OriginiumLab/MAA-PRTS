@@ -217,6 +217,9 @@ DEFAULTS = {
     # 卫戍协议速刷核心（service.mjs 所在目录，GPL，不随本程序分发）；
     # 空时按约定位置找：<运行根>/garrison/core 等，见 garrison.core_dir
     'garrisonCoreDir': '',
+    # 主窗口位置/大小（逻辑像素）：{x,y,width,height,max}。用户拖动/缩放后
+    # 由 main.py 在窗口关闭时写回，下次启动按它还原；空 = 默认大小居中
+    'windowGeom': {},
     # 内置助手：只存连接参数，apiKey 走 DPAPI 单独存 config/agent.key
     'agent': {
         'baseUrl': 'https://api.deepseek.com/v1',
@@ -393,6 +396,28 @@ def _norm_op_blacklist(v) -> list:
     return out
 
 
+def _norm_window_geom(v) -> dict:
+    """主窗口几何：只收 {x,y,width,height,max}，坏值丢弃
+
+    坐标允许负数（多显示器左侧/上方），但限个范围防止手改 json 写成天文数字；
+    宽高只收像样的窗口尺寸。位置是否还在屏幕上由 main.py 启动时再判断。
+    """
+    if not isinstance(v, dict):
+        return {}
+    out = {}
+    for k, lo, hi in (('x', -100000, 100000), ('y', -100000, 100000),
+                      ('width', 800, 10000), ('height', 500, 10000)):
+        try:
+            n = int(round(float(v.get(k))))
+        except (TypeError, ValueError):
+            continue
+        if lo <= n <= hi:
+            out[k] = n
+    if 'max' in v:
+        out['max'] = bool(v.get('max'))
+    return out
+
+
 def _merged_dirs(dirs, extra):
     """历史目录列表并入一个新目录（过滤脏值，大小写不敏感去重）"""
     out = [d for d in (dirs or []) if isinstance(d, str) and d]
@@ -435,6 +460,8 @@ def save(patch: dict) -> dict:
                 v = _norm_dir(v) if v else ''
             elif k == 'garrisonCoreDir':
                 v = _norm_dir(v) if v else ''
+            elif k == 'windowGeom':
+                v = _norm_window_geom(v)
             elif k == 'emulatorAutoStart':
                 # 前端可能传 "false" / 0 / 空串，别让字符串 "false" 变成真
                 v = bool(v) and str(v).strip().lower() not in ('0', 'false', 'no', '')
