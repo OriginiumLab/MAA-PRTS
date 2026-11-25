@@ -166,7 +166,6 @@ function buildOptions(body = {}) {
     level,
     debug: Boolean(body.debug),
     verifyUpgrade: true, identifyUnknown: true, fullBoard: true, useEquipment: true,
-    speed: Math.min(5, Math.max(0.5, Number(body.speed) || 1.0)),
     device,
     adbAddress: String(body.adbAddress ?? '127.0.0.1:16384').trim(),
     adbPath: String(body.adbPath ?? '').trim(),

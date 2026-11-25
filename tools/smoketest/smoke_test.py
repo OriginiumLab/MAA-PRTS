@@ -4825,7 +4825,7 @@ def check_garrison(tmp):
     _write_maa('MuMuEmulator12', '127.0.0.1:16416', r'C:\MuMu\adb.exe')
     o, src = garrison.defaults('g-acc.json')
     assert o == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
-                 'speed': 1.0, 'medalWins': 3,
+                 'medalWins': 3,
                  'adbAddress': '127.0.0.1:16416', 'adbPath': r'C:\MuMu\adb.exe',
                  'screenshotMethod': 'fast', 'pcUiScale': 90}, o
     assert src['kind'] == 'MuMuEmulator12' and src['profile'] == 'P1', src
@@ -4838,16 +4838,16 @@ def check_garrison(tmp):
     assert o['device'] == 'pc' and o['adbAddress'] == '127.0.0.1:16384', o
     # 没绑 MAA / 配置读不到：兜底值不炸
     o, src = garrison.defaults('ghost.json')
-    assert o['device'] == 'mumu' and o['mode'] == 'quick' and o['speed'] == 1.0, o
+    assert o['device'] == 'mumu' and o['mode'] == 'quick', o
     assert src['kind'] == '' and src['maaDir'] == '', src
 
     # 4) sanitize：越界值全部收进合法枚举/范围
     bad = garrison.sanitize({'device': 'hack', 'mode': 'zzz', 'medalWins': '6',
-                             'speed': '99', 'screenshotMethod': 'x',
+                             'screenshotMethod': 'x',
                              'adbAddress': '  ', 'pcUiScale': '120'})
     assert bad == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
                    'medalWins': 6,
-                   'speed': 5.0, 'adbAddress': '127.0.0.1:16384',
+                   'adbAddress': '127.0.0.1:16384',
                    'adbPath': '', 'screenshotMethod': 'auto',
                    'pcUiScale': 90}, bad
     # 模拟模式/规程等级（v1.1.10 起：策略徽章固定等级 1，叠层任务 1/5/12，
@@ -4864,11 +4864,6 @@ def check_garrison(tmp):
     assert s['mode'] == 'standard' and s['level'] == 12, s
     s = garrison.sanitize({'goal': 'task-1', 'level': '7'})
     assert s['level'] == 1, s
-    # 操作间隔：缺省 1.0，0.5–5× 按 0.5 取整（普通模式也生效，靠 -v1111 补丁）
-    assert garrison.sanitize({})['speed'] == 1.0
-    assert garrison.sanitize({'speed': '1.3'})['speed'] == 1.5
-    assert garrison.sanitize({'speed': '0.1'})['speed'] == 0.5
-    assert garrison.sanitize({'speed': '4.4'})['speed'] == 4.5
     # goal 白名单：非法值回 medal，合法叠层目标透传
     ok_goal = garrison.sanitize({'goal': 'task-3', 'device': 'mumu'})
     assert ok_goal['goal'] == 'task-3', ok_goal
@@ -5005,23 +5000,25 @@ def check_garrison(tmp):
         assert f.read() == 'untouched core', '脱靶时一个字节都不能动'
 
     # 9) 速刷选项按账号持久化：save_opts 只存差异键、defaults 生效 overlay、
-    #    改回默认自动剔除——用户「调了 2.5×/6 胜重启全回默认」的病根
+    #    改回默认自动剔除——用户「调的档位重启全回默认」的病根
     assert '/api/garrison/opts' in api.ROUTES
     _write_maa('MuMuEmulator12', '127.0.0.1:16416')
-    r = garrison.save_opts('g-acc.json', {'mode': 'standard', 'speed': 2.5,
-                                          'medalWins': 6})
-    assert set(r['saved']) == {'mode', 'speed', 'medalWins'}, r['saved']
+    r = garrison.save_opts('g-acc.json', {'goal': 'task-3', 'mode': 'standard',
+                                          'level': 5, 'medalWins': 6})
+    assert set(r['saved']) == {'goal', 'mode', 'level', 'medalWins'}, r['saved']
     with open(acc, encoding='utf-8') as f:
         snap = json.load(f)
     assert snap['garrisonOpts'] == r['saved'], snap.get('garrisonOpts')
     # 重启语义：重新读账号（defaults）就能拿回用户改动，未改的键跟随 MAA
     d2, _src = garrison.defaults('g-acc.json')
-    assert d2['mode'] == 'standard' and d2['speed'] == 2.5 and d2['medalWins'] == 6, d2
+    assert (d2['goal'] == 'task-3' and d2['mode'] == 'standard'
+            and d2['level'] == 5 and d2['medalWins'] == 6), d2
     assert d2['device'] == 'mumu' and d2['screenshotMethod'] == 'fast'
     assert d2['adbAddress'] == '127.0.0.1:16416', d2
     # 改回默认值的键自动剔除
-    r = garrison.save_opts('g-acc.json', {'mode': 'quick', 'speed': 2.5, 'medalWins': 6})
-    assert set(r['saved']) == {'speed', 'medalWins'}, r['saved']
+    r = garrison.save_opts('g-acc.json', {'goal': 'medal', 'mode': 'quick',
+                                          'level': 1, 'medalWins': 6})
+    assert set(r['saved']) == {'medalWins'}, r['saved']
     assert '/api/garrison/opts' in api.ROUTES
 
     # 10) 保持最新：_pick_candidate 选「适配表内且比已装新」的目标——

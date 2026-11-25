@@ -98,12 +98,6 @@
       "replace": "return C.find(N=>O(M).includes(O(N.name))||un(O(M),O(N.name)))"
     },
     {
-      "id": "speed-nondebug-v1111",
-      "why": "v1.1.5/1.1.7/1.1.11 把「操作间隔」speed 当调试专属：非调试归一化里写死 speed:1，所有 Ke(ms) 等待都不再乘用户设置。这里把非调试分支改成和调试分支同一套「0.5–5、按 0.5 取整」表达式，让普通模式也能调节奏（verify*/fullBoard 仍保持关闭）。find 带 verifyPurchase/verifyFreeReward 前缀，避免命中 1.1.4（它的合并变量叫 r，引用 n 会炸）。",
-      "find": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:1,forceStrategy:void 0}",
-      "replace": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:Math.min(5,Math.max(.5,Math.round((Number(n.speed)||1.5)*2)/2)),forceStrategy:void 0}"
-    },
-    {
       "id": "unknown-diag-helper-v1111",
       "why": "unknown 诊断与主页重试需要的模块级状态：__prtsUnkShot（每段 unknown 只存一张截图）、__prtsHomeTries（Banner 重试计数）、__prtsSaveUnknown（把当前截图写到临时目录 garrison-medal-diagnostics/unknown-<pid>.png，失败只返回文字不抛）。挂在 var _i 声明处。",
       "find": "var _i={",
@@ -126,6 +120,12 @@
       "why": "游戏热更新/重登会把客户端踢回游戏主页。核心原来只盲点一次右上角 Banner（轮播），点到的不是卫戍协议就会停在别的活动页 unknown 90 秒。改为：点完 Banner 检查是否到 lobby/mode/info，不是就按「返回/返回主页」（没有文字就点左上角）回主页再点，每轮最多 3 次；累计 9 次仍失败才抛错中止，避免无限循环。",
       "find": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){H(\"\\u56DE\\u5230\\u6E38\\u620F\\u4E3B\\u9875\\uFF0C\\u4ECE\\u53F3\\u4E0A\\u89D2 Banner \\u8FDB\\u5165\\u536B\\u620D\\u534F\\u8BAE\"),await st(1750,215,4e3);continue}",
       "replace": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){if(__prtsHomeTries>=9)throw new Error(\"反复从主页 Banner 进入卫戍协议失败，已中止；请确认活动入口是否还在\");__prtsHomeTries++;H(\"\\u56DE\\u5230\\u6E38\\u620F\\u4E3B\\u9875\\uFF0C\\u4ECE\\u53F3\\u4E0A\\u89D2 Banner \\u8FDB\\u5165\\u536B\\u620D\\u534F\\u8BAE\");for(let _bt=0;_bt<3;_bt++){await st(1750,215,4e3);await Ke(800);const _bs=await qe();if([\"lobby\",\"mode\",\"info\"].includes(_bs.screen)){__prtsHomeTries=0;break}console.error(\"[home-retry] banner miss screen=\"+_bs.screen+\" try=\"+_bt);const _bb=Ue(_bs,/^返回$|^返回主页$/);if(_bb)await st(...Ou(_bb),1200);else await st(60,60,1200);await Ke(800);let _bh=await qe();if(!(Ue(_bh,/^终端$/)&&Ue(_bh,/理智/))){await st(60,60,1500);await Ke(800);_bh=await qe()}if(!(Ue(_bh,/^终端$/)&&Ue(_bh,/理智/))){console.error(\"[home-retry] 返回后不在主页，停止盲点 Banner\");break}}continue}"
+    },
+    {
+      "id": "speed-nondebug-revert-v1111",
+      "why": "操作间隔选项已从界面移除。之前一版把非调试分支的 speed:1 改成跟随用户设置，这条把已经打过的核心恢复成 speed:1（未打过的核心 find 不中，自动跳过），避免账号里残留的旧 speed 值在无界面可调的情况下继续生效。",
+      "find": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:Math.min(5,Math.max(.5,Math.round((Number(n.speed)||1.5)*2)/2)),forceStrategy:void 0}",
+      "replace": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:1,forceStrategy:void 0}"
     }
   ]
 }

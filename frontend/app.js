@@ -5328,7 +5328,6 @@ function paintGarInputs() {
   paintGarMode(o.goal, o.mode, o.level);
   set('#gar-adb', o.adbAddress);
   set('#gar-wins', o.medalWins);
-  set('#gar-speed', o.speed);
   set('#gar-scale', o.pcUiScale);
   set('#gar-shot', o.screenshotMethod);
 }
@@ -5341,7 +5340,6 @@ function collectGarOpts() {
     mode: m ? 'standard' : 'quick', level: m ? Number(m[1]) : 1,
     adbAddress: v('#gar-adb').trim(),
     medalWins: Number(v('#gar-wins')) || 3,
-    speed: Number(v('#gar-speed')) || 1,
     pcUiScale: Number(v('#gar-scale')) || 90, screenshotMethod: v('#gar-shot'),
   };
   S.garOpts[S.current] = o;   // 会话内缓存：切号再回来还在
@@ -5411,7 +5409,7 @@ function paintGarState(d) {
   if (bs) bs.disabled = busy;
   if (br) br.disabled = busy || !d.hasCheckpoint;
   if (bp) bp.disabled = !busy;
-  ['#gar-device', '#gar-mode', '#gar-goal', '#gar-adb', '#gar-wins', '#gar-speed', '#gar-scale', '#gar-shot']
+  ['#gar-device', '#gar-mode', '#gar-goal', '#gar-adb', '#gar-wins', '#gar-scale', '#gar-shot']
     .forEach(id => { const el = $(id); if (el) el.disabled = busy; });
   // 来源标注：让用户知道这份默认值是从哪个 MAA 配置抄的
   const src = $('#gar-src');
