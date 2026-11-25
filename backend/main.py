@@ -400,6 +400,10 @@ def _quit(code=0, reason='退出'):
     """
     log('正在退出（%s）…' % reason)
     try:
+        _wingeom_save()        # 窗口几何先落盘（窗口还活着时读得到实际位置）
+    except Exception:
+        pass
+    try:
         from core import watch as _watch
         _watch.stop_all()      # 观测线程是 daemon，但主动停能让它把最后一条日志写完
     except Exception:
@@ -422,6 +426,84 @@ def _quit(code=0, reason='退出'):
         pass
     log('已退出')
     os._exit(code)
+
+
+# ---------------------------------------------------------------- 窗口位置记忆
+# pywebview 的 moved/resized/maximized/restored 事件都是逻辑像素，和
+# create_window(x=, y=, width=, height=) 的口径一致。关闭时写回
+# settings.json 的 windowGeom，下次启动按它还原；位置不在任何屏幕上
+# （换显示器/拔屏）就退回居中，别把窗口丢到看不见的地方。
+_WINGEOM = {'x': None, 'y': None, 'width': None, 'height': None,
+            'max': False, 'min': False}
+_WINGEOM_LOCK = threading.Lock()
+_WIN = [None]          # 主窗口（供 _quit 兜底保存）
+_WIN_SHOWN = [False]
+
+
+def _geom_visible(g: dict, screens) -> bool:
+    """保存的位置至少让标题栏露出 120x30，否则当没存过"""
+    try:
+        x, y, w, h = (int(g.get(k)) for k in ('x', 'y', 'width', 'height'))
+    except (TypeError, ValueError):
+        return False
+    for s in screens or []:
+        ix = min(x + w, s.x + s.width) - max(x, s.x)
+        iy = min(y + 40, s.y + s.height) - max(y, s.y)
+        if ix >= 120 and iy >= 30:
+            return True
+    return False
+
+
+def _wingeom_moved(x, y):
+    with _WINGEOM_LOCK:
+        if not (_WINGEOM['max'] or _WINGEOM['min']):
+            _WINGEOM['x'], _WINGEOM['y'] = int(x), int(y)
+
+
+def _wingeom_resized(w, h):
+    with _WINGEOM_LOCK:
+        if not (_WINGEOM['max'] or _WINGEOM['min']):
+            _WINGEOM['width'], _WINGEOM['height'] = int(w), int(h)
+
+
+def _wingeom_maximized():
+    with _WINGEOM_LOCK:
+        _WINGEOM['max'] = True
+        _WINGEOM['min'] = False
+
+
+def _wingeom_minimized():
+    with _WINGEOM_LOCK:
+        _WINGEOM['min'] = True
+
+
+def _wingeom_restored():
+    with _WINGEOM_LOCK:
+        _WINGEOM['max'] = False
+        _WINGEOM['min'] = False
+
+
+def _wingeom_save():
+    """把主窗口几何写回 settings.json（窗口关闭/进程退出时调用，幂等）"""
+    with _WINGEOM_LOCK:
+        g = {k: _WINGEOM[k] for k in ('x', 'y', 'width', 'height')
+             if _WINGEOM.get(k) is not None}
+        g['max'] = bool(_WINGEOM.get('max'))
+        frozen = bool(_WINGEOM.get('max') or _WINGEOM.get('min'))
+    win = _WIN[0]
+    if win is not None and _WIN_SHOWN[0] and not frozen:
+        # 最大化/最小化时读出来的是屏幕尺寸或 -32000，用事件里攒的正常值
+        try:
+            g.update(x=int(win.x), y=int(win.y),
+                     width=int(win.width), height=int(win.height))
+        except Exception:
+            pass
+    try:
+        if g.get('width') and g.get('height'):
+            settings.save({'windowGeom': g})
+    except Exception:
+        log(traceback.format_exc())
+    return True          # closing 事件：不返回 False 就不会拦关闭
 
 
 def main():
@@ -536,16 +618,36 @@ def main():
 
     unblock_bundle()  # 必须先于 webview：MOTW 会让 pythonnet 的程序集加载失败
     import webview
-    webview.create_window(
-        'MAA-PRTS · 作业控制台',
-        url,
-        width=1520,
-        height=960,
-        min_size=(1120, 720),
-        background_color='#0b0e14',
-        easy_drag=False,
-        js_api=Bridge(),
-    )
+    geom = st.get('windowGeom') or {}
+    win_w = max(1120, min(10000, int(geom.get('width') or 1520)))
+    win_h = max(720, min(10000, int(geom.get('height') or 960)))
+    try:
+        screens = list(webview.screens)   # 逻辑像素，和 create_window 同口径
+    except Exception:
+        screens = []
+    win_x, win_y = geom.get('x'), geom.get('y')
+    if win_x is None or win_y is None or not _geom_visible(geom, screens):
+        win_x = win_y = None              # 位置不在了（换屏/拔显示器）→ 居中
+    win_kw = dict(width=win_w, height=win_h, min_size=(1120, 720),
+                  background_color='#0b0e14', easy_drag=False, js_api=Bridge())
+    if win_x is not None:
+        win_kw.update(x=int(win_x), y=int(win_y))
+    if geom.get('max'):
+        win_kw['maximized'] = True
+    window = webview.create_window('MAA-PRTS · 作业控制台', url, **win_kw)
+    _WIN[0] = window
+    with _WINGEOM_LOCK:
+        _WINGEOM.update(x=int(win_x) if win_x is not None else None,
+                        y=int(win_y) if win_y is not None else None,
+                        width=win_w, height=win_h,
+                        max=bool(geom.get('max')), min=False)
+    window.events.shown += lambda: _WIN_SHOWN.__setitem__(0, True)
+    window.events.moved += _wingeom_moved
+    window.events.resized += _wingeom_resized
+    window.events.maximized += _wingeom_maximized
+    window.events.minimized += _wingeom_minimized
+    window.events.restored += _wingeom_restored
+    window.events.closing += _wingeom_save
     webview.start(debug=debug, private_mode=False)
     _quit(0, '窗口已关闭')
 
