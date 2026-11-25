@@ -154,13 +154,18 @@ const GOALS = ['medal', 'task-1', 'task-2', 'task-3', 'task-4', 'task-5', 'task-
 
 function buildOptions(body = {}) {
   const device = body.device ?? 'mumu';
+  // 模拟模式（v1.1.10 起上游拆成两套口径）：策略徽章读 medalMode，叠层任务
+  // 读 mode+level（1/5/12）；旧核心（≤1.1.7）只认 mode。两套一起发。
+  const mode = body.mode === 'standard' ? 'standard' : 'quick';
+  const level = [1, 5, 12].includes(Number(body.level)) ? Number(body.level) : 1;
   const options = {
     goal: GOALS.includes(body.goal) ? body.goal : 'medal',
     medalWins: Number(body.medalWins) === 6 ? 6 : 3,
-    mode: body.mode === 'standard' ? 'standard' : 'quick',
+    mode,
+    medalMode: mode,
+    level,
     debug: Boolean(body.debug),
     verifyUpgrade: true, identifyUnknown: true, fullBoard: true, useEquipment: true,
-    speed: Math.min(5, Math.max(0.5, Number(body.speed) || 1.5)),
     device,
     adbAddress: String(body.adbAddress ?? '127.0.0.1:16384').trim(),
     adbPath: String(body.adbPath ?? '').trim(),

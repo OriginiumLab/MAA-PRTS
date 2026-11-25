@@ -5273,26 +5273,73 @@ function garCurrentOpts() {
   return S.garOpts[S.current] || (d ? { ...d } : null);
 }
 
+/* 模拟模式下拉：选项随速刷目标变。上游 v1.1.10 起策略徽章 = 极速 / 标准·规程
+   等级 1（只刷极速未开放的策略）；叠层任务 = 极速 / 标准·规程 1/5/12（杰西卡），
+   阿戈尔/卡西米尔/突袭（task-2）只有等级 5/12。值编码成 quick / standard-N，
+   提交时再拆成 mode + level。 */
+const GAR_LEVELS = [1, 5, 12];
+
+function garModeChoices(goal) {
+  const task = !!goal && goal !== 'medal';
+  const list = [
+    { value: 'quick', label: '极速模拟 · 9 回合' },
+    { value: 'standard-1', label: '标准模拟 · 规程等级 1' + (task ? ' · 杰西卡' : '') },
+  ];
+  if (task) {
+    for (const n of [5, 12]) {
+      list.push({ value: `standard-${n}`, label: `标准模拟 · 规程等级 ${n} · 杰西卡` });
+    }
+  }
+  if (goal === 'task-2') {   // 这组盟约没有极速 / 等级 1 入口（上游同款）
+    list[0].disabled = true;
+    list[1].disabled = true;
+  }
+  return list;
+}
+
+/* 目标切换后把当前选择落到新目标可用的值上（无效时回退，与核心归一化一致） */
+function garModeWant(goal, mode, level) {
+  const want = mode === 'standard'
+    ? `standard-${GAR_LEVELS.includes(Number(level)) ? Number(level) : 1}`
+    : 'quick';
+  const list = garModeChoices(goal);
+  if (list.some(c => c.value === want && !c.disabled)) return want;
+  if (goal === 'task-2') return 'standard-5';
+  return mode === 'standard' ? 'standard-1' : 'quick';
+}
+
+function paintGarMode(goal, mode, level) {
+  const sel = $('#gar-mode');
+  if (!sel) return;
+  sel.innerHTML = garModeChoices(goal).map(c =>
+    `<option value="${c.value}"${c.disabled ? ' disabled' : ''}>${esc(c.label)}</option>`).join('');
+  sel.value = garModeWant(goal, mode, level);
+  const wins = $('#gar-wins-row');   // 目标胜场只对策略徽章有意义
+  if (wins) wins.style.display = goal === 'medal' ? '' : 'none';
+}
+
 /* 把选项描进表单：用户改过用改过的，否则用后端从 MAA 抄的默认值 */
 function paintGarInputs() {
   const o = garCurrentOpts();
   if (!o) return;
   const set = (id, v) => { const el = $(id); if (el && v !== undefined && v !== null) el.value = String(v); };
   set('#gar-device', o.device);
-  set('#gar-mode', 'quick');   // 上游 v1.1.7 起仅支持极速
   set('#gar-goal', o.goal);
+  paintGarMode(o.goal, o.mode, o.level);
   set('#gar-adb', o.adbAddress);
   set('#gar-wins', o.medalWins);
-  set('#gar-speed', o.speed);
   set('#gar-scale', o.pcUiScale);
   set('#gar-shot', o.screenshotMethod);
 }
 
 function collectGarOpts() {
   const v = id => $(id) ? $(id).value : '';
+  const m = /^standard-(\d+)$/.exec(v('#gar-mode'));
   const o = {
-    device: v('#gar-device'), mode: v('#gar-mode'), goal: v('#gar-goal'), adbAddress: v('#gar-adb').trim(),
-    medalWins: Number(v('#gar-wins')) || 3, speed: Number(v('#gar-speed')) || 1.5,
+    device: v('#gar-device'), goal: v('#gar-goal'),
+    mode: m ? 'standard' : 'quick', level: m ? Number(m[1]) : 1,
+    adbAddress: v('#gar-adb').trim(),
+    medalWins: Number(v('#gar-wins')) || 3,
     pcUiScale: Number(v('#gar-scale')) || 90, screenshotMethod: v('#gar-shot'),
   };
   S.garOpts[S.current] = o;   // 会话内缓存：切号再回来还在
@@ -5362,7 +5409,7 @@ function paintGarState(d) {
   if (bs) bs.disabled = busy;
   if (br) br.disabled = busy || !d.hasCheckpoint;
   if (bp) bp.disabled = !busy;
-  ['#gar-device', '#gar-mode', '#gar-adb', '#gar-wins', '#gar-speed', '#gar-scale', '#gar-shot']
+  ['#gar-device', '#gar-mode', '#gar-goal', '#gar-adb', '#gar-wins', '#gar-scale', '#gar-shot']
     .forEach(id => { const el = $(id); if (el) el.disabled = busy; });
   // 来源标注：让用户知道这份默认值是从哪个 MAA 配置抄的
   const src = $('#gar-src');
@@ -5868,6 +5915,14 @@ function bindGlobal() {
   $('#gar-start').addEventListener('click', () => garAction('start'));
   $('#gar-resume').addEventListener('click', () => garAction('resume'));
   $('#gar-stop').addEventListener('click', () => garAction('stop'));
+  // 速刷目标变了先重铺模拟模式选项（旧选择在新目标下不可用时回退），
+  // 再由 .gar-form 的 change 冒泡统一收集保存
+  const garGoal = $('#gar-goal');
+  if (garGoal) garGoal.addEventListener('change', () => {
+    const cur = $('#gar-mode') ? $('#gar-mode').value : 'quick';
+    const m = /^standard-(\d+)$/.exec(cur);
+    paintGarMode(garGoal.value, m ? 'standard' : 'quick', m ? Number(m[1]) : 1);
+  });
   const garForm = $('.gar-form');
   if (garForm) garForm.addEventListener('change', collectGarOpts);
   $('#btn-add-account').addEventListener('click', openAddAccount);
