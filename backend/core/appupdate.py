@@ -49,7 +49,7 @@ import urllib.request
 import webbrowser
 import zipfile
 
-from . import atomicio, net, settings
+from . import atomicio, mirror, net, settings
 
 # 只认这一个仓库：写死，不读设置，防止被改配置指向别处
 APP_REPO = 'OriginiumLab/MAA-PRTS'
@@ -66,11 +66,16 @@ RELEASES_PAGE = 'https://github.com/%s/releases/tag/%%s' % APP_REPO
 # 下载地址依次回退：GitHub 直链 → 两个公共反代
 DOWNLOAD_TEMPLATES = ('%s', 'https://gh-proxy.com/%s', 'https://ghfast.top/%s')
 
+# 给界面看的源名字（设置页与更新弹窗共用一套说法）
+SOURCE_NAMES = {'mirror': 'Mirror 酱加速', 'github': 'GitHub'}
+
 CHECK_INTERVAL = 6 * 3600    # 成功检查后 6 小时内不再自动查
 RETRY_API_FAIL = 10 * 60     # API 拿不到 changelog 时，10 分钟后允许再试
 TIMEOUT_HEAD = 6
 TIMEOUT_API = 8
 TIMEOUT_DOWNLOAD = 180
+# 国内源查询给短一点：它不通时还要接着去 GitHub，别让用户干等两个超时
+TIMEOUT_MIRROR = 6
 
 UA = 'MAA-PRTS/%s (+https://github.com/%s)'
 
@@ -131,8 +136,30 @@ def _state() -> dict:
         return _cache[0]
 
 
+def _persistable(st: dict) -> dict:
+    """落盘前把**带时效**的东西剥掉
+
+    Mirror 酱返回的下载 url 有时效（docs: 取得后尽快下载，不持久缓存）。
+    整个 asset 原样写进 appupdate.json 的话，用户第二天点「下载并安装」
+    必然拿到一条过期链接，还会以为是加速服务坏了。所以国内源只存
+    「哪个版本、多大、sha256」，url 只在这一次查询的内存结果里活着；
+    download() 发现没有 url 会重新问一次（见 _fresh_mirror_url）。
+
+    GitHub 的 urls 是稳定直链，照旧落盘。
+    """
+    a = (st or {}).get('asset')
+    if not isinstance(a, dict) or a.get('origin') != 'mirror':
+        return st
+    a = dict(a)
+    a.pop('urls', None)
+    st = dict(st)
+    st['asset'] = a
+    return st
+
+
 def _save_state(st: dict):
     with _lock:
+        st = _persistable(st)
         _cache[0] = st
         try:
             _write_json(state_path(), st)
@@ -194,6 +221,78 @@ def _arch() -> str:
 
 def _is_prerelease_tag(tag) -> bool:
     return '-' in str(tag or '').lstrip('v')
+
+
+# ---------------------------------------------------------------- 更新源
+def _update_source() -> str:
+    """'auto'（默认）/ 'mirror'（国内）/ 'github'（海外）
+
+    手改配置写成别的值一律按 auto——更新检查不能因为一个拼错的字段就废掉。
+    """
+    v = str(settings.load().get('updateSource') or '').strip().lower()
+    return v if v in ('auto', 'mirror', 'github') else 'auto'
+
+
+def _mirror_channel() -> str:
+    """预发布开关映射成通道：开了能拿到 beta，关着只查 stable
+
+    发版 CI 的 uploading-action 按版本名自动分流（含 beta → beta 通道），
+    所以「接收预发布版」关掉的用户不会在 stable 通道里看到 beta 包。
+    """
+    return 'beta' if settings.load().get('acceptPrerelease') else 'stable'
+
+
+def _norm_tag(v) -> str:
+    """把源返回的版本名规整成我们内部的 tag 形状（vX.Y.Z）；解析不了返回 ''"""
+    s = str(v or '').strip()
+    if not parse_version(s):
+        return ''
+    return s if s.startswith('v') else 'v' + s
+
+
+def _cdk_state_of(err) -> str:
+    """MirrorError → 前端用的状态词（非 CDK 错误统一 error）"""
+    return mirror.cdk_state(getattr(err, 'code', 0))
+
+
+def _mirror_status(tag: str, m: dict, now: float, out: dict, **kw) -> dict:
+    """国内源查到新版本：拼状态、落盘（url 会被剥掉）、返回给前端"""
+    url = str(m.get('url') or '').strip()
+    cdk_state = kw.get('cdkState') or ('ok' if m.get('withCdk') else 'none')
+    asset = {
+        # 资产名只用于本地文件命名；真下载地址在 urls / github 里
+        'name': ASSET_NAME % (tag, _arch()),
+        'size': int(m.get('size') or 0),
+        'sha256': str(m.get('sha256') or '').lower(),
+        'origin': 'mirror',
+        'urls': [url] if url else [],
+        # 没填 CDK（没有 url）或加速链接失效时的备用直链。
+        # **校验值必须分开**：GitHub 那份包不是同一批字节，
+        # 拿 mirror 的 sha256 去校验它等于随机拒装（_download_plan 里分开走）
+        'github': {'urls': _fallback_asset(tag)['urls'], 'size': 0, 'sha256': ''},
+        'updateType': str(m.get('updateType') or 'full'),
+    }
+    fresh = {
+        'checkedTs': now,
+        'checkedAt': _iso(now),
+        'tag': tag,
+        'latest': tag.lstrip('v'),
+        'prerelease': _is_prerelease_tag(tag),
+        'notes': str(m.get('notes') or '')[:20000],
+        'publishedAt': '',
+        'pageUrl': RELEASES_PAGE % tag,
+        'source': 'mirror',
+        'updateType': asset['updateType'],
+        'cdkState': cdk_state,
+        'cdkExpiredAt': str(m.get('expiredAt') or ''),
+        'cdkMasked': mirror.mask(),
+        'mirrorError': str(kw.get('mirrorError') or ''),
+        'asset': asset,
+        'lastInstall': (_state().get('lastInstall') or None),
+    }
+    _save_state(fresh)
+    out.update(fresh, hasUpdate=True, cached=False, throttled=False, error='')
+    return out
 
 
 # ---------------------------------------------------------------- HTTP
@@ -345,6 +444,16 @@ def _status_from_state(st: dict, **extra) -> dict:
         'publishedAt': st.get('publishedAt') or '',
         'pageUrl': st.get('pageUrl') or '',
         'asset': st.get('asset') or {},
+        # 这个版本是从哪个源查到的、下的是哪种包（排查时一眼看出走没走加速）
+        'source': st.get('source') or 'github',
+        'sourceName': SOURCE_NAMES.get(st.get('source') or 'github', 'GitHub'),
+        'updateType': st.get('updateType') or 'full',
+        # CDK 状态：none（没填）/ ok / invalid / expired / quota / mismatch /
+        # blocked / error（网络或参数问题）。前端只按它决定提示语。
+        'cdkState': st.get('cdkState') or '',
+        'cdkExpiredAt': st.get('cdkExpiredAt') or '',
+        'cdkMasked': st.get('cdkMasked') or '',
+        'mirrorError': st.get('mirrorError') or '',
         'degraded': bool(st.get('degraded')),   # 没有官方 sha256，只按结构校验
         'checkedAt': st.get('checkedAt') or '',
         'cached': True,
@@ -372,7 +481,19 @@ def _stage_exe() -> str:
 
 
 def status(force=False) -> dict:
-    """检查有没有新版本（只读，不下载）；force=True 跳过 6 小时节流"""
+    """检查有没有新版本（只读，不下载）；force=True 跳过 6 小时节流
+
+    按 settings.updateSource 决定查谁：
+
+        auto    （默认）先问国内源 Mirror 酱——不用 CDK 也能拿到版本号，
+                国内比 github.com 快得多；没有更新或连不上再走 GitHub
+        mirror  同上，但国内源失败也照样去 GitHub 兜一次。用户选了国内源
+                却因为 CDK 过期就完全不能更新，是最差的结果
+        github  老链路，一次都不问 Mirror（网络好的用户可选，行为不变）
+
+    两个源都查完之后**按版本号取更新的那个**：Mirror 的上传是发版后异步
+    触发的，某一次 CI 挂了那边就会停在旧版本，只信它会静默漏更新。
+    """
     st = _state()
     now = time.time()
     try:
@@ -383,25 +504,36 @@ def status(force=False) -> dict:
         return _status_from_state(st)
 
     out = _status_from_state(st, cached=False, throttled=False)
-
     accept_pre = bool(settings.load().get('acceptPrerelease'))
+    src = _update_source()
+
+    # ---- 国内源（Mirror 酱）：不传 current_version = 请求完整包（一期不做增量）
+    mirror_err, cdk_state = '', ''
+    if src in ('auto', 'mirror'):
+        try:
+            m = mirror.check(channel=_mirror_channel(), timeout=TIMEOUT_MIRROR)
+            cdk_state = 'ok' if m.get('withCdk') else 'none'
+            mtag = _norm_tag(m.get('version'))
+            if mtag and is_newer(mtag, _current()):
+                if not (_is_prerelease_tag(mtag) and not accept_pre):
+                    return _mirror_status(mtag, m, now, out, cdkState=cdk_state)
+        except Exception as e:  # noqa: BLE001 - 转去 GitHub，别在这里就失败
+            mirror_err = str(e)
+            cdk_state = _cdk_state_of(e)
+
     try:
         # 开了「接收预发布版」只能走列表端点：releases/latest 按定义
         # 永远返回最近的非预发布 Release，开关原本是死功能（#48）
         tag = _list_latest_tag() if accept_pre else _head_tag()
     except Exception as e:  # noqa: BLE001 - 没网就静默，别打扰用户
         out['ok'] = False
-        out['error'] = '连不上 GitHub：%s' % e
+        out['error'] = ('连不上更新服务（国内源：%s；GitHub：%s）' % (mirror_err, e)
+                        if mirror_err else '连不上 GitHub：%s' % e)
         return out
 
     latest = tag.lstrip('v')
     has = is_newer(tag, _current())
     pre = _is_prerelease_tag(tag)
-
-    latest = tag.lstrip('v')
-    has = is_newer(tag, _current())
-    pre = _is_prerelease_tag(tag)
-    accept_pre = bool(settings.load().get('acceptPrerelease'))
 
     fresh = {
         'checkedTs': now,
@@ -413,6 +545,14 @@ def status(force=False) -> dict:
         'publishedAt': '',
         'pageUrl': RELEASES_PAGE % tag,
         'asset': {},
+        # 走到这里说明这次用的是海外源（国内源没更新或连不上）：
+        # mirrorError / cdkState 带出去，设置页才能说清「为什么没走加速」
+        'source': 'github',
+        'updateType': 'full',
+        'cdkState': cdk_state,
+        'cdkExpiredAt': '',
+        'cdkMasked': mirror.mask(),
+        'mirrorError': mirror_err,
         'lastInstall': st.get('lastInstall') or None,
     }
 
@@ -467,6 +607,31 @@ def status(force=False) -> dict:
 
 
 # ---------------------------------------------------------------- 下载
+def _download_plan(meta: dict):
+    """这次按什么顺序试哪些地址，**以及每个地址该用哪套校验值**
+
+    返回 ``[(url, verify_meta), ...]``。校验值必须跟着源走：Mirror 上的包
+    和 GitHub 上的包不是同一份字节（对面会重新打容器），拿 Mirror 的
+    sha256 去校验 GitHub 下载的包会稳定报「sha256 不匹配」，用户看到的
+    就是「下载失败」——查半天才发现是校验值串了源。
+    """
+    plan = []
+    urls = [u for u in (meta.get('urls') or []) if u]
+    if meta.get('origin') == 'mirror':
+        v = {'size': meta.get('size') or 0,
+             'sha256': str(meta.get('sha256') or '').lower()}
+        plan += [(u, v) for u in urls]
+        g = meta.get('github') or {}
+        gv = {'size': g.get('size') or 0,
+              'sha256': str(g.get('sha256') or '').lower()}
+        # GitHub 兜底那份没有官方 sha256（没查 API），_verify_zip 会降级成
+        # 只校验 zip 结构——所以返回里的 degraded 也跟着这个走
+        plan += [(u, gv) for u in (g.get('urls') or []) if u]
+    else:
+        plan += [(u, meta) for u in urls]
+    return plan
+
+
 def download(force=False) -> dict:
     """把安装包下到 update/ 并校验；不安装"""
     st = status(force=force)
@@ -476,16 +641,22 @@ def download(force=False) -> dict:
         return {'ok': False, 'error': '已经是最新版本'}
 
     meta = st.get('asset') or {}
-    urls = meta.get('urls') or []
-    if not urls:
-        # 旧状态里可能只记了版本号（上次检查时 API 不通），用户既然点了
-        # 下载就强制重查一次，别直接把人推到「前往下载页」
+    plan = _download_plan(meta)
+    # 需要重查的两种情况：
+    #   - 旧状态只记了版本号，压根没有地址；
+    #   - 国内源的加速链接被剥掉了（带时效，不落盘——见 _persistable）。
+    #     这时 plan 里还有 GitHub 兜底地址，能下但等于放弃加速，
+    #     所以先重查一次拿新鲜的加速链接。
+    stale_mirror = (meta.get('origin') == 'mirror' and not meta.get('urls'))
+    if not plan or stale_mirror:
         st = status(force=True)
+        if not st.get('ok'):
+            return {'ok': False, 'error': st.get('error') or '检查更新失败'}
         if not st.get('hasUpdate'):
-            return {'ok': False, 'error': st.get('error') or '已经是最新版本'}
+            return {'ok': False, 'error': '已经是最新版本'}
         meta = st.get('asset') or {}
-        urls = meta.get('urls') or []
-    if not urls:
+        plan = _download_plan(meta)
+    if not plan:
         return {'ok': False, 'error': '拿不到下载地址，请用「前往下载页」'}
 
     name = meta.get('name') or ('MAA-PRTS-%s.zip' % st.get('tag'))
@@ -495,16 +666,18 @@ def download(force=False) -> dict:
 
     if os.path.isfile(dest) and _match(dest, meta):
         return {'ok': True, 'path': dest, 'cached': True, 'version': st.get('latest'),
+                'source': meta.get('origin') or 'github',
                 'degraded': bool(meta.get('degraded'))}
 
     errors = []
-    # 13MB 的包每个源只有一次机会太脆：三源全试完再整体重试一轮（#61）
+    # 13MB 的包每个源只有一次机会太脆：全部试完再整体重试一轮（#61）
     for attempt in (1, 2):
-        for url in urls:
+        for url, vmeta in plan:
             try:
                 raw = _get(url, TIMEOUT_DOWNLOAD)
-                _verify_zip(raw, meta)
+                _verify_zip(raw, vmeta)
             except Exception as e:  # noqa: BLE001
+                # 只留域名：完整链接里可能带 cdk（Mirror 酱的下载地址）
                 errors.append('#%d %s -> %s' % (attempt, url.split('/')[2], e))
                 continue
             tmp = dest + '.tmp'
@@ -515,7 +688,8 @@ def download(force=False) -> dict:
             os.replace(tmp, dest)
             return {'ok': True, 'path': dest, 'cached': False,
                     'size': len(raw), 'version': st.get('latest'),
-                    'degraded': bool(meta.get('degraded'))}
+                    'source': meta.get('origin') or 'github',
+                    'degraded': not vmeta.get('sha256')}
         if attempt == 1:
             time.sleep(2)
 
