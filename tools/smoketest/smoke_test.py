@@ -7864,6 +7864,16 @@ def check_parallel_guard(tmp):
     log = logs.append
     old = tasks.create('唤醒（假）', None, owners=[f])
     other = tasks.create('别的号（假）', None, owners=['测试号#2222 官服.json'])
+
+    def _wait_log(needle, sec=8.0):
+        """等某行日志出现（CI 的 Windows runner 比本机慢得多，别写死 0.3 秒）"""
+        t0 = time.time()
+        while time.time() - t0 < sec:
+            if any(needle in s for s in logs):
+                return True
+            time.sleep(0.05)
+        return False
+
     try:
         # 1.1 同账号更早的任务还在跑：等它跑完才往下走
         got = {}
@@ -7874,13 +7884,14 @@ def check_parallel_guard(tmp):
 
         th = threading.Thread(target=_wait)
         th.start()
-        time.sleep(0.3)
-        assert any('等它跑完' in s for s in logs), logs
+        # 2026-11-25 CI 上这里是固定 sleep(0.3) 后断言日志 —— runner 慢的时候
+        # 线程还没跑到第一次检查，日志是空的 → B69 假失败（AssertionError: []）
+        assert _wait_log('等它跑完'), logs
         tasks.finish(old, result={})
-        th.join(6)
+        th.join(20)
         tasks.finish(tid_wait, result={})
         assert got.get('r') is True, got
-        assert any('前面的任务跑完了' in s for s in logs), logs
+        assert _wait_log('前面的任务跑完了'), logs
 
         # 1.2 只有别的账号在跑：不等（多开就该并行）
         me = tasks.create('导航（假）', None, owners=[f])
