@@ -126,6 +126,12 @@
       "why": "操作间隔选项已从界面移除。之前一版把非调试分支的 speed:1 改成跟随用户设置，这条把已经打过的核心恢复成 speed:1（未打过的核心 find 不中，自动跳过），避免账号里残留的旧 speed 值在无界面可调的情况下继续生效。",
       "find": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:Math.min(5,Math.max(.5,Math.round((Number(n.speed)||1.5)*2)/2)),forceStrategy:void 0}",
       "replace": "verifyPurchase:!1,verifyFreeReward:!1,identifyUnknown:!1,fullBoard:!1,speed:1,forceStrategy:void 0}"
+    },
+    {
+      "id": "free-cards-unreadable-v1111",
+      "why": "三合一后的免费三选一在标准模拟里不一定显示「请选择奖励」横幅，三个 0 价格气泡比正常价格位左移 62px（rewardShift）；核心只在读到「请选择奖励」时才用偏中气泡重读，于是 reward=false，卡在「尚未回到普通购买界面，等待免费候选卡识别」无限重试，免费干员一直领不到（游戏又必须领）。改为：正常价格位一个数字都没读到时也做一次偏中气泡重读（正常能读到价格的页面不多做 OCR）。",
+      "find": "async function la(u,n,t,e={}){const i=await Ii(u,n,t,!1);if(!e.rewardHint||i.reward)return i;const f=await Ii(u,n,t,!0);return f.reward?(console.error(`[free] \\u53F3\\u4E0A\\u6C14\\u6CE1\\u672A\\u8BFB\\u51FA\\u5956\\u52B1\\uFF0C\\u6309\\u504F\\u4E2D\\u6C14\\u6CE1\\u8BFB\\u5230 ${f.prices.filter(o=>o.value===0).length} \\u5F20\\u514D\\u8D39\\u5361`),f):i}",
+      "replace": "async function la(u,n,t,e={}){const i=await Ii(u,n,t,!1);if(i.reward)return i;if(!e.rewardHint&&i.readable)return i;const f=await Ii(u,n,t,!0);return f.reward?(console.error(`[free] ${e.rewardHint?\"右上气泡未读出奖励\":\"商店价格未读出\"}，按偏中气泡读到 ${f.prices.filter(o=>o.value===0).length} 张免费卡`),f):i}"
     }
   ]
 }
