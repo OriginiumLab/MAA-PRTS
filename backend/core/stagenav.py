@@ -370,28 +370,33 @@ class Touch:
         # 表现是「另一台模拟器一动不动」（2026-11-22 用户实测）
         self.strict = bool(strict)
 
-    def game_alive(self):
+    def game_alive(self, quiet=False):
         """游戏进程在不在运行
 
         2026-11-17 中午实测的坑：StartUp 假成功 + 导航并发，导航对着**安卓
         桌面**按了半天返回键/ESC，nav-fail 现场图就是一张桌面截图。进程不在
         就别再瞎点了，先拉起来。
+
+        ``quiet=True``：轮询用。没起来时 ``pidof`` 本来就返回码 1，每三秒往
+        日志里刷一行「adb 返回 1：」很吵（用户 2026-11-25 的截图就是一排）。
         """
-        out = self._run(['shell', 'pidof', self.package])
+        out = self._run(['shell', 'pidof', self.package], quiet=quiet)
         return bool((out or b'').strip())
 
-    def _run(self, args, timeout=20):
+    def _run(self, args, timeout=20, quiet=False):
         cmd = [self.adb, '-s', self.address] + list(args)
         try:
             r = subprocess.run(cmd, capture_output=True, timeout=timeout,
                                stdin=subprocess.DEVNULL,
                                creationflags=_NO_WINDOW)
         except Exception as e:
-            self.log('adb 调用失败（%s）：%s' % (' '.join(args[:2]), e))
+            if not quiet:
+                self.log('adb 调用失败（%s）：%s' % (' '.join(args[:2]), e))
             return None
         if r.returncode != 0:
-            self.log('adb 返回 %d：%s' % (r.returncode,
-                                        (r.stderr or b'')[:160].decode('utf-8', 'ignore')))
+            if not quiet:
+                self.log('adb 返回 %d：%s' % (r.returncode,
+                                            (r.stderr or b'')[:160].decode('utf-8', 'ignore')))
             return None
         return r.stdout
 

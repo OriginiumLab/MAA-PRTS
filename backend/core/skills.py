@@ -560,22 +560,37 @@ def skill_wakeup(params, log, tid=None):
 
 # ---------------------------------------------------------------- navigate
 
-def _wait_game(t, log, timeout=90.0, step=3.0):
-    """等游戏客户端起来（最多 ``timeout`` 秒）
+def _ensure_game(t, log, tid=None, file='', timeout=90.0, step=3.0):
+    """游戏没在跑就**自己开始唤醒**，不是干等
 
-    为什么不能一查不到进程就报错（用户 2026-11-25 实测）：说「导航到 13 章 +
-    切磨难」，助手把唤醒和切难度拆成两个调用同时发出去，切难度那一路在 MAA
-    还在登录（游戏进程刚起来、还在 START 页）的时候去查 ``pidof``，查到空就
-    抛「游戏没在跑」，导航一次都没做。唤醒 / 客户端启动本身就要几十秒，查
-    一次不算数，给一段宽限再判死刑。
+    用户 2026-11-25 的现场：adb 已经就绪（`adb: adb 正常（emulator-5554）`），
+    后面只剩一排「adb 返回 1：」和「游戏还没起来，等一会儿（最多 90 秒）…」，
+    MAA 的自动唤醒一直没动 —— 那九十秒纯粹是白等，用户直接问「adb 正常后
+    就应该启动 maa 的自动唤醒了，而不是干等」。
+
+    现在的顺序：查一次进程（安静模式，别每三秒刷一行 adb 报错）→ 不在就调
+    :func:`skill_wakeup`（有切号名走 MAA 开始唤醒，没有就重启客户端）→ 唤醒
+    回来还没起，再给 ``timeout`` 秒宽限 → 真不行才报错。
     """
-    if t.game_alive():
+    if t.game_alive(quiet=True):
         return True
-    log('游戏还没起来，等一会儿（最多 %d 秒）…' % int(timeout))
+    log('游戏没在跑，开始唤醒（MAA 自动唤醒，不干等）…')
+    try:
+        r = skill_wakeup({'account': file}, log, tid)
+        how = r.get('how') if isinstance(r, dict) else ''
+        log('唤醒这一步回来了（%s）' % (how or 'ok'))
+    except Exception as e:
+        # 唤醒失败不等于没救：有时候 MAA 报错但客户端其实已经被拉起来了，
+        # 下面照样看进程。真起不来才由调用方报错。
+        log('自动唤醒没成功：%s（继续看客户端起没起）' % e)
+    if t.game_alive(quiet=True):
+        log('游戏已经起来了')
+        return True
+    log('客户端还没起来，再等一会儿（最多 %d 秒）…' % int(timeout))
     t0 = time.time()
     while time.time() - t0 < timeout:
         time.sleep(step)
-        if t.game_alive():
+        if t.game_alive(quiet=True):
             log('游戏起来了（等了 %d 秒）' % int(time.time() - t0))
             return True
     return False
@@ -613,11 +628,11 @@ def skill_navigate(params, log, tid=None):
     if not alive:
         raise RuntimeError(detail)
     # 游戏没开的时候别硬导航：getop 判据全 False，恢复循环会白转一分钟再报
-    # 「回不到主界面」，看着像导航坏了。先给唤醒/启动留点时间，真没起来再
+    # 「回不到主界面」，看着像导航坏了。**先自己唤醒**（不干等），真起不来再
     # 说清楚下一步该做什么。
-    if not _wait_game(t, log):
-        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——先调 skill_wakeup '
-                           '唤醒，再导航')
+    if not _ensure_game(t, log, tid, file):
+        raise RuntimeError('游戏没在跑，自动唤醒也没起来（看上面的唤醒日志）——'
+                           '手动开一下客户端或检查模拟器，再让我导航')
     ok, why = stagenav.goto_stage_list(t, stage, log)
     if not ok:
         raise RuntimeError('导航失败：%s' % why)
@@ -677,8 +692,8 @@ def skill_difficulty(params, log, tid=None):
     alive, detail = t.ready()
     if not alive:
         raise RuntimeError(detail)
-    if not _wait_game(t, log):
-        raise RuntimeError('游戏没在跑——先调 skill_wakeup 唤醒再切难度')
+    if not _ensure_game(t, log, tid, file):
+        raise RuntimeError('游戏没在跑，自动唤醒也没起来——先手动开一下客户端再切难度')
     stage = ''
     raw_stage = (params.get('stage') or '').strip()
     if raw_stage:

@@ -7820,12 +7820,14 @@ class _NavTouch(object):
         self._alive = alive
         self._up_after = up_after        # None = 永远不起来
         self.checks = 0
+        self.quiet = []
 
     def ready(self):
         return True, '假 adb 正常'
 
-    def game_alive(self):
+    def game_alive(self, quiet=False):
         self.checks += 1
+        self.quiet.append(quiet)
         if self._alive:
             return True
         if self._up_after is None:
@@ -7844,13 +7846,15 @@ def check_parallel_guard(tmp):
     现场二：用户再喊一次，助手只调了 skill_navigate（那时它没有 difficulty
     参数）→ 导航到位了，档没切，用户看到「导航了但没切磨难」。
 
-    钉住四件事：
+    钉住五件事：
       1. ``_wait_idle``：同账号有更早的任务在跑就等；别的账号不等；比自己晚
          开工的不等（互相等会死锁）；等到了会接着跑；
-      2. ``_wait_game``：游戏进程晚几秒起来要等，不是一查不到就报错；
+      2. ``_ensure_game``：游戏没在跑要**自己叫唤醒**（不干等），轮询走安静
+         模式别每三秒刷一行「adb 返回 1：」；唤醒报错但进程起来了照样放行；
       3. ``skill_navigate`` 带 difficulty：导航完顺带切档，一路到位；
          0~8 章没有这条栏时忽略而不是报错；写法认不出要报错；
       4. ``set_mode`` 两次都切不过去时返回说明，不是 NameError。
+      5. 导航入口真的接了自动唤醒（游戏没起时唤醒被调到）。
     """
     from core import agent, maacore, mainnav, skills, stagenav, tasks
 
@@ -7895,7 +7899,7 @@ def check_parallel_guard(tmp):
         tasks.finish(old, result={})
         tasks.finish(other, result={})
 
-    # ② _wait_game：进程晚 3 次查询才起来 → 要等，不能直接判死
+    # ② _ensure_game：游戏没在跑要**自己唤醒**，不是干等（用户 2026-11-25）
     class _NoSleep(object):
         @staticmethod
         def sleep(_s):
@@ -7906,15 +7910,63 @@ def check_parallel_guard(tmp):
             return time.time()
 
     old_t = skills.time
+    old_wake = skills.skill_wakeup
     skills.time = _NoSleep
+    woke = []
     try:
-        assert skills._wait_game(_NavTouch(alive=True), log) is True
-        t = _NavTouch(alive=False, up_after=3)
-        assert skills._wait_game(t, log, timeout=30, step=1) is True, t.checks
-        assert skills._wait_game(_NavTouch(alive=False), log,
-                                 timeout=0.001) is False
+        # 2.1 游戏已经在跑：直接放行，不叫唤醒
+        skills.skill_wakeup = lambda p, l, tid=None: woke.append('不该叫') or {}
+        assert skills._ensure_game(_NavTouch(alive=True), log) is True
+        assert woke == [], woke
+
+        # 2.2 没在跑：先叫唤醒；唤醒后进程起来了就放行（不干等 90 秒）
+        state = {'up': False}
+
+        class _Late(object):
+            def game_alive(self, quiet=False):
+                assert quiet, '轮询没走安静模式，会一直刷「adb 返回 1：」'
+                return state['up']
+
+        def _wake_then_up(params, log_, tid=None):
+            woke.append(params.get('account'))
+            log_('唤醒（假）：走到 MAA 开始唤醒')
+            state['up'] = True
+            return {'ok': True, 'how': 'maa-startup'}
+
+        skills.skill_wakeup = _wake_then_up
+        del logs[:]
+        assert skills._ensure_game(_Late(), log, None, f) is True
+        assert woke == [f], woke
+        assert any('开始唤醒' in s for s in logs), logs
+
+        # 2.3 唤醒报错但客户端其实起来了：照样放行，别把导航一起拖死
+        state['up'] = False
+
+        def _wake_boom(params, log_, tid=None):
+            state['up'] = True
+            raise RuntimeError('MAA 关不掉')
+
+        skills.skill_wakeup = _wake_boom
+        del logs[:]
+        assert skills._ensure_game(_Late(), log, None, f) is True
+        assert any('自动唤醒没成功' in s for s in logs), logs
+
+        # 2.4 唤醒报错且一直没起来：等满宽限才 False，日志留下原因
+        flags = []
+
+        class _Dead(object):
+            def game_alive(self, quiet=False):
+                flags.append(quiet)
+                return False
+
+        skills.skill_wakeup = _wake_boom
+        del logs[:]
+        assert skills._ensure_game(_Dead(), log, None, f, timeout=0.001) is False
+        assert flags and all(flags), flags
+        assert any('自动唤醒没成功' in s for s in logs), logs
     finally:
         skills.time = old_t
+        skills.skill_wakeup = old_wake
 
     # ③ skill_navigate 带 difficulty：导航完直接切档，不用第二次调用
     calls = {'nav': [], 'mode': []}
@@ -7979,6 +8031,33 @@ def check_parallel_guard(tmp):
             raise AssertionError('切档失败还返回成功')
         except RuntimeError as e:
             assert '作战环境没切成' in str(e), e
+
+        # 3.7 游戏没起：导航入口自己叫唤醒（用户 2026-11-25「adb 正常后就应该
+        #     启动 maa 的自动唤醒了，而不是干等」），不是干等也不是直接报错
+        woke2 = []
+        st = {'up': False}
+
+        class _Dead2(object):
+            def ready(self):
+                return True, '假 adb 正常'
+
+            def game_alive(self, quiet=False):
+                return st['up']
+
+        def _wake2(params, log_, tid=None):
+            woke2.append(params.get('account'))
+            st['up'] = True
+            return {'ok': True, 'how': 'maa-startup'}
+
+        stagenav.Touch = lambda *a, **k: _Dead2()
+        skills.skill_wakeup = _wake2
+        try:
+            calls['nav'][:] = []
+            r = skills.skill_navigate({'stage': '7-1'}, log)
+            assert r['ok'] and calls['nav'] == ['7-1'], (r, calls)
+            assert woke2 == [f], woke2
+        finally:
+            skills.skill_wakeup = old_wake
     finally:
         (skills.norm_stage, skills._account_file, skills._maa_dir_of,
          skills._conn_of, skills._client_of, skills._strict_addr,
@@ -8012,6 +8091,32 @@ def check_parallel_guard(tmp):
     assert props['difficulty']['enum'] == ['story', 'normal', 'hard']
     assert 'skill_navigate(stage="13-1", difficulty="hard")' in agent.SYSTEM
     assert '同一个账号的 skill 是**串行**' in agent.SYSTEM
+
+
+def check_game_wake(tmp):
+    """B70 查进程别刷屏 + 导航/切档入口接的是「自动唤醒」不是「干等」
+
+    用户 2026-11-25 截图：adb 已就绪后日志只剩一排「adb 返回 1：」和
+    「游戏还没起来，等一会儿（最多 90 秒）…」，MAA 的自动唤醒压根没动。
+    """
+    import inspect
+    from core import skills, stagenav
+
+    logs = []
+    t = stagenav.Touch('definitely-no-such-adb.exe', 'emulator-5554',
+                       logs.append, package='com.hypergryph.arknights')
+    # 1) 轮询用安静模式：进程不在（pidof 返回码 1）属正常情况，不写日志
+    assert t.game_alive(quiet=True) is False
+    assert not logs, logs
+    # 2) 正常模式：真出错要留证据（adb 找不到 / 返回非 0）
+    assert t.game_alive() is False
+    assert any('adb' in s for s in logs), logs
+
+    # 3) 两个入口都走 _ensure_game（自查唤醒），不再各自「等」或直接报错
+    for fn in (skills.skill_navigate, skills.skill_difficulty):
+        src = inspect.getsource(fn)
+        assert '_ensure_game' in src, fn.__name__
+        assert '_wait_game' not in src, fn.__name__
 
 
 def main():
@@ -8117,6 +8222,8 @@ def main():
                 lambda: check_story_difficulty(tmp))
         r.check('B69 同账号串行 + 导航带难度（不抢界面、不切错档、不只导航不切）',
                 lambda: check_parallel_guard(tmp))
+        r.check('B70 游戏没跑就自己唤醒（不干等、轮询不刷屏）',
+                lambda: check_game_wake(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
