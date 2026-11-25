@@ -405,8 +405,16 @@ def api_pack_update(_q, _body):
 
 
 def api_themes(q, _body):
-    """主题清单：内置黑/白 + 本机已装 + 远端可下载（远端读不到只给一句提示）"""
-    timeout = 12 if str((q or {}).get('force') or '').lower() in ('1', 'true') else 6
+    """主题清单：内置黑/白 + 本机已装 + 远端可下载（远端读不到只给一句提示）
+
+    ``?local=1`` 不联网，只回本机的内置 + 已装。设置页先用它渲染一遍卡片，
+    再拉全量补「可下载」——远端慢的时候不至于连已装的主题都看不见。
+    """
+    qs = q or {}
+    local_only = str(qs.get('local') or '').lower() in ('1', 'true')
+    if local_only:
+        return themes.catalog(local_only=True)
+    timeout = 12 if str(qs.get('force') or '').lower() in ('1', 'true') else 6
     return themes.catalog(timeout=timeout)
 
 

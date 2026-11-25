@@ -702,3 +702,31 @@ Python 跑即可；C 组会真实调用 Windows DPAPI，换电脑/换用户跑 B
 （0.8 MB 包 + 四个 webm 共 10.5 MB），`extraFailed: []`；`/themes/closure/`
 下 `theme.css`（12 KB）、`preview.jpg`（23 KB）、`pet/idle.webm`（1.39 MB）都是 200；
 `/themes/closure/../../etc/passwd` 是 404。
+
+### B74 主题切换不报错（2026-11-25 用户反馈「点白色主题报错」）
+
+现场是两条独立故障叠在一起，看着像「白色和卫戍协议混了」：
+
+1. **`saveSettings()` 不返回响应**。调用方写的是
+   `const d = await saveSettings(...); S.settings = d.settings`，d 是
+   `undefined` → 每次抛 `Cannot read properties of undefined (reading
+   'settings')`。主题其实已经切换成功并写进 settings.json，但 catch 里
+   `applyTheme(prev)` 又回滚，用户看到的是「点了白色，闪一下还是原色，弹一句报错」。
+2. **卡片依赖全量清单**（要联网拉远端 manifest，超时 6~8 秒）。远端慢的时候
+   设置页只有深色/白色两张卡，已装的「卫戍协议」不出现，状态看着就错乱。
+
+用例钉住：
+
+- `saveSettings` 的函数体里必须有 `return d;`（否则 `d.settings` 必炸）；
+  两个调用点必须是 `(d && d.settings) || S.settings`。
+- `themes.catalog(local_only=True)` **不联网**：把 `fetch_manifest` 换成抛错，
+  仍然返回内置两套 + 已装主题，且 `partial == True`、`remote == []`、
+  `remoteError == ''`。
+- 全量 `catalog()` 断网时 `remoteError` 带原因，但本地主题一个都不能少。
+- `api_themes({'local': '1'})` 走本地快照；不带参数才联网。
+- 前端有 `paintThemeGrid()`、先请求 `/api/themes?local=1`、卡片在
+  「设置里的主题不可用」时高亮深色（`if (S.themes && !themeInfoOf(cur)) cur`），
+  切到未下载主题时明确提示「先点卡片上的『下载』」。
+
+真机复验：深色 → 白色 → 卫戍协议 → 白色 连续切换，无报错；刷新后仍是最后一次
+选的主题；切回白色时 `<link id="theme-pack">` 和桌宠 `<video>` 都正确移除。

@@ -2405,6 +2405,7 @@ NOTICE 明确写了「不在 MIT 授权范围、仅限个人本机娱乐」。�
 | 接口 | 作用 |
 |---|---|
 | `GET /api/themes` | `{themes(内置+已装), remote(可下载), installed, remoteError}` |
+| `GET /api/themes?local=1` | 只读本机、不联网：`remote` 恒空、`partial: true`。设置页先用它把卡片画出来，再拉全量补「可下载」（2026-11-25：远端慢时第三方主题会像丢了） |
 | `POST /api/theme/install` `{id}` | 装 / 重装，返回 `extra` 与 `extraFailed` |
 | `POST /api/theme/remove` `{id}` | 删掉目录（内置主题拒绝） |
 | `GET /themes/<id>/<rel>` | 主题包里的文件（`file_of()` 防目录穿越） |

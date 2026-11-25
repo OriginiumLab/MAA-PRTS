@@ -396,6 +396,19 @@ MAA 自己重开是个 bug。
   「内置主题不能安装」）。未下载的第三方主题显示「下载（大小）」。
   缩略图**永远先垫一层色块**（`.theme-swatch.<id>`），`<img>` 盖在上面——
   远端预览图拉不到时只是露出主题渐变，不会白框/裂图。
+- **先本地、再远端**：`loadThemes()` 第一次先打 `/api/themes?local=1`（只读盘，
+  毫秒级）把卡片画出来，再拉全量补「可下载」。远端清单要联网、超时 6~8 秒，
+  等它回来的话已装的第三方主题会短暂「消失」，用户以为主题丢了。
+  任何一次清单落地都走 `markThemes()` + `paintThemeGrid()`，面板没开时
+  `#theme-grid` 不存在，重绘自动跳过。
+- **切换前先看可用性**：`switchTheme(id)` 里 `themeInfoOf(id)` 为空说明包没下
+  或已被删，直接提示「先点卡片上的『下载』」，不要 `applyTheme` 悄悄退回深色
+  （否则观感是「点了白色没反应」）。`themeCards()` 在「设置里的主题不可用」时
+  把「使用中」标到深色上，避免一张卡都不亮。
+- **`saveSettings()` 必须 `return d`**：调用方写的是
+  `const d = await saveSettings(...)` 再读 `d.settings`，漏掉 return 就是
+  `Cannot read properties of undefined`（2026-11-25 的「点白色报错」就是这个）。
+  调用点还要用 `(d && d.settings) || S.settings` 兜一层。
 - **显示主题桌宠**：`#theme-pet` + `#set-theme-pet`，只在主题声明了 `pet` 时出现，
   偏好存 `localStorage['maaprts.pet']`；关掉就整块不渲染（不是 `display:none`）。
 - **开机时自动启动**：调 `POST /api/autostart`，默认关；失败要把勾选回滚。

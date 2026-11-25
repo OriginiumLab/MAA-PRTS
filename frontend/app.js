@@ -91,6 +91,11 @@ function saveSettings(patch) {
     try {
       const d = await api('/api/settings', patch);
       S.settings = d.settings;
+      // 必须把响应交回去：有调用方写的是 `const d = await saveSettings(...)`
+      // 再读 d.settings（主题切换、MAA 目录）。这里原来不 return，d 是
+      // undefined，那两处每次都炸「Cannot read properties of undefined」，
+      // 表现成「点白色主题报错、界面又弹回原主题」（2026-11-25 用户反馈）。
+      return d;
     } catch (e) {
       try { S.settings = (await api('/api/settings', {})).settings; } catch (_) { }
       throw e;
@@ -2739,21 +2744,25 @@ function applyTheme(id) {
 }
 
 async function switchTheme(id) {
+  id = String(id || '').toLowerCase();
   const prev = (S.settings && S.settings.theme) || 'dark';
   if (id === prev) return;
+  // 没下过 / 包被删了：明确说一句，别 applyTheme 悄悄退回深色
+  // （那样用户看到的是「点了白色，界面没变」）
+  if (!themeInfoOf(id)) { toast('这个主题还没下载，先点卡片上的「下载」', 'warn'); return; }
   applyTheme(id);                          // 先切，界面立刻有反馈
   try {
     const d = await saveSettings({ theme: id });
-    S.settings = d.settings || S.settings;
+    S.settings = (d && d.settings) || S.settings;
   } catch (e) {
     applyTheme(prev);
     toast('主题没存上：' + e.message, 'err');
   }
 }
 
-async function loadThemes(force) {
-  if (S.themes && !force) return S.themes;
-  const d = await api('/api/themes' + (force ? '?force=1' : ''));
+/* 主题清单落地：S.themes 是全量视图，themeInstalled 只记第三方（内置走
+   THEME_FIXED，永远算「已安装」）。 */
+function markThemes(d) {
   S.themes = d;
   (d.themes || []).forEach(t => {
     if (!t.builtin) themeInstalled[t.id] = { css: t.css, pet: t.pet || {} };
@@ -2761,9 +2770,41 @@ async function loadThemes(force) {
   return d;
 }
 
+/* 卡片重绘：设置面板开着才有 #theme-grid，没开就跳过（下次生成 HTML 会带上） */
+function paintThemeGrid() {
+  const box = document.getElementById('theme-grid');
+  if (box) box.innerHTML = themeCards();
+}
+
+let _themesLoading = null;
+async function loadThemes(force) {
+  if (S.themes && !force) return S.themes;
+  if (_themesLoading) return _themesLoading;
+  _themesLoading = (async () => {
+    try {
+      // 先只读本机（不联网，毫秒级）：已装的主题立刻出现在卡片里。
+      // 远端清单慢的时候（超时 6~8 秒）不能连「卫戍协议」都画不出来——
+      // 那样用户会以为主题丢了，两张卡片的状态看着就像「混在一起」。
+      if (!S.themes) {
+        try { markThemes(await api('/api/themes?local=1')); paintThemeGrid(); }
+        catch (e) { /* 本地读不到不影响后面拉全量 */ }
+      }
+      markThemes(await api('/api/themes' + (force ? '?force=1' : '')));
+      paintThemeGrid();
+      return S.themes;
+    } finally { _themesLoading = null; }
+  })();
+  return _themesLoading;
+}
+
 /* 设置 → 常规里的主题卡片（内置两张 + 已装 + 远端可下载） */
 function themeCards() {
-  const cur = String((S.settings && S.settings.theme) || 'dark').toLowerCase();
+  let cur = String((S.settings && S.settings.theme) || 'dark').toLowerCase();
+  // 设置里存的主题指向一个被删掉的包：界面已经退回深色，卡片也得跟着标
+  // 「使用中」在深色上，否则一张卡都不亮，看着像主题状态丢了。
+  // 只在清单已经拉过时判断——没拉之前 themeInstalled 是空的，会把正常的
+  // 第三方主题误判成「没有」。
+  if (S.themes && !themeInfoOf(cur)) cur = 'dark';
   const d = S.themes || {};
   const rows = [THEME_FIXED.dark, THEME_FIXED.light];
   const seen = new Set(['dark', 'light']);
@@ -3551,7 +3592,7 @@ function openSettings() {
           saver.disabled = true;
           try {
             const d = await saveSettings({ [key]: dir });
-            S.settings = d.settings || S.settings;
+            S.settings = (d && d.settings) || S.settings;
             if (key === 'maaDir') { renderMaaState(); fillBasketProfiles(); }
             if (dir) {
               box.className = 'onb-hint ok';

@@ -8490,6 +8490,101 @@ def check_theme_autostart(tmp):
         st.CONFIG_DIR, st.SETTINGS_PATH, st._cache, themes.THEMES_DIR = keep
 
 
+def check_theme_switch(tmp):
+    """B74 主题切换不报错 + 已装主题不会「消失」（2026-11-25 用户反馈）
+
+    用户原话：「设置里面白色主题和卫戍协议主题混淆（按使用白色也报错）」。
+    当时现场有两条独立故障，看起来却像一件事：
+
+      1. ``saveSettings()`` 没把服务端响应 return，调用方写的是
+         ``const d = await saveSettings(...); S.settings = d.settings`` →
+         d 是 undefined，每次都抛 ``Cannot read properties of undefined
+         (reading 'settings')``。主题已经乐观切过去了，catch 里又回滚，
+         表现成「点了白色，界面闪一下还是原来的，还弹一句报错」。
+      2. 设置页的卡片依赖 ``/api/themes`` 全量（要联网拉远端清单，超时 6~8 秒）。
+         远端慢的时候第三张卡（卫戍协议）压根画不出来，只剩黑/白两张，
+         状态看着就错乱——所以顺手加了 ``?local=1``：只读本机，毫秒级。
+
+    钉住四件事：
+      - ``saveSettings`` 必须 return 响应，调用方必须有 ``d && d.settings`` 防御；
+      - ``catalog(local_only=True)`` 不联网就算成功，已装主题必须在列表里；
+      - ``/api/themes?local=1`` 走本地快照（``partial == True``、``remote`` 为空），
+        全量接口断网时仍给 ``remoteError`` 但不影响本地主题；
+      - 卡片渲染有「当前主题不可用 → 高亮深色」的兜底，切主题前有可用性检查。
+    """
+    from core import api, settings as st, themes
+
+    cfg = os.path.join(tmp, 'cfg2')
+    os.makedirs(cfg, exist_ok=True)
+    keep = (st.CONFIG_DIR, st.SETTINGS_PATH, st._cache, themes.THEMES_DIR)
+    st.CONFIG_DIR = cfg
+    st.SETTINGS_PATH = os.path.join(cfg, 'settings.json')
+    st._cache = None
+    themes.THEMES_DIR = os.path.join(cfg, 'themes')
+    try:
+        # 空目录：只有内置两套
+        d0 = themes.catalog(local_only=True)
+        assert d0['partial'] is True, d0
+        assert [t['id'] for t in d0['themes']] == ['dark', 'light'], d0['themes']
+        assert d0['remote'] == [] and d0['remoteError'] == '', d0
+
+        # 造一个「已装」主题（只写盘，不联网）
+        tid_dir = os.path.join(themes.THEMES_DIR, 'demo')
+        os.makedirs(tid_dir, exist_ok=True)
+        with io.open(os.path.join(tid_dir, 'theme.json'), 'w',
+                     encoding='utf-8') as f:
+            json.dump({'id': 'demo', 'name': '演示主题', 'css': 'theme.css',
+                       'pet': {'video': 'pet/idle.webm', 'every': 9}},
+                      f, ensure_ascii=False)
+        with io.open(os.path.join(tid_dir, 'theme.css'), 'w',
+                     encoding='utf-8') as f:
+            f.write('html[data-theme="demo"]{--bg:#000}\n')
+
+        def boom(timeout=8):
+            raise RuntimeError('本地快照不该联网')
+
+        old = themes.fetch_manifest
+        themes.fetch_manifest = boom
+        try:
+            d1 = themes.catalog(local_only=True)     # 断网也必须有已装主题
+            assert [t['id'] for t in d1['themes']] == ['dark', 'light', 'demo'], \
+                d1['themes']
+            assert d1['installed'] == ['demo'], d1
+            assert d1['partial'] is True and d1['remote'] == [], d1
+            assert d1['remoteError'] == '', d1
+
+            d2 = themes.catalog(timeout=1)           # 全量：联网失败只记一句
+            assert '不该联网' in (d2.get('remoteError') or ''), d2
+            assert [t['id'] for t in d2['themes']] == ['dark', 'light', 'demo']
+            assert d2['partial'] is False
+
+            a1 = api.api_themes({'local': '1'}, None)
+            assert a1['partial'] is True and a1['remote'] == [], a1
+            assert 'demo' in [t['id'] for t in a1['themes']]
+            a2 = api.api_themes({}, None)
+            assert a2['partial'] is False
+            assert '不该联网' in (a2.get('remoteError') or ''), a2
+        finally:
+            themes.fetch_manifest = old
+
+        # ---------- 前端接线 ----------
+        js = open(os.path.join(REPO, 'frontend', 'app.js'),
+                  encoding='utf-8').read()
+        # saveSettings 必须把响应交回去（否则 d.settings 必炸）
+        assert 'function saveSettings(patch) {' in js
+        body = js.split('function saveSettings(patch) {', 1)[1].split('\n  };', 1)[0]
+        assert 'return d;' in body, 'saveSettings 不返回响应，d.settings 会抛 TypeError'
+        assert js.count('(d && d.settings) || S.settings') == 2, \
+            'theme / maaDir 两处调用没有空值防御'
+        assert '/api/themes?local=1' in js, '没先拉本地主题清单（远端慢时第三方主题会消失）'
+        assert 'function paintThemeGrid' in js
+        assert 'if (S.themes && !themeInfoOf(cur)) cur' in js, \
+            '主题包被删后卡片没有「高亮深色」的兜底'
+        assert "先点卡片上的「下载」" in js, '切到未下载的主题时没有明确提示'
+    finally:
+        st.CONFIG_DIR, st.SETTINGS_PATH, st._cache, themes.THEMES_DIR = keep
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -8601,6 +8696,8 @@ def main():
                 lambda: check_multi_account_wake(tmp))
         r.check('B73 主题包与开机自启（按需下载/降级/sha/防穿越/默认不勾自启）',
                 lambda: check_theme_autostart(tmp))
+        r.check('B74 主题切换不报错（保存回值/本地快照/已装不消失）',
+                lambda: check_theme_switch(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

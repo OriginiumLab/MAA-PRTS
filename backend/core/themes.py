@@ -132,10 +132,15 @@ def fetch_manifest(timeout=TIMEOUT_MANIFEST):
     raise RuntimeError('读不到主题目录：' + '；'.join(errs))
 
 
-def catalog(timeout=TIMEOUT_MANIFEST):
+def catalog(timeout=TIMEOUT_MANIFEST, local_only=False):
     """设置页要的完整清单：内置 + 已装 + 远端可下载
 
     远端读不到**不算错误**——离线也得能切黑/白，只在 ``remoteError`` 里说一句。
+
+    ``local_only=True`` 只读本机（不联网，毫秒级）：设置页先用它把已装主题
+    画出来，再拉全量补「可下载」那几张。否则远端慢的时候（8 秒超时）页面
+    上只剩深色/白色两张，「卫戍协议」像丢了——2026-11-25 用户反馈的
+    「白色和卫戍协议混淆」就是这么来的。
     """
     have = set(installed())
     items = [dict(x, installed=True) for x in BUILTIN]
@@ -157,7 +162,9 @@ def catalog(timeout=TIMEOUT_MANIFEST):
             'builtin': False,
         })
     out = {'themes': items, 'installed': sorted(have), 'remote': [],
-           'remoteError': '', 'checkedAt': _iso()}
+           'remoteError': '', 'checkedAt': _iso(), 'partial': bool(local_only)}
+    if local_only:
+        return out
     try:
         man = fetch_manifest(timeout)
     except Exception as e:                  # noqa: BLE001
