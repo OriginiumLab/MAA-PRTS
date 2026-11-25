@@ -545,5 +545,5 @@ def set_mode(touch, mode, log=None):
             continue
     data = touch.shot()
     cur, sc = current_mode(data)
-    return False, ('切到「%s」没成功（现在认出来是「%s」，%.0f 分）。%s'
-                   % (label, MODES.get(cur, '认不出'), sc, last))
+    return False, ('切到「%s」没成功（两次都没切成，现在认出来是「%s」，%.0f 分）'
+                   % (label, MODES.get(cur, '认不出'), sc))

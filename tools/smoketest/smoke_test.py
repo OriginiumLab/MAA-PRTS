@@ -7813,6 +7813,207 @@ def check_story_difficulty(tmp):
     assert '9~14' in agent.SYSTEM and '作战环境' in agent.SYSTEM
 
 
+class _NavTouch(object):
+    """导航用的假 Touch：adb 通、游戏在跑、什么都能点"""
+
+    def __init__(self, alive=True, up_after=None):
+        self._alive = alive
+        self._up_after = up_after        # None = 永远不起来
+        self.checks = 0
+
+    def ready(self):
+        return True, '假 adb 正常'
+
+    def game_alive(self):
+        self.checks += 1
+        if self._alive:
+            return True
+        if self._up_after is None:
+            return False
+        return self.checks > self._up_after
+
+
+def check_parallel_guard(tmp):
+    """B69 同一账号串行 + 导航带难度（用户 2026-11-25 报的两个现场）
+
+    现场一：说「导航到 13 章 + 切磨难」，助手把唤醒和切难度拆成两个调用同时
+    发出去。切难度那一路抢不到跑机名额 → 换独立进程 → 一进场查游戏进程，
+    那时 MAA 刚开始登录，``pidof`` 空 → 抛「游戏没在跑」退出，导航一次都没做。
+    同一时段 MAA 的 StartUp 三次「回到主界面」全认错（两路一起点，界面被点乱）。
+
+    现场二：用户再喊一次，助手只调了 skill_navigate（那时它没有 difficulty
+    参数）→ 导航到位了，档没切，用户看到「导航了但没切磨难」。
+
+    钉住四件事：
+      1. ``_wait_idle``：同账号有更早的任务在跑就等；别的账号不等；比自己晚
+         开工的不等（互相等会死锁）；等到了会接着跑；
+      2. ``_wait_game``：游戏进程晚几秒起来要等，不是一查不到就报错；
+      3. ``skill_navigate`` 带 difficulty：导航完顺带切档，一路到位；
+         0~8 章没有这条栏时忽略而不是报错；写法认不出要报错；
+      4. ``set_mode`` 两次都切不过去时返回说明，不是 NameError。
+    """
+    from core import agent, maacore, mainnav, skills, stagenav, tasks
+
+    # ① _wait_idle：只等「同账号 + 比自己早开工」的那一路
+    f = '测试号#1111 官服.json'
+    logs = []
+    log = logs.append
+    old = tasks.create('唤醒（假）', None, owners=[f])
+    other = tasks.create('别的号（假）', None, owners=['测试号#2222 官服.json'])
+    try:
+        # 1.1 同账号更早的任务还在跑：等它跑完才往下走
+        got = {}
+        tid_wait = tasks.create('看戏（假）', None, owners=[f])
+
+        def _wait():
+            got['r'] = skills._wait_idle(tid_wait, [f], log, cap=20, step=0.05)
+
+        th = threading.Thread(target=_wait)
+        th.start()
+        time.sleep(0.3)
+        assert any('等它跑完' in s for s in logs), logs
+        tasks.finish(old, result={})
+        th.join(6)
+        tasks.finish(tid_wait, result={})
+        assert got.get('r') is True, got
+        assert any('前面的任务跑完了' in s for s in logs), logs
+
+        # 1.2 只有别的账号在跑：不等（多开就该并行）
+        me = tasks.create('导航（假）', None, owners=[f])
+        try:
+            t0 = time.time()
+            assert skills._wait_idle(me, [f], log, cap=20, step=0.05) is True
+            assert time.time() - t0 < 2, '别的账号在跑也等了'
+            # 1.3 只有比自己晚开工的：不等（互相等会死锁）
+            assert skills._wait_idle(
+                tasks.get(me)['id'], [f], log, cap=20, step=0.05) is True
+        finally:
+            tasks.finish(me, result={})
+        # 1.4 没有 owner（全局任务）：直接放行
+        assert skills._wait_idle('nope', [''], log) is True
+    finally:
+        tasks.finish(old, result={})
+        tasks.finish(other, result={})
+
+    # ② _wait_game：进程晚 3 次查询才起来 → 要等，不能直接判死
+    class _NoSleep(object):
+        @staticmethod
+        def sleep(_s):
+            return None
+
+        @staticmethod
+        def time():
+            return time.time()
+
+    old_t = skills.time
+    skills.time = _NoSleep
+    try:
+        assert skills._wait_game(_NavTouch(alive=True), log) is True
+        t = _NavTouch(alive=False, up_after=3)
+        assert skills._wait_game(t, log, timeout=30, step=1) is True, t.checks
+        assert skills._wait_game(_NavTouch(alive=False), log,
+                                 timeout=0.001) is False
+    finally:
+        skills.time = old_t
+
+    # ③ skill_navigate 带 difficulty：导航完直接切档，不用第二次调用
+    calls = {'nav': [], 'mode': []}
+    keep = (skills.norm_stage, skills._account_file, skills._maa_dir_of,
+            skills._conn_of, skills._client_of, skills._strict_addr,
+            stagenav.Touch, stagenav.goto_stage_list, mainnav.set_mode)
+    skills.norm_stage = lambda raw, log=None: (str(raw), '')
+    skills._account_file = lambda a='': f
+    skills._maa_dir_of = lambda x: 'D:/MAA'
+    skills._conn_of = lambda x, d=None: {'adb_path': 'adb',
+                                         'address': 'emulator-5554'}
+    skills._client_of = lambda x: 'Official'
+    skills._strict_addr = lambda x: False
+    stagenav.Touch = lambda *a, **k: _NavTouch()
+    stagenav.goto_stage_list = lambda t, s, log=None: (calls['nav'].append(s)
+                                                      or (True, '到了'))
+
+    def _fake_set_mode(t, key, log=None):
+        calls['mode'].append(key)
+        return True, '当前作战环境：%s' % mainnav.MODES[key]
+
+    mainnav.set_mode = _fake_set_mode
+    try:
+        # 3.1 第 13 章 + 磨难：一次调用，导航完就切
+        r = skills.skill_navigate({'stage': '13-1', 'difficulty': '磨难'}, log)
+        assert r['ok'] and r['difficulty'] == 'hard', r
+        assert r['mode'] == '磨难险地环境', r
+        assert calls['nav'] == ['13-1'] and calls['mode'] == ['hard'], calls
+
+        # 3.2 只导航不切档：别多此一举
+        calls['nav'][:], calls['mode'][:] = [], []
+        r = skills.skill_navigate({'stage': '13-1'}, log)
+        assert r['ok'] and 'difficulty' not in r, r
+        assert calls['mode'] == [], calls
+
+        # 3.3 第 5 章没有作战环境：忽略 difficulty，别报错也别点
+        calls['nav'][:], calls['mode'][:] = [], []
+        r = skills.skill_navigate({'stage': '5-1', 'difficulty': 'hard'}, log)
+        assert r['ok'] and r.get('modeNote') and 'difficulty' not in r, r
+        assert calls['mode'] == [], calls
+
+        # 3.4 写法认不出：报错，不动界面
+        calls['nav'][:], calls['mode'][:] = [], []
+        try:
+            skills.skill_navigate({'stage': '13-1', 'difficulty': '噩梦'}, log)
+            raise AssertionError('「噩梦」不该被接受')
+        except ValueError as e:
+            assert '剧情 / 标准 / 磨难' in str(e), e
+        assert calls['mode'] == [], calls
+
+        # 3.5 非主线关传 difficulty：报错（活动关没有作战环境）
+        try:
+            skills.skill_navigate({'stage': 'MN-1', 'difficulty': 'hard'}, log)
+            raise AssertionError('活动关不该接受 difficulty')
+        except ValueError as e:
+            assert '不是主线关卡' in str(e), e
+
+        # 3.6 导航到位但切档失败：明确报错，别默默继续
+        mainnav.set_mode = lambda t, k, log=None: (False, '认不出这一章的作战环境')
+        try:
+            skills.skill_navigate({'stage': '13-1', 'difficulty': 'hard'}, log)
+            raise AssertionError('切档失败还返回成功')
+        except RuntimeError as e:
+            assert '作战环境没切成' in str(e), e
+    finally:
+        (skills.norm_stage, skills._account_file, skills._maa_dir_of,
+         skills._conn_of, skills._client_of, skills._strict_addr,
+         stagenav.Touch, stagenav.goto_stage_list, mainnav.set_mode) = keep
+
+    # ④ set_mode 两轮都切不过去：返回说明（以前这里用了没定义的 last → NameError）
+    class _NoSleep2(object):
+        @staticmethod
+        def sleep(_s):
+            return None
+
+        @staticmethod
+        def time():
+            return time.time()
+
+    old_mn, old_sn = mainnav.time, stagenav.time
+    mainnav.time = _NoSleep2
+    stagenav.time = _NoSleep2
+    try:
+        t = _ModeTouch('normal', modes=('normal',))   # 只有一档，点「磨难」没反应
+        ok, why = mainnav.set_mode(t, 'hard')
+        assert not ok and '没成功' in why and '磨难' in why, (ok, why)
+    finally:
+        mainnav.time, stagenav.time = old_mn, old_sn
+
+    # ⑤ 提示词 / 工具接线：导航能带难度，提示词写明「一次调用做完、别拆」
+    nav = [x for x in agent.TOOLS
+           if x['function']['name'] == 'skill_navigate'][0]
+    props = nav['function']['parameters']['properties']
+    assert 'difficulty' in props, list(props)
+    assert props['difficulty']['enum'] == ['story', 'normal', 'hard']
+    assert 'skill_navigate(stage="13-1", difficulty="hard")' in agent.SYSTEM
+    assert '同一个账号的 skill 是**串行**' in agent.SYSTEM
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -7914,6 +8115,8 @@ def main():
                 lambda: check_mainstory_nav(tmp))
         r.check('B68 主线作战环境（剧情/标准/磨难：认得准、切得对、不误切）',
                 lambda: check_story_difficulty(tmp))
+        r.check('B69 同账号串行 + 导航带难度（不抢界面、不切错档、不只导航不切）',
+                lambda: check_parallel_guard(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

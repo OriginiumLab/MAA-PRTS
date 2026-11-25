@@ -560,6 +560,27 @@ def skill_wakeup(params, log, tid=None):
 
 # ---------------------------------------------------------------- navigate
 
+def _wait_game(t, log, timeout=90.0, step=3.0):
+    """等游戏客户端起来（最多 ``timeout`` 秒）
+
+    为什么不能一查不到进程就报错（用户 2026-11-25 实测）：说「导航到 13 章 +
+    切磨难」，助手把唤醒和切难度拆成两个调用同时发出去，切难度那一路在 MAA
+    还在登录（游戏进程刚起来、还在 START 页）的时候去查 ``pidof``，查到空就
+    抛「游戏没在跑」，导航一次都没做。唤醒 / 客户端启动本身就要几十秒，查
+    一次不算数，给一段宽限再判死刑。
+    """
+    if t.game_alive():
+        return True
+    log('游戏还没起来，等一会儿（最多 %d 秒）…' % int(timeout))
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(step)
+        if t.game_alive():
+            log('游戏起来了（等了 %d 秒）' % int(time.time() - t0))
+            return True
+    return False
+
+
 @skill("navigate", "从主界面导航到指定活动", needs_game=True,
        aliases=("导航",))
 def skill_navigate(params, log, tid=None):
@@ -568,6 +589,10 @@ def skill_navigate(params, log, tid=None):
     stage 支持任意写法：关卡号（MN-1 / MN-EX-1）、中文活动名（孤星 / 愚人号）、
     活动 id（act25side）、代号前缀（CW）。**一律先 norm_stage 换成真实关卡代号
     再导航**，否则活动 id 会被当成当期活动去点大图（用户 2026-11-17 实测）。
+
+    ``difficulty``（主线 9~14 章）：导航到位后顺手把作战环境切过去。以前只能
+    另调 skill_difficulty，助手十次有八次忘了切（用户 2026-11-25 报「再让他
+    导航，他没切磨难」），走这条路一次就能到「第 13 章磨难险地的关卡列表」。
     """
     raw = (params.get('stage') or params.get('activity')
            or params.get('keyword') or '').strip()
@@ -588,14 +613,38 @@ def skill_navigate(params, log, tid=None):
     if not alive:
         raise RuntimeError(detail)
     # 游戏没开的时候别硬导航：getop 判据全 False，恢复循环会白转一分钟再报
-    # 「回不到主界面」，看着像导航坏了。直接说清楚下一步该做什么。
-    if not t.game_alive():
+    # 「回不到主界面」，看着像导航坏了。先给唤醒/启动留点时间，真没起来再
+    # 说清楚下一步该做什么。
+    if not _wait_game(t, log):
         raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——先调 skill_wakeup '
                            '唤醒，再导航')
     ok, why = stagenav.goto_stage_list(t, stage, log)
     if not ok:
         raise RuntimeError('导航失败：%s' % why)
-    return {'ok': True, 'stage': stage, 'input': raw, 'why': why}
+    out = {'ok': True, 'stage': stage, 'input': raw, 'why': why}
+
+    # 主线 9~14 章：导航到位后顺手切档（一次调用搞定，省得助手忘了另调一个）
+    raw_mode = str(params.get('difficulty') or params.get('mode')
+                   or params.get('env') or '').strip()
+    if not raw_mode:
+        return out
+    from . import mainnav
+    key = mainnav.norm_mode(raw_mode)
+    if not key:
+        raise ValueError('难度只认 剧情 / 标准 / 磨难（收到「%s」）' % raw_mode)
+    ep = mainnav.episode_of(stage)
+    if ep is None:
+        raise ValueError('「%s」不是主线关卡，没有作战环境可切' % stage)
+    if not mainnav.modes_of(ep):
+        log('第 %02d 章只有普通 / 突袭，没有作战环境，difficulty 忽略' % ep)
+        out['modeNote'] = '第 %02d 章没有作战环境（只有 9~14 章有）' % ep
+        return out
+    ok, why = mainnav.set_mode(t, key, log)
+    if not ok:
+        raise RuntimeError('导航到位了，但作战环境没切成：%s' % why)
+    out['difficulty'] = key
+    out['mode'] = mainnav.MODES[key]
+    return out
 
 
 @skill("difficulty", "切换主线 9~14 章的作战环境（剧情 / 标准 / 磨难）",
@@ -628,7 +677,7 @@ def skill_difficulty(params, log, tid=None):
     alive, detail = t.ready()
     if not alive:
         raise RuntimeError(detail)
-    if not t.game_alive():
+    if not _wait_game(t, log):
         raise RuntimeError('游戏没在跑——先调 skill_wakeup 唤醒再切难度')
     stage = ''
     raw_stage = (params.get('stage') or '').strip()
@@ -2704,6 +2753,58 @@ def _skill_in_proc(name, params, log, tid):
     return one if isinstance(one, dict) else {'ok': True}
 
 
+def _wait_idle(tid, files, log, cap=1800.0, step=2.0):
+    """同一个账号还有一路任务在跑 → 先等它跑完再动界面 → ``True/False``
+
+    用户 2026-11-25 报：说「导航到 13 章 + 切磨难」，助手把唤醒和切难度拆成
+    两个调用同时发出去。切难度那一路在本进程抢不到跑机名额，于是换到独立
+    进程；它一进场就查游戏进程——那时 MAA 刚开始登录，``pidof`` 当然是空的，
+    于是抛「游戏没在跑」直接退出，导航一次都没做。同一时段 MAA 的 StartUp
+    连着三次「回到主界面」都没认出来，也是两路同时在点同一台模拟器点跑的。
+
+    所以：**一个号同时只让一路动界面**。后来的等前面的（前面的可能是几小时
+    的挂机，等够 ``cap`` 就不等了，日志说清楚）。
+
+    只等**比自己早开工**的任务：互相等会死锁（A 等 B、B 等 A，两边都不动）。
+    """
+    want = set(f for f in (files or []) if f)
+    if not want:
+        return True
+    mine = (tasks.get(tid) or {}).get('startedAt') or time.time()
+    t0 = time.time()
+    told = False
+    while True:
+        busy = []
+        for t in tasks.running():
+            if t.get('id') == tid:
+                continue
+            if not (set(t.get('owners') or []) & want):
+                continue
+            if (t.get('startedAt') or 0) >= mine:    # 比自己晚的不等（防死锁）
+                continue
+            busy.append(t)
+        if not busy:
+            if told:
+                log('前面的任务跑完了，开始这一路')
+            return True
+        # 「按账号停止」的标记（pause 分支加的接口，没合过来时就是 None）：
+        # 用户在等的时候按了停止，别接着往下跑
+        _stopped = getattr(maacore, 'stop_requested', None)
+        if _stopped and _stopped(list(want)):
+            log('你按了停止，这一路不跑了')
+            return False
+        if not told:
+            log('这个账号还有一路在跑（%s），等它跑完再动界面'
+                '——两路同时点同一台模拟器会把界面点乱'
+                % '、'.join(str(b.get('title')) for b in busy[:2]))
+            told = True
+        if time.time() - t0 >= cap:
+            log('等了 %d 分钟还没轮到，接着跑（前面那路可能卡住了）'
+                % int(cap // 60))
+            return True
+        time.sleep(step)
+
+
 def run_skill(name, params=None):
     """把一个 skill 跑成后台任务，返回 taskId（前端 / 助手轮询 /api/task）
 
@@ -2720,6 +2821,7 @@ def run_skill(name, params=None):
         raise ValueError('没有这个 skill：%s（可选：%s）'
                          % (name, ' '.join(sorted(SKILLS))))
     desc = entry[0]
+    owner = ''
 
     def job():
         # tasks.create 把线程命名成 task-<tid>，从线程名取回自己的 tid，
@@ -2733,6 +2835,10 @@ def run_skill(name, params=None):
         log('[%s] %s' % (name, desc))
         if name not in _NEEDS_GAME:
             return _skill_body(name, params, log, tid)
+        # 同一个号已经有任务在跑：排队等它。两路一起点同一台模拟器只会把
+        # 界面点乱（唤醒还在登录时另一路就去点关卡列表），见 _wait_idle。
+        if not _wait_idle(tid, [owner], log):
+            return {'ok': False, 'stopped': True, 'why': '你手动停止了这一路'}
         # 要开游戏就得占「本进程跑机名额」。抢不到说明**另一路已经在跑
         # MaaCore**：再在这个进程里开一个实例，会把正在跑的那一路无声打断
         # （MaaCore 的 LoadResource 是进程级全局资源），2026-11-23 用户报的
