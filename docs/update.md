@@ -233,6 +233,11 @@ CDK 全部错误（7001~7005）都**不回滚下载**：只是这一次走 GitHu
 `GET/POST /api/mirror/cdk` 只回掩码（`········1234`），日志和报错里也
 不拼带 `cdk=` 的完整 URL。
 
+设置页显示「✓ 已配置 ········1234（2027-02-01 到期）」，到期时间取
+`cdk_expired_time`。**没有新版本的那次检查也要带回来**（`status()` 的
+GitHub 兜底分支里写进 `cdkExpiredAt`），否则有效期只在碰巧有新版本时
+才看得到，用户没法判断该不该续费（B75 第 10 段钉住这条）。
+
 ### 发版上传（CI 侧）
 
 `.github/workflows/mirrorchyan_release.yml` 由对方 PR（#137）提供，挂在

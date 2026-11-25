@@ -508,11 +508,15 @@ def status(force=False) -> dict:
     src = _update_source()
 
     # ---- 国内源（Mirror 酱）：不传 current_version = 请求完整包（一期不做增量）
-    mirror_err, cdk_state = '', ''
+    mirror_err, cdk_state, cdk_exp = '', '', ''
     if src in ('auto', 'mirror'):
         try:
             m = mirror.check(channel=_mirror_channel(), timeout=TIMEOUT_MIRROR)
             cdk_state = 'ok' if m.get('withCdk') else 'none'
+            # 国内源没更新时也要把到期时间带出去：设置页靠它显示
+            # 「已配置 ········f421（2027-02-01 到期）」，不然只有恰好
+            # 有新版本那次才看得到有效期，用户没法判断该不该续费
+            cdk_exp = str(m.get('expiredAt') or '')
             mtag = _norm_tag(m.get('version'))
             if mtag and is_newer(mtag, _current()):
                 if not (_is_prerelease_tag(mtag) and not accept_pre):
@@ -550,7 +554,7 @@ def status(force=False) -> dict:
         'source': 'github',
         'updateType': 'full',
         'cdkState': cdk_state,
-        'cdkExpiredAt': '',
+        'cdkExpiredAt': cdk_exp,
         'cdkMasked': mirror.mask(),
         'mirrorError': mirror_err,
         'lastInstall': st.get('lastInstall') or None,

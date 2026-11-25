@@ -8746,7 +8746,29 @@ def check_mirror_source(tmp):
         assert 'cdn.example.com' not in on_disk, '加速链接落盘了'
         assert 'efgh' not in on_disk
 
-        # ---------- 10. 接线：路由 / 平台参数 / 前端 ----------
+        # ---------- 10. 国内源「没有更新」时也要带回到期时间 ----------
+        # 用户配了 CDK 但当时恰好没有新版本，设置页也要能显示「（2027-02-01 到期）」，
+        # 否则有效期只在有更新那一刻看得到，判断不了该不该续费。
+        keep_chk, keep_head, keep_cur, keep_state5 = (
+            appupdate.mirror.check, appupdate._head_tag, appupdate._current,
+            appupdate._cache[0])
+        try:
+            appupdate._cache[0] = None
+            appupdate._current = lambda: 'v2.9.0'
+            appupdate.mirror.check = lambda **kw: {
+                'version': 'v2.9.0', 'url': '', 'sha256': '', 'size': 0,
+                'updateType': 'full', 'notes': '', 'expiredAt': want,
+                'channel': 'stable', 'queryVersion': '', 'withCdk': True,
+            }
+            appupdate._head_tag = lambda: 'v2.9.0'
+            same = appupdate.status(force=True)
+            assert same['hasUpdate'] is False, same
+            assert same['cdkState'] == 'ok' and same['cdkExpiredAt'] == want, same
+        finally:
+            (appupdate.mirror.check, appupdate._head_tag, appupdate._current,
+             appupdate._cache[0]) = (keep_chk, keep_head, keep_cur, keep_state5)
+
+        # ---------- 11. 接线：路由 / 平台参数 / 前端 ----------
         for r in ('/api/mirror/cdk', '/api/mirror/probe', '/api/mirror/status'):
             assert r in api.ROUTES, r
 
