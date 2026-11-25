@@ -248,6 +248,14 @@ GitHub 兜底分支里写进 `cdkExpiredAt`），否则有效期只在碰巧有�
 - 仓库 `Settings → Secrets and variables → Actions` 必须有
   **`MirrorChyanUploadToken`**，否则上传 job 会失败并**自动在仓库开一个
   issue**（action 自带的行为，不是我们写的）。
+- **合并这类 PR 需要 `workflow` scope**：`gh` 的 token 只有 `repo` 时会报
+  `refusing to allow an OAuth App to create or update workflow ...`，补权限只能
+  在真终端跑 `gh auth refresh -s workflow`（设备码授权，非 TTY 下会静默退出、
+  scope 不变）。同名限制也适用于之后任何一次把 `.github/workflows/` 改动带进
+  `release` 的合并。
+- 实测（v2.8.0）：Mirror 酱上的 `size` / `sha256` 与 GitHub 资产**同值**，
+  说明是原样搬运；但客户端 `_download_plan()` 仍按源分开校验，别因为一次
+  同值就合并两边的校验值——哪天对方改成重打容器就会全线拒装。
 - `auto_channel` 默认 true：版本名含 `beta` → `beta` 通道，否则 `stable`。
   所以预发布包会进 beta 通道，`stable` 用户查不到，符合预期。
 - 上传失败不影响 GitHub Release，用户只是这条版本暂时不走加速。
