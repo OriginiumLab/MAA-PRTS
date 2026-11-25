@@ -439,6 +439,11 @@ webm、fixed 右下、`pointer-events: none`、`object-position: bottom right`�
 `pet.every` 秒换一个动作播一遍，`onended` 回到待机。窄屏和
 `prefers-reduced-motion` 下直接不显示。
 
+**点一下也播（2026-11-26）**：点击和定时共用 `playPetAction()`，连点就重播
+（每次重新随机）；`play()` 起不来（素材坏 / 编码不支持）也回待机，不会停在
+动作最后一帧。容器 `#theme-pet` 仍然 `pointer-events: none`，只给
+`#theme-pet.on video` 放开点击——整块放开会把右下角那一片右栏按钮拦住。
+
 ## 助手页两栏与 markdown（2026-11-17）
 
 `#mod-chat` 分两栏：`.chat-main`（左，聊天占大头）+ `.chat-side`（右 300px，执行日志）。
