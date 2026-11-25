@@ -7488,6 +7488,8 @@ def check_pause_stops(tmp):
     assert yi.get('ok') is True, yi                     # 乙号一点没被打断
     assert len(yi.get('steps') or []) == 3, yi
     assert any('这个号剩下的' in str(x) for x in said), said
+
+
 def _grid_frame(cards, width=1920, height=1080):
     """合成一帧「乐章收录」网格：暗底 + 顶部标题条 + 目标卡片原位贴上去
 
