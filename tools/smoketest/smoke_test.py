@@ -4824,7 +4824,8 @@ def check_garrison(tmp):
 
     _write_maa('MuMuEmulator12', '127.0.0.1:16416', r'C:\MuMu\adb.exe')
     o, src = garrison.defaults('g-acc.json')
-    assert o == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'speed': 1.5, 'medalWins': 3,
+    assert o == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
+                 'speed': 1.0, 'medalWins': 3,
                  'adbAddress': '127.0.0.1:16416', 'adbPath': r'C:\MuMu\adb.exe',
                  'screenshotMethod': 'fast', 'pcUiScale': 90}, o
     assert src['kind'] == 'MuMuEmulator12' and src['profile'] == 'P1', src
@@ -4837,18 +4838,37 @@ def check_garrison(tmp):
     assert o['device'] == 'pc' and o['adbAddress'] == '127.0.0.1:16384', o
     # 没绑 MAA / 配置读不到：兜底值不炸
     o, src = garrison.defaults('ghost.json')
-    assert o['device'] == 'mumu' and o['mode'] == 'quick' and o['speed'] == 1.5, o
+    assert o['device'] == 'mumu' and o['mode'] == 'quick' and o['speed'] == 1.0, o
     assert src['kind'] == '' and src['maaDir'] == '', src
 
     # 4) sanitize：越界值全部收进合法枚举/范围
     bad = garrison.sanitize({'device': 'hack', 'mode': 'zzz', 'medalWins': '6',
                              'speed': '99', 'screenshotMethod': 'x',
                              'adbAddress': '  ', 'pcUiScale': '120'})
-    assert bad == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal',
+    assert bad == {'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
                    'medalWins': 6,
                    'speed': 5.0, 'adbAddress': '127.0.0.1:16384',
                    'adbPath': '', 'screenshotMethod': 'auto',
                    'pcUiScale': 90}, bad
+    # 模拟模式/规程等级（v1.1.10 起：策略徽章固定等级 1，叠层任务 1/5/12，
+    # 阿戈尔组 task-2 没有极速与等级 1，统一落到标准·等级 5）
+    s = garrison.sanitize({'goal': 'medal', 'mode': 'standard', 'level': 12})
+    assert s['mode'] == 'standard' and s['level'] == 1, s
+    s = garrison.sanitize({'goal': 'task-3', 'mode': 'standard', 'level': 12})
+    assert s['mode'] == 'standard' and s['level'] == 12, s
+    s = garrison.sanitize({'goal': 'task-3', 'mode': 'quick', 'level': 5})
+    assert s['mode'] == 'quick' and s['level'] == 5, s     # 叠层也能跑极速
+    s = garrison.sanitize({'goal': 'task-2', 'mode': 'quick', 'level': 1})
+    assert s['mode'] == 'standard' and s['level'] == 5, s
+    s = garrison.sanitize({'goal': 'task-2', 'level': 12})
+    assert s['mode'] == 'standard' and s['level'] == 12, s
+    s = garrison.sanitize({'goal': 'task-1', 'level': '7'})
+    assert s['level'] == 1, s
+    # 操作间隔：缺省 1.0，0.5–5× 按 0.5 取整（普通模式也生效，靠 -v1111 补丁）
+    assert garrison.sanitize({})['speed'] == 1.0
+    assert garrison.sanitize({'speed': '1.3'})['speed'] == 1.5
+    assert garrison.sanitize({'speed': '0.1'})['speed'] == 0.5
+    assert garrison.sanitize({'speed': '4.4'})['speed'] == 4.5
     # goal 白名单：非法值回 medal，合法叠层目标透传
     ok_goal = garrison.sanitize({'goal': 'task-3', 'device': 'mumu'})
     assert ok_goal['goal'] == 'task-3', ok_goal
@@ -5018,8 +5038,8 @@ def check_garrison(tmp):
                                   startedAt=None, endedAt=None)
         adapted = garrisondl._adapted_versions()
         assert adapted and '1.1.4' in adapted and '1.1.5' in adapted
-        assert '1.1.7' in adapted, adapted
-        assert garrisondl._is_adapted('1.1.5') and not garrisondl._is_adapted('1.1.6')
+        assert '1.1.7' in adapted and '1.1.11' in adapted, adapted
+        assert garrisondl._is_adapted('1.1.11') and not garrisondl._is_adapted('1.1.6')
 
         # 已最新（候选=已装）→ start() 短路 done，不起线程
         old_svc = os.path.join(garrisondl.garrison_dir(), 'medal-farm-v1.1.4', 'core')
@@ -5048,16 +5068,17 @@ def check_garrison(tmp):
                                                'medal-farm-v1.1.5')), '失败版本不能落盘'
         assert os.path.isfile(os.path.join(old_svc, 'service.mjs')), '旧版必须原样保留'
 
-        # _pick_candidate（真实直链链）：记录只有表外 1.1.6 → 选表内最新 1.1.5
+        # _pick_candidate（真实直链链）：记录只有表外 1.1.6 → 选表内最新 1.1.11
         garrisondl.candidates = real_cands
         garrisondl.record_candidates = lambda: [
             {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,
              'files': None, 'source': '小黑盒扩展记录'}]
-        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.7', '表外新版应回退表内最新'
-        assert garrisondl._pick_candidate('')['version'] == '1.1.7'
-        assert garrisondl._pick_candidate('1.1.7') is None
+        assert garrisondl._pick_candidate('1.1.4')['version'] == '1.1.11', '表外新版应回退表内最新'
+        assert garrisondl._pick_candidate('')['version'] == '1.1.11'
+        assert garrisondl._pick_candidate('1.1.7')['version'] == '1.1.11'
+        assert garrisondl._pick_candidate('1.1.11') is None
         # check_update：候选只剩表外新版（连直链一起屏蔽）→ 不起线程零流量；
-        # （真实链路里记录 1.1.6 + 已装 1.1.4 会经直链升 1.1.5——上面
+        # （真实链路里记录 1.1.6 + 已装 1.1.4 会经直链升 1.1.11——上面
         #   _pick_candidate 断言已覆盖该选版，这里不再真下载）
         garrisondl.candidates = lambda: [
             {'version': '1.1.6', 'url': 'x', 'sha256': None, 'bytes': None,

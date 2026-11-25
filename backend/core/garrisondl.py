@@ -8,8 +8,8 @@
      %APPDATA%\\HeyboxDesktop\\desktop\\extension-artifacts\\v1\\records\\*.catalog.json
      里 package_id == ai-desktop.arknights-medal-farm 的记录（多条取版本最大），
      带 target.cdn_url（官方 CDN 直链，匿名可下）与 integrity.files 逐文件清单。
-  2. 回退：硬编码的 v1.1.4 已验证直链（整包 sha256 已锚定；无逐文件清单时
-     退化为 zip 可解压 + core/service.mjs 存在 + 体量下限）。
+  2. 回退：硬编码的已验证直链（1.1.11 / 1.1.7 / 1.1.5 / 1.1.4，整包 sha256
+     已锚定；无逐文件清单时退化为 zip 可解压 + core/service.mjs 存在 + 体量下限）。
 
 落盘到 ``<运行根>/garrison/medal-farm-v<版本>/``（garrison.core_dir 的约定
 位置之一，装好即被发现）。下载在后台线程跑，进度/阶段记在模块级 _DL，
@@ -39,6 +39,17 @@ PKG_DIR_RE = re.compile(r'^medal-farm-v(\d+(?:\.\d+)*)$')
 # 已验证直链（匿名可下载，整包 sha256 锚定）：按版本降序作回退链——
 # 记录里的新版不在适配表时，装「表内最新」的直链版本而不是一味落到最老。
 FALLBACKS = [
+    {
+        'version': '1.1.11',
+        'url': ('https://static.max-c.com/heybox/desktop/extension/'
+                'ai-desktop.arknights-medal-farm/version/1.1.11/'
+                'f87f56c2110138158f44fce014dff979b36d26e206baf99b004e3e0953988fe1-'
+                '20261124T111647922Z/ai-desktop.arknights-medal-farm-1.1.11.hbext'),
+        'sha256': 'f87f56c2110138158f44fce014dff979b36d26e206baf99b004e3e0953988fe1',
+        'bytes': 61131567,
+        'files': None,
+        'source': '官方直链（回退）',
+    },
     {
         'version': '1.1.7',
         'url': ('https://static.max-c.com/heybox/desktop/extension/'

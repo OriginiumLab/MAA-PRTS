@@ -199,7 +199,8 @@ def _maa_dir_for(file: str) -> str:
 def _maa_defaults(file: str):
     """从账号绑定 MAA 的连接配置里抄出来的裸默认值（不含用户偏好 overlay）"""
     opts = {
-        'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'speed': 1.5, 'medalWins': 3,
+        'device': 'mumu', 'mode': 'quick', 'goal': 'medal', 'level': 1,
+        'speed': 1.0, 'medalWins': 3,
         'adbAddress': '127.0.0.1:16384', 'adbPath': '',
         'screenshotMethod': 'auto', 'pcUiScale': 90,
     }
@@ -228,7 +229,7 @@ def _maa_defaults(file: str):
 
 
 # 可持久化的速刷选项键（账号 json 里的 garrisonOpts 只认这些）
-OPT_KEYS = ('device', 'mode', 'goal', 'adbAddress', 'adbPath', 'medalWins', 'speed',
+OPT_KEYS = ('device', 'mode', 'goal', 'level', 'adbAddress', 'adbPath', 'medalWins', 'speed',
             'screenshotMethod', 'pcUiScale')
 
 
@@ -280,18 +281,40 @@ def save_opts(file: str, options: dict) -> dict:
 
 
 def sanitize(body: dict) -> dict:
-    """前端提交的选项清洗：只放行核心认识的枚举与范围，其余回默认"""
+    """前端提交的选项清洗：只放行核心认识的枚举与范围，其余回默认
+
+    模拟模式自 v1.1.10 起分两套口径：策略徽章看 medalMode（极速，或标准模拟·
+    规程等级 1），叠层任务看 mode+level（极速，或标准模拟·规程等级 1/5/12）。
+    阿戈尔/卡西米尔/突袭（task-2）没有极速与等级 1 入口，统一落到标准·等级 5。
+    前端只提交 mode + level，归一化后由 host.mjs 分别透传为 medalMode/level。
+    """
     body = body or {}
     dft, _src = defaults('')   # 兜底基底（读不到 MAA 配置时的那套）
     device = body.get('device') if body.get('device') in DEVICES else dft['device']
     try:
-        speed = min(5.0, max(0.5, float(body.get('speed') or 1.5)))
+        # 操作间隔：0.5–5×，按 0.5 取整（核心自己也这么归一化）
+        speed = round(min(5.0, max(0.5, float(body.get('speed') or 1.0))) * 2) / 2
     except (TypeError, ValueError):
-        speed = 1.5
+        speed = 1.0
+    goal = body.get('goal') if body.get('goal') in GOALS else 'medal'
+    mode = body.get('mode') if body.get('mode') in ('quick', 'standard') else 'quick'
+    try:
+        level = int(body.get('level'))
+    except (TypeError, ValueError):
+        level = 1
+    if goal == 'medal':
+        level = 1                 # 策略徽章的标准模拟固定规程等级 1
+    elif goal == 'task-2':
+        if level not in (5, 12):
+            level = 5
+        mode = 'standard'         # 这组盟约只有等级 5/12，没有极速/等级 1
+    elif level not in (1, 5, 12):
+        level = 1
     return {
         'device': device,
-        'mode': body.get('mode') if body.get('mode') in ('quick', 'standard') else 'quick',
-        'goal': body.get('goal') if body.get('goal') in GOALS else 'medal',
+        'mode': mode,
+        'goal': goal,
+        'level': level,
         'medalWins': 6 if str(body.get('medalWins')) == '6' else 3,
         'speed': speed,
         'adbAddress': str(body.get('adbAddress') or dft['adbAddress']).strip() or dft['adbAddress'],

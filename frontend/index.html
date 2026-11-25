@@ -301,18 +301,14 @@
               <span id="gar-src" title="">默认值来自该账号绑定的 MAA</span>
             </div>
             <div class="gar-form">
-              <label class="field-row"><span>设备</span>
-                <select id="gar-device">
+              <div class="field-row"><span>设备</span>
+                <select id="gar-device" aria-label="设备">
                   <option value="mumu">MuMu 模拟器</option>
                   <option value="ldplayer">雷电模拟器 9</option>
                   <option value="pc">明日方舟 PC 版</option>
-                </select></label>
-              <label class="field-row"><span>模拟模式</span>
-                <select id="gar-mode" disabled title="上游 v1.1.7 起仅支持极速模拟">
-                  <option value="quick">极速模拟</option>
-                </select></label>
-              <label class="field-row"><span>速刷目标</span>
-                <select id="gar-goal" title="medal=策略徽章（默认）；叠层=实验性目标，通关成功率不确定">
+                </select></div>
+              <div class="field-row"><span>速刷目标</span>
+                <select id="gar-goal" aria-label="速刷目标" title="medal=策略徽章（默认）；叠层=实验性目标，通关成功率不确定">
                   <option value="medal">策略徽章（精准/奥术）</option>
                   <option value="task-1">叠层 · 炎/莱塔尼亚/奥术 100 层</option>
                   <option value="task-2">叠层 · 阿戈尔/卡西米尔/突袭 100 层</option>
@@ -321,35 +317,41 @@
                   <option value="task-5">叠层 · 乌萨斯/伊比利亚/聚合 100 层</option>
                   <option value="task-6">叠层 · 奇迹/远见/投资人 50 层</option>
                   <option value="task-7">叠层 · 迅捷/不屈/坚守/助力 50 层</option>
-                </select></label>
-              <label class="field-row"><span>ADB 地址</span>
-                <input type="text" id="gar-adb" placeholder="127.0.0.1:16384"></label>
-              <label class="field-row"><span>目标胜场</span>
-                <select id="gar-wins">
+                </select></div>
+              <div class="field-row"><span>模拟模式</span>
+                <select id="gar-mode" aria-label="模拟模式" title="策略徽章：极速模拟（9 回合）/ 标准模拟·规程等级 1（只刷极速未开放的策略）；叠层任务另可选规程等级 5/12。阿戈尔/卡西米尔/突袭只有 5/12。">
+                  <option value="quick">极速模拟 · 9 回合</option>
+                  <option value="standard-1">标准模拟 · 规程等级 1</option>
+                </select></div>
+              <div class="field-row" id="gar-wins-row"><span>目标胜场</span>
+                <select id="gar-wins" aria-label="目标胜场">
                   <option value="3">3 胜</option>
                   <option value="6">6 胜</option>
-                </select></label>
-              <label class="field-row"><span>操作速度</span>
-                <select id="gar-speed">
-                  <option value="1">1×</option>
-                  <option value="1.5" selected>1.5×</option>
-                  <option value="2">2×</option>
+                </select></div>
+              <div class="field-row"><span>操作间隔</span>
+                <select id="gar-speed" aria-label="操作间隔" title="等待系数：0.5× 更快、1× 标准，数值越大等待越长（更稳但更慢）。上游只让它在调试模式生效，这里用补丁让普通模式也生效。">
+                  <option value="0.5">0.5× · 更快</option>
+                  <option value="1" selected>1× · 标准</option>
+                  <option value="1.5">1.5×</option>
+                  <option value="2">2× · 更慢</option>
                   <option value="2.5">2.5×</option>
                   <option value="3">3×</option>
                   <option value="4">4×</option>
                   <option value="5">5×</option>
-                </select></label>
-              <label class="field-row"><span>PC UI 缩放</span>
-                <select id="gar-scale">
+                </select></div>
+              <div class="field-row"><span>ADB 地址</span>
+                <input type="text" id="gar-adb" aria-label="ADB 地址" placeholder="127.0.0.1:16384"></div>
+              <div class="field-row"><span>PC UI 缩放</span>
+                <select id="gar-scale" aria-label="PC UI 缩放">
                   <option value="90">90%</option>
                   <option value="100">100%</option>
-                </select></label>
-              <label class="field-row"><span>截图方式</span>
-                <select id="gar-shot">
+                </select></div>
+              <div class="field-row"><span>截图方式</span>
+                <select id="gar-shot" aria-label="截图方式">
                   <option value="auto">自动</option>
                   <option value="fast">快速（模拟器 Extras）</option>
                   <option value="adb">ADB 截图（兼容）</option>
-                </select></label>
+                </select></div>
             </div>
             <div class="sign-actions gar-actions">
               <button class="ghost-btn" id="gar-test">测试连接</button>
@@ -390,17 +392,17 @@
       在搜索结果里点「加入」<br>拖动作业可以调整写入 MAA 的顺序
     </div>
     <div class="basket-foot">
-      <label class="field-row">
+      <div class="field-row">
         <span>写入配置</span>
-        <select id="basket-profile"></select>
-      </label>
-      <label class="field-row">
+        <select id="basket-profile" aria-label="写入配置"></select>
+      </div>
+      <div class="field-row">
         <span>写入方式</span>
-        <select id="basket-mode">
+        <select id="basket-mode" aria-label="写入方式">
           <option value="replace">替换现有列表</option>
           <option value="append">追加到现有列表</option>
         </select>
-      </label>
+      </div>
       <label class="check-row">
         <input type="checkbox" id="basket-autostart" checked>
         <span>写完自动启动 MAA</span>
