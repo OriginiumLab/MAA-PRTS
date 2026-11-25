@@ -7,10 +7,10 @@ import os
 import traceback
 import urllib.parse
 
-from . import (accounts, agent, appupdate, asstlog, copilot, gacha, garrison,
-               maa, maaplan, multiacct, operbox, packsync, paradox, resources,
-               scheduler, settings, signin, skills, sklogin, tasks, updater,
-               version, watch)
+from . import (accounts, agent, appupdate, asstlog, autostart, copilot, gacha,
+               garrison, maa, maaplan, multiacct, operbox, packsync, paradox,
+               resources, scheduler, settings, signin, skills, sklogin, tasks,
+               themes, updater, version, watch)
 
 WEB = settings.static_dir()
 
@@ -22,6 +22,11 @@ MIME = {
     '.png': 'image/png',
     '.ico': 'image/x-icon',
     '.woff2': 'font/woff2',
+    '.webm': 'video/webm',
+    '.mp4': 'video/mp4',
+    '.jpg': 'image/jpeg',
+    '.json': 'application/json; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
 }
 
 
@@ -397,6 +402,52 @@ def api_pack_update(_q, _body):
     acts = resources.activity_list(18)
     return {'result': r, 'pack': resources.pack_info(),
             'gamedata': version.check(acts)}
+
+
+def api_themes(q, _body):
+    """主题清单：内置黑/白 + 本机已装 + 远端可下载（远端读不到只给一句提示）"""
+    timeout = 12 if str((q or {}).get('force') or '').lower() in ('1', 'true') else 6
+    return themes.catalog(timeout=timeout)
+
+
+def api_theme_install(q, body):
+    """下载并安装第三方主题（用户点「下载」才会走到这里）"""
+    tid = str((body or {}).get('id') or (q or {}).get('id') or '').strip()
+    if not tid:
+        raise ValueError('缺 id（要装哪个主题）')
+    r = themes.install(tid)
+    # 装完把「当前主题」的可用性也回给前端：装失败时别让它切过去
+    st = settings.load()
+    if st.get('theme') == tid and not themes.usable(tid):
+        settings.save({'theme': 'dark'})
+    return r
+
+
+def api_theme_remove(_q, body):
+    """删掉本机那份主题包（设置里的当前主题若正是它，退回深色）"""
+    tid = str((body or {}).get('id') or '').strip()
+    r = themes.remove(tid)
+    if settings.load().get('theme') == tid:
+        settings.save({'theme': 'dark'})
+    return r
+
+
+def api_autostart(_q, body):
+    """开机自启：GET 只读，POST 按用户这次的选择写/删注册表
+
+    **只由用户点开关触发**（默认 False，settings 里也写着不许改成 True）。
+    """
+    if body:
+        want = body.get('enabled')
+        # 字符串 "false" / 0 一律当 False（前端传的是 JSON 布尔，兜个底）
+        if isinstance(want, str):
+            want = want.strip().lower() not in ('0', 'false', 'no', 'off', '')
+        applied = autostart.apply(bool(want))
+        settings.save({'launchAtLogin': bool(want)})
+        out = autostart.status()
+        out['applied'] = applied
+        return out
+    return autostart.status()
 
 
 def api_app_status(q, _body):
@@ -996,6 +1047,10 @@ ROUTES = {
     '/api/author/suggest': api_author_suggest,
     '/api/pack/status': api_pack_status,
     '/api/pack/update': api_pack_update,
+    '/api/themes': api_themes,
+    '/api/theme/install': api_theme_install,
+    '/api/theme/remove': api_theme_remove,
+    '/api/autostart': api_autostart,
     '/api/app/status': api_app_status,
     '/api/app/download': api_app_download,
     '/api/app/install': api_app_install,

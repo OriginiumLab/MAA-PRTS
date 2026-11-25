@@ -8301,6 +8301,195 @@ def check_multi_account_wake(tmp):
     assert '龙门币' not in hit[0], hit[0]
 
 
+def check_theme_autostart(tmp):
+    """B73 主题包与开机自启（2026-11-25 用户口径）
+
+    两条需求一起钉：设置里「主题」要有黑色/白色/第三方，「开机自启」必须默认关；
+    第三方主题包**从数据分支按需下载**，不让 exe 跟着涨。
+
+    钉住六件事：
+      1. 默认值：``launchAtLogin`` 是 False（真 False，不是字符串），
+         ``theme`` 是 dark——用户原话「极度厌恶没同意就开机自启」；
+      2. 归一化：``'false'`` / ``'0'`` / ``0`` 都不许变成真；主题 id 小写、
+         空值退回 dark；
+      3. 源码模式**一律不碰注册表**（``sync`` 返回 skipped，``enable`` 直接抛，
+         前后 ``_read()`` 必须一模一样）——开发时一跑就把打包版那条删掉是最坑的；
+      4. 安装链路：sha 校验、``extra`` 下不到要降级不报错、装坏了不删旧的、
+         内置主题不许装/删；
+      5. 防穿越：zip 里的 ``..``、``file_of`` 的 ``../`` / 绝对路径全部拒绝；
+      6. 接线：``/api/themes`` 等路由、``/themes/<id>/`` 静态口、内置卡片
+         ``installed: true``（少了会渲染成「下载」）、主题变量不用硬编码色。
+    """
+    import hashlib
+    import zipfile
+
+    from core import api, autostart, settings as st, themes
+
+    cfg = os.path.join(tmp, 'cfg')
+    os.makedirs(cfg, exist_ok=True)
+    keep = (st.CONFIG_DIR, st.SETTINGS_PATH, st._cache, themes.THEMES_DIR)
+    st.CONFIG_DIR = cfg
+    st.SETTINGS_PATH = os.path.join(cfg, 'settings.json')
+    st._cache = None
+    themes.THEMES_DIR = os.path.join(cfg, 'themes')
+    try:
+        # ---------- 1/2. 默认值与归一化 ----------
+        assert st.DEFAULTS['launchAtLogin'] is False, '默认就跑成了开机自启'
+        assert st.DEFAULTS['theme'] == 'dark', st.DEFAULTS['theme']
+        assert st.load()['launchAtLogin'] is False
+        for falsy in ('false', '0', 'no', 0, None, ''):
+            assert st.save({'launchAtLogin': falsy})['launchAtLogin'] is False, falsy
+            assert st.load()['launchAtLogin'] is False, falsy
+        assert st.save({'launchAtLogin': 'true'})['launchAtLogin'] is True
+        assert st.save({'launchAtLogin': True})['launchAtLogin'] is True
+        assert st.save({'launchAtLogin': 0})['launchAtLogin'] is False
+        assert st.save({'theme': ' CLOSURE '})['theme'] == 'closure'
+        assert st.save({'theme': ''})['theme'] == 'dark'
+        assert st.save({'theme': None})['theme'] == 'dark'
+        assert st.save({'theme': 'DARK'})['theme'] == 'dark'
+
+        # ---------- 3. 自启：源码模式不碰注册表 ----------
+        assert autostart.supported() is False, '源码模式不该说支持自启'
+        assert autostart.exe_path() == ''
+        before = autostart._read()
+        r = autostart.sync(True)
+        assert r.get('skipped') is True and '源码' in str(r.get('why')), r
+        assert autostart.sync(False).get('skipped') is True
+        assert autostart._read() == before, '源码模式动了注册表'
+        try:
+            autostart.enable()
+            raise AssertionError('源码模式居然写了自启项')
+        except RuntimeError:
+            pass
+        stt = autostart.status()
+        assert stt['supported'] is False and stt['exe'] == '', stt
+        assert stt['setting'] is False, stt        # 上面刚存过 0
+
+        # ---------- 4. 安装链路（假网络，别真去 GitHub） ----------
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('theme.json', json.dumps({
+                'id': 'demo', 'name': '演示主题', 'version': '0.1.0',
+                'desc': '测试用', 'css': 'theme.css', 'preview': 'preview.jpg',
+                'pet': {'video': 'pet/idle.webm', 'every': 20,
+                        'actions': {'talk': 'pet/talk.webm'}},
+                'extra': [{'file': 'pet/idle.webm', 'urls': ['https://x/y.webm']}],
+            }, ensure_ascii=False))
+            zf.writestr('theme.css', 'html[data-theme="demo"]{--bg:#000}')
+            zf.writestr('preview.jpg', b'\xff\xd8\xff\xd9')
+        blob = buf.getvalue()
+        man = {'themes': [{
+            'id': 'demo', 'name': '演示主题', 'file': 'themes/demo.zip',
+            'bytes': len(blob), 'sha256': hashlib.sha256(blob).hexdigest(),
+            'preview': 'demo-preview.jpg'}]}
+
+        def fake_get(url, timeout=None):
+            if url.endswith('demo.zip'):
+                return blob
+            raise RuntimeError('素材不可达')     # extra 全失败 → 降级成纯配色
+
+        old = (themes.fetch_manifest, themes._get)
+        themes.fetch_manifest = lambda timeout=8: man
+        themes._get = fake_get
+        try:
+            r = themes.install('demo')
+            assert r['ok'] and r['id'] == 'demo', r
+            assert r['extra'] == [] and r['extraFailed'], r   # 降级，但不报错
+            assert themes.usable('demo') is True
+            meta = themes._read_meta('demo')
+            assert meta['name'] == '演示主题' and meta['pet']['every'] == 20, meta
+            assert themes.file_of('demo', 'theme.css')
+            assert themes.file_of('demo', 'preview.jpg')
+            for bad in ('../../settings.json', '..\\..\\settings.json',
+                        '/settings.json', ''):
+                assert themes.file_of('demo', bad) is None, bad
+
+            d = themes.catalog(timeout=1)
+            ids = [t['id'] for t in d['themes']]
+            assert ids == ['dark', 'light', 'demo'], ids
+            mine = d['themes'][-1]
+            assert mine['css'] == '/themes/demo/theme.css', mine
+            assert mine['preview'] == '/themes/demo/preview.jpg', mine
+            rem = d['remote'][0]
+            # 没下载的主题：缩略图走 gh-proxy（raw 国内连不上，jsDelivr 会 301）
+            assert 'gh-proxy' in rem['preview'], rem['preview']
+
+            # sha 对不上必须拒装，且不能把已经能用的那份删掉
+            themes.fetch_manifest = lambda timeout=8: {
+                'themes': [dict(man['themes'][0], sha256='0' * 64)]}
+            try:
+                themes.install('demo')
+                raise AssertionError('sha 不对居然装上了')
+            except RuntimeError:
+                pass
+            assert themes.usable('demo') is True, '装坏了旧的那份也没了'
+
+            # 内置主题不许装；id 里不许出现路径
+            for tid in ('dark', 'light', 'a/b', '../x', ''):
+                try:
+                    themes.install(tid)
+                    raise AssertionError('应当拒绝：%r' % tid)
+                except ValueError:
+                    pass
+
+            themes.remove('demo')
+            assert themes.usable('demo') is False
+            assert not os.path.isdir(os.path.join(themes.THEMES_DIR, 'demo'))
+
+            # 远端读不到：页面不能裸奔，只给一句 remoteError
+            def boom(timeout=8):
+                raise RuntimeError('断网')
+
+            themes.fetch_manifest = boom
+            d = themes.catalog(timeout=1)
+            assert '断网' in (d.get('remoteError') or ''), d
+            assert [t['id'] for t in d['themes']] == ['dark', 'light'], d
+            assert d['remote'] == [] and d['installed'] == [], d
+        finally:
+            themes.fetch_manifest, themes._get = old
+
+        # zip 里的 .. 必须拦在解压前
+        evil = io.BytesIO()
+        with zipfile.ZipFile(evil, 'w') as zf:
+            zf.writestr('../evil.txt', b'x')
+        try:
+            themes._safe_extract(zipfile.ZipFile(evil), os.path.join(tmp, 'evil'))
+            raise AssertionError('解压没挡住 ..')
+        except RuntimeError:
+            pass
+
+        # ---------- 5. 接线 ----------
+        for path in ('/api/themes', '/api/theme/install',
+                     '/api/theme/remove', '/api/autostart'):
+            assert path in api.ROUTES, path
+
+        main_src = open(os.path.join(REPO, 'backend', 'main.py'),
+                        encoding='utf-8').read()
+        assert "path.startswith('/themes/')" in main_src, '没挂 /themes/ 静态口'
+        assert '_themes.file_of' in main_src, '主题文件没走 file_of 防穿越'
+        assert '_auto.sync' in main_src, '启动时没对账开机自启'
+
+        js = open(os.path.join(REPO, 'frontend', 'app.js'), encoding='utf-8').read()
+        for need in ('theme-swatch', 'data-theme-dl', 'data-theme-use',
+                     'data-theme-del', '/api/autostart', 'syncThemePet',
+                     'set-launch-login', "['general', '常规设置']"):
+            assert need in js, need
+        fixed = js.split('const THEME_FIXED', 1)[1].split('};', 1)[0]
+        assert fixed.count('installed: true') == 2, fixed   # 少一个就变成「下载」
+
+        css = open(os.path.join(REPO, 'frontend', 'themes.css'),
+                   encoding='utf-8').read()
+        assert 'html[data-theme="light"]' in css
+        assert '--tint' in css and '--shade' in css
+
+        style = open(os.path.join(REPO, 'frontend', 'style.css'),
+                     encoding='utf-8').read()
+        assert 'rgba(255, 255, 255' not in style, '又写死了加亮色，浅色主题会变黑板'
+        assert style.count('#0e121a') == 1, '弹窗底色写死了（应只在 --panel-3 出现）'
+    finally:
+        st.CONFIG_DIR, st.SETTINGS_PATH, st._cache, themes.THEMES_DIR = keep
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -8410,6 +8599,8 @@ def main():
                 lambda: check_closed_shop_nav(tmp))
         r.check('B72 多账号每个号先唤醒切号（不重复补、不改原步骤、引导卡片接线）',
                 lambda: check_multi_account_wake(tmp))
+        r.check('B73 主题包与开机自启（按需下载/降级/sha/防穿越/默认不勾自启）',
+                lambda: check_theme_autostart(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

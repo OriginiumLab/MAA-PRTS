@@ -187,6 +187,13 @@ DEFAULTS = {
     'maaEndDir': '',
     'maaDirs': [],          # 用过的 MAA 根目录历史（添加账号时「已存过」列表的数据源）
     'autoStartMaa': True,
+    # 开机自启：**默认 False，而且永远不许改成 True**（2026-11-25 用户原话：
+    # 「我极度厌恶没有在我同意情况下默认开机自启的软件」）。只有用户在
+    # 设置 → 常规里亲手勾上，才写 Windows 的 HKCU Run 项；取消勾选就删掉。
+    'launchAtLogin': False,
+    # 界面主题：dark（默认）/ light 内置；其他（如 closure 卫戍协议）要从
+    # pack-data 分支下载主题包才能用，见 core/themes.py
+    'theme': 'dark',
     'autoUpdatePack': True,  # 启动后自动拉取新的游戏资源包（关卡/干员/活动）
     'autoCheckAppUpdate': True,   # 启动后检查程序本体有没有新版本（6 小时一次）
     'acceptPrerelease': False,    # 要不要接收 vX.Y.Z-beta.N 这类预发布版
@@ -424,6 +431,11 @@ def save(patch: dict) -> dict:
             elif k == 'emulatorAutoStart':
                 # 前端可能传 "false" / 0 / 空串，别让字符串 "false" 变成真
                 v = bool(v) and str(v).strip().lower() not in ('0', 'false', 'no', '')
+            elif k == 'launchAtLogin':
+                # 同上：字符串 "false" 不许变成真。默认 False，绝不在没勾选时打开
+                v = bool(v) and str(v).strip().lower() not in ('0', 'false', 'no', '')
+            elif k == 'theme':
+                v = str(v or '').strip().lower() or 'dark'
             elif k == 'agent':
                 v = _norm_agent(v)
             cur[k] = v

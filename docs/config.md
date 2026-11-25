@@ -211,6 +211,25 @@ WR=画中人        ZT=崔林特尔梅之金
 这些文件都可以随时删除：删掉账号 `*.json` 只是丢失缓存，重新同步就回来了
 （token 密文也在里面，删掉后需要重新粘贴一次 token）。
 
+### themes/（第三方主题包）
+
+```
+config/themes/<id>/
+  theme.json      名称/版本/入口 css/桌宠声明/extra 素材表
+  theme.css       只覆盖 CSS 变量（+ 少量装饰）
+  preview.jpg     设置页卡片缩略图
+  fonts/ icons/   主题自带的字体与像素图标
+  pet/*.webm      角色动画（从原作者的仓库另外下载的，见下）
+```
+
+这里是**点过「下载」才会有**的内容，内置的黑色 / 白色主题不占这个目录。
+整个 `<id>/` 目录可以随时删（设置 → 常规 → 删除，或手删），删掉后如果设置里
+存的主题正是它，启动时会自动退回深色。
+
+`pet/*.webm` 是角色动画，版权归原作者，不随我们的主题包分发：装主题时按
+`theme.json.extra` 里的地址直连原作者仓库下载，下不到就是纯配色主题（不报错）。
+细节与契约见 `docs/backend.md` 的「界面主题与主题包」。
+
 ## settings.json
 
 ```jsonc
@@ -219,6 +238,8 @@ WR=画中人        ZT=崔林特尔梅之金
   "maaEndDir": "",
   "maaDirs": ["D:\\MAA\\MAA-v5.0.0-win-x64"],
   "autoStartMaa": true,
+  "launchAtLogin": false,
+  "theme": "dark",
   "autoUpdatePack": true,
   "autoCheckAppUpdate": true,
   "acceptPrerelease": false,
@@ -238,6 +259,8 @@ WR=画中人        ZT=崔林特尔梅之金
 | `lastAccount` | 上次选中的账号文件，下次启动直接恢复 |
 | `emulatorPath` | 模拟器安装目录，**留空就用 MAA 配置里那个**（`ConnectSettings.Extras.<类型>.EmulatorPath`）。只有 MAA 里没配、或者想指另一个实例时才填 |
 | `emulatorAutoStart` | 任务开跑前发现模拟器没启动，是否替用户启动，默认开（见 `docs/backend.md` 的「开跑前的环境闸」）。关掉后只提示不动手 |
+| `launchAtLogin` | 开机自动启动，**默认 `false`，代码里不许改成默认开**（用户明确要求：没经过同意不许自启）。勾上才写 `HKCU\...\Run` 的 `MAA-PRTS` 一条，取消就删掉；源码运行不生效 |
+| `theme` | 界面主题 id：`dark`（默认）/ `light` 内置，其他（如 `closure` 卫戍协议）要下载主题包。存的是被删掉的主题时会自动退回 `dark` |
 
 这个文件可以直接手改；改完要重启程序生效（程序启动时读一次并缓存）。
 删掉它等于恢复默认：引导会重新出现，需要再填一次 MAA 目录。

@@ -2319,3 +2319,107 @@ agent 帮用户写定时，直接调这些就行，不需要另开一套。
 
 线程在 `main()` 里起（`scheduler.start()`：tick + worker 两个守护线程），
 起不来只记一行警告，不影响主流程。
+
+## 开机自启（`autostart.py`，2026-11-25）
+
+需求原话：「加一个开机自动的选项，默认不勾选，用户勾选后才生效，一定不要默认勾选，
+我极度厌恶没有在我同意情况下默认开机自启的软件」。所以这里只有三条铁律：
+
+1. **默认 `False`**，`settings.py` 里那行注释写着「永远不许改成 True」。
+2. **源码模式一律不碰注册表**：`supported()` 要求 `sys.frozen`。开发时启动一次就把
+   打包版那条 `Run` 项删掉的话，用户会以为自启坏了；`sync()` 在源码模式返回
+   `skipped`，界面照实说「当前是源码运行，打包后才行」。
+3. **只在我们自己的值上动手**：`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+   下名为 `MAA-PRTS` 的一项，读写删都只碰它，不动别人的项。
+
+接口：
+
+| 方法 | 作用 |
+|---|---|
+| `status()` | 只读：`{supported, enabled, command, reason}` |
+| `enable()` / `disable()` | 只有用户点那个开关时才调 |
+| `sync(enabled)` | 启动时对账：设置说开、注册表没有 → 补上；反之 → 删掉 |
+
+`main()` 在 `settings.ensure_dirs()` 之后调一次 `sync()`。之所以每次启动都对账：
+用户可能手动删过注册表项（或用别的清理软件删了），只信 `settings.json` 会出现
+「开关是开的，实际不生效」这种没人能理解的错位。
+
+前端只认 `POST /api/autostart {enabled: true|false}`，失败要把复选框回滚——
+写不进去（组策略/杀软拦截）时不能让界面显示成已开。
+
+## 界面主题与主题包（`themes.py`，2026-11-25）
+
+需求：「默认黑色，新增加白色主题和卫戍协议主题；除了黑白，其他主题资源放在
+pack-data 分支，用户点击下载才能用，防止 exe 体积越来越离谱」。
+
+### 文件放在哪
+
+| 位置 | 内容 |
+|---|---|
+| `frontend/style.css` + `frontend/themes.css` | 内置 dark / light，随 exe 走 |
+| `config/themes/<id>/` | 第三方主题解压到这里（点过「下载」才有） |
+| `pack-data:themes/manifest.json` | 远端目录：id / 名称 / 体积 / sha256 / 缩略图 |
+| `pack-data:themes/<id>.zip` | 主题包：`theme.json` + `theme.css` + 字体/图标 |
+
+启动时**不会**去读远端，只有 `/api/themes` 被调（打开设置页）才拉一次清单，
+8 秒超时、失败只写 `remoteError`，页面照常用黑白两套。
+
+### theme.json 契约
+
+```json
+{
+  "id": "closure", "name": "卫戍协议 · 可露希尔", "version": "1.0.0",
+  "desc": "…", "css": "theme.css", "preview": "preview.jpg",
+  "pet": {"video": "pet/idle.webm", "actions": {"talk": "…"}, "every": 26, "float": true},
+  "extra": [{"file": "pet/idle.webm", "urls": ["https://raw…", "https://gh-proxy…"]}],
+  "license": "…"
+}
+```
+
+### `extra`：**我们不代发的素材**
+
+可露希尔桌宠那四个 888×748 VP9-Alpha webm 来自上游 `dsh-closure-pet`，它的
+NOTICE 明确写了「不在 MIT 授权范围、仅限个人本机娱乐」。所以主题包（zip）里
+**只放我们有权再分发的部分**（配色、像素图标、字体），角色动画写进 `extra`，
+由客户端首次安装时从原作者仓库直连下载：
+
+- 下到了 → 完整主题（含桌宠）；
+- 下不到 → 只记 `extraFailed`，降级成纯配色主题，**不报错、不回滚**。
+  为一个可选动画把刚装好的主题删掉是更差的结果。
+
+`LICENSE` 与 `NOTICE` 也一并写进 `theme.json.license` 和界面提示里，别让它变成
+「我们都在包里」的错觉。
+
+### 安装流程（`install(tid)`）
+
+1. 拉 manifest（`fetch_manifest`，三镜像 raw → gh-proxy → jsDelivr，`?t=` 破缓存）。
+2. 按 `bytes` 与 `sha256` **校验一遍**再解压——镜像吐半截字节的历史上有过。
+3. 解到 `<id>.tmp`（`_safe_extract` 拒绝对路径和 `..`），确认 `theme.json` 和
+   `meta['css']` 存在，再原子改名成正式目录。下歪了绝不覆盖已经能用的那份。
+4. `_download_extra()` 拉 `extra`（已存在的跳过，`.part` 中转再 `os.replace`）。
+
+上限：单包 60 MB、单素材 80 MB。manifest 被写坏时不至于拉爆磁盘。
+
+### 输出与接口
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/themes` | `{themes(内置+已装), remote(可下载), installed, remoteError}` |
+| `POST /api/theme/install` `{id}` | 装 / 重装，返回 `extra` 与 `extraFailed` |
+| `POST /api/theme/remove` `{id}` | 删掉目录（内置主题拒绝） |
+| `GET /themes/<id>/<rel>` | 主题包里的文件（`file_of()` 防目录穿越） |
+
+`catalog()` 里两个刻意的不对称：
+
+- **已装**主题的 `preview` 是本地路径 `/themes/<id>/preview.jpg`；
+- **未装**主题的 `preview` 指向数据分支（优先 gh-proxy：raw 国内基本连不上，
+  jsDelivr 对分支路径会 301）。拉不到就让前端露出主题色块，别裂图。
+
+`usable(tid)` 是「这个 id 现在能不能用」的唯一判断（内置 → True；第三方 → 有
+`theme.json` 且 `css` 文件存在）。设置里存的 `theme` 指向一个被删掉的包时，
+前端 `applyTheme` 会自动退回 `dark`，不会整页无样式。
+
+### 有一件事故意没做
+
+没有「主题商店」这种联网列表页。manifest 就是全部，一个主题一个 zip，
+`/api/themes` 一次给完。等真有五六个主题再考虑分类/搜索。

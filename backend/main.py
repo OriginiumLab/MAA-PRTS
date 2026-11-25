@@ -153,8 +153,7 @@ class Handler(BaseHTTPRequestHandler):
         rel = path.lstrip('/')
         if rel.startswith('static/'):
             rel = rel[len('static/'):]
-        full = os.path.normpath(os.path.join(WEB, rel))
-        # 目录分量级的前缀校验：字符串 startswith 会把 frontend-xxx 这类
+        full = os.path.normpath(os.path.join(WEB, rel))        # 目录分量级的前缀校验：字符串 startswith 会把 frontend-xxx 这类
         # 兄弟目录也放进来（#61）；不同盘符 commonpath 抛 ValueError，必在 WEB 外
         try:
             inside = os.path.commonpath([os.path.normpath(WEB), full]) == os.path.normpath(WEB)
@@ -174,11 +173,40 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, data, api.MIME.get(ext, 'application/octet-stream'))
 
+    def _theme(self, path):
+        """第三方主题包里的文件：/themes/<id>/<相对路径>
+
+        主题包解压在 config/themes/<id>/，里面有 theme.css、图片、字体。
+        路径校验交给 themes.file_of（防目录穿越），这里只负责发字节。
+        """
+        from core import themes as _themes
+        rest = path[len('/themes/'):]
+        tid, _sep, rel = rest.partition('/')
+        try:
+            full = _themes.file_of(tid, rel)
+        except Exception:
+            full = None
+        if not full:
+            self._send(404, b'not found', 'text/plain; charset=utf-8')
+            return
+        try:
+            with open(full, 'rb') as f:
+                data = f.read()
+        except OSError as e:
+            self._send(500, ('read failed: %s' % e).encode('utf-8'),
+                       'text/plain; charset=utf-8')
+            return
+        ext = os.path.splitext(full)[1].lower()
+        self._send(200, data, api.MIME.get(ext, 'application/octet-stream'))
+
     def do_GET(self):
         if not trusted_request(self.headers, self.server.server_address):
             self._reject()
             return
         q, path = self._query()
+        if path.startswith('/themes/'):
+            self._theme(path)
+            return
         if path.startswith('/api/'):
             if path == '/api/ping':
                 _last_ping[0] = time.time()
@@ -429,6 +457,13 @@ def main():
     # 先完成初始化再起 HTTP：窗口期打进来的 /api/app/install 会因 quit hook
     # 未装而「前端收到已拉起安装、进程永远不退」（#61）
     settings.ensure_dirs()          # config/ 与 debug/ 在启动时才建（import 不建）
+    # 开机自启只对账，不擅自开启：设置里是 False 就把残留的 Run 项删掉，
+    # 是 True 才写（用户 2026-11-25：极度厌恶没同意就自启）。源码模式直接跳过。
+    try:
+        from core import autostart as _auto
+        _auto.sync(bool(settings.load().get('launchAtLogin')))
+    except Exception:
+        pass
     # 卫戍协议核心「保持最新」：启动时看一眼本机小黑盒记录，有新版就后台
     # 升级（幂等；下载校验失败不动已装版本）
     try:
