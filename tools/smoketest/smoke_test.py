@@ -8154,6 +8154,76 @@ def check_game_wake(tmp):
         assert '_wait_game' not in src, fn.__name__
 
 
+def check_closed_shop_nav(tmp):
+    """B71 结束活动的商店导航（TL：卡片带「作战已结束」+ 地图节点带剩余时间）
+
+    用户 2026-11-25 报「TL 商店导航失效」：卡片被加上「作战已结束」灰条后，
+    `_entry_here` 定点比 46.8 分（阈值 16）→ 判定终端页上没有这个活动 →
+    `_to_map` 直接失败；地图上的商店节点也因为多了红色时钟 +「941」横幅，
+    老模板 14.1 分（阈值 12）认不出，只剩兜底坐标盲点。
+
+    钉住三件事（模板和 roi 必须绑死，这是这次坏掉的根）：
+      1. 模板尺寸 ≈ roi × 1.5（换模板忘了改 roi 会立刻被抓到）；
+      2. 按 roi 位置贴上去能认到，**挪 20 像素就认不到**；
+      3. 商店节点模板只在自己的 roi 里生效，贴到别的活动的位置认不出。
+    """
+    import io
+    from PIL import Image
+    from core import eventnav
+
+    ent = eventnav.ENTRIES['TL']
+    assert ent.get('closed') is True and not (ent.get('zones') or {})
+
+    def _canvas():
+        return Image.new('RGB', (1920, 1080), (18, 18, 18))
+
+    def _paste(canvas, tpl_name, roi):
+        t = Image.open(eventnav._tpl_path(tpl_name)).convert('RGB')
+        x, y = int(round(roi[0] * 1.5)), int(round(roi[1] * 1.5))
+        canvas.paste(t, (x, y))
+        return t.size
+
+    # ① 模板尺寸和 roi 对齐（差的像素超过 3 就当标定漂了）
+    entry = ent['entry']
+    card = Image.open(eventnav._tpl_path(entry['tpl']))
+    assert abs(card.width - entry['roi'][2] * 1.5) <= 3, (card.size, entry['roi'])
+    assert abs(card.height - entry['roi'][3] * 1.5) <= 3, (card.size, entry['roi'])
+
+    # ② 终端页：贴上去认到；挪 20 像素认不到（roi 是钉死的，不能靠整屏搜索兜）
+    cv = _canvas()
+    _paste(cv, entry['tpl'], entry['roi'])
+    buf = io.BytesIO()
+    cv.save(buf, 'PNG')
+    data = buf.getvalue()
+    hit, sc, ex, ey = eventnav._entry_here(data, entry)
+    assert hit and sc <= 8, (hit, sc)
+    assert abs(ex - int(round(entry['roi'][0] * 1.5 + card.width / 2))) <= 2, (ex, ey)
+
+    cv2 = _canvas()
+    _paste(cv2, entry['tpl'], [entry['roi'][0] + 20] + entry['roi'][1:])
+    b2 = io.BytesIO()
+    cv2.save(b2, 'PNG')
+    assert eventnav._entry_here(b2.getvalue(), entry)[0] is False
+
+    # ③ 活动地图：商店节点在自己的 roi 里认得出；贴到别处（差 400 像素）认不出
+    shop = ent['tools']['shop']
+    cv3 = _canvas()
+    _paste(cv3, shop['tpl'], shop['roi'])
+    b3 = io.BytesIO()
+    cv3.save(b3, 'PNG')
+    x, y, sc3 = eventnav._find(b3.getvalue(), shop)
+    assert x and sc3 <= 8, (x, y, sc3)
+    sx, sy = x / 1.5, y / 1.5
+    assert (shop['roi'][0] <= sx <= shop['roi'][0] + shop['roi'][2]
+            and shop['roi'][1] <= sy <= shop['roi'][1] + shop['roi'][3]), (sx, sy)
+
+    cv4 = _canvas()
+    _paste(cv4, shop['tpl'], [shop['roi'][0] - 400] + shop['roi'][1:])
+    b4 = io.BytesIO()
+    cv4.save(b4, 'PNG')
+    assert eventnav._find(b4.getvalue(), shop)[0] == 0
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -8259,6 +8329,8 @@ def main():
                 lambda: check_parallel_guard(tmp))
         r.check('B70 游戏没跑就自己唤醒（不干等、轮询不刷屏）',
                 lambda: check_game_wake(tmp))
+        r.check('B71 结束活动的商店导航（TL：卡片灰条/节点剩余时间，模板与 roi 绑死）',
+                lambda: check_closed_shop_nav(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
