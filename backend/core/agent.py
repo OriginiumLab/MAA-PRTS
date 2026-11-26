@@ -349,7 +349,8 @@ TOOLS = [
                     'enum': ['copy', 'fight', 'daily', 'daily_copy'],
                     'description': 'copy=只抄作业（要 keyword）；'
                                    'fight=只刷理智（要 keyword，不抄作业，纯挂关卡）；'
-                                   'daily=只做日常（公招/基建/领奖，不要关卡）；'
+                                   'daily=只做日常（公招/基建/领奖，不要关卡；'
+                                   '**多账号日常要用 daily_run**，这里不读账号自己的配置）；'
                                    'daily_copy=日常+抄作业（要 keyword）。默认 copy'},
            'keyword': _STAGE,
            'tasks': {'type': 'array', 'items': {'type': 'string'},
@@ -373,6 +374,35 @@ TOOLS = [
            'profile': {'type': 'string',
                        'description': '档案名后缀，比如「活动-时间啊向前」。不给就自动起名'},
            'start': {'type': 'boolean', 'description': '写完是否立刻启动，默认 true'}},
+          []),
+    _tool('daily_check',
+          '**多账号日常（一键长草）之前必看**：读每个号自己配的 MAA 配置档案，'
+          '报出「理智作战现在刷哪一关、勾了哪些日常任务」；没配档案的号会说明'
+          '改用白本配置。还会给出当前活动推荐刷的材料关（一般是 XX-8）。'
+          '只读，不连模拟器。用户说「帮我做日常」「一键长草」「多账号收菜」时'
+          '**先调它**，把关卡报给用户确认，别自己猜关卡。',
+          {'accounts': {'type': 'array', 'items': {'type': 'string'},
+                        'description': '账号文件名列表；空数组=左侧全部方舟账号'},
+           'maa_dir': {'type': 'string', 'description': '留空用默认 MAA 目录'}}),
+    _tool('daily_run',
+          '**跑多账号日常（一键长草）**：用 MAA 自己的开始唤醒 + 理智作战 + '
+          '自动公招 / 基建换班 / 信用收支 / 领取奖励，一个号一条任务链。'
+          '**我们不发 adb 点击、不自己导航、不抄作业**——关卡由 MAA 自己进，'
+          '切号也是 MAA 的开始唤醒做的；同模拟器轮替、不同模拟器并行。'
+          '关卡优先用该号配置里现有的；没配档案的号用 stage / use_recommended。'
+          '**调用前必须让用户确认关卡**，别默默替他决定。',
+          {'accounts': {'type': 'array', 'items': {'type': 'string'},
+                        'description': '账号文件名列表；空数组=左侧全部方舟账号'},
+           'stage': _STAGE,
+           'stages': {'type': 'object',
+                      'description': '可选。{账号文件名: 关卡} 逐号指定；'
+                                     '一般不用，账号自己的配置里就有'},
+           'use_recommended': {'type': 'boolean',
+                               'description': '没配档案的号用当前活动的推荐材料关'
+                                              '（默认 XX-8）。用户说「用推荐设置」'
+                                              '「随便刷个材料」时传 true'},
+           'start': {'type': 'boolean',
+                     'description': '只排不跑时传 false（默认 true）'}},
           []),
     _tool('set_account_name',
           '**配置账号登录尾号**：用户说出某个账号的手机号尾号（后 4 位，或'
@@ -1682,6 +1712,100 @@ def _start_build(payload):
             'note': '已经在后台跑了。进度看跑机面板，别在这里等它跑完。'}
 
 
+# ---------------------------------------------------------------- 一键长草
+def _daily_req(args):
+    """daily_check / daily_run 的工具参数 → ``daily`` 模块的 req
+
+    ``accounts`` 空数组 = 左侧全部（用户口径），别自己挑。
+    """
+    return {
+        'accounts': [str(x) for x in (args.get('accounts') or []) if str(x).strip()],
+        'maaDir': str(args.get('maa_dir') or '').strip(),
+        'stage': str(args.get('stage') or '').strip(),
+        'stages': {str(k): str(v or '').strip()
+                   for k, v in (args.get('stages') or {}).items()},
+    }
+
+
+def _tool_daily_check(args, session=None):
+    """只读：这个号打算怎么长草（关卡 / 任务 / 有没有自己的档案）"""
+    from . import daily, maaplan
+
+    try:
+        info = daily.detect(_daily_req(args))
+    except Exception as e:                       # noqa: BLE001
+        return {'error': '读 MAA 配置失败：%s: %s' % (type(e).__name__, e)}
+    if not info.get('ok'):
+        return info
+    out = {
+        'summary': info['summary'],
+        'accounts': [{
+            'file': a['file'], 'name': a['name'],
+            'accountName': a['accountName'] or '（还没填，得问用户）',
+            'profile': a['profile'] or '（没有自己的档案，用白本配置）',
+            'source': a['source'],
+            'stages': a['stages'] or '（配置里理智作战留空，要问用户）',
+            'tasks': [maaplan.TASK_MAP[k]['label'] for k in a['tasks']
+                      if k in maaplan.TASK_MAP],
+            'emulator': a['address'] or '（按 MAA 当前的连接设置）',
+        } for a in info['accounts']],
+        'needStage': info['needStage'],
+        'missing': info['missing'],
+        'recommended': info['recommended'],
+        'note': '把关卡原样报给用户确认。他点头（或改口）之后调 daily_run：'
+                '账号自己配了关卡就不用传 stage；要统一改就传 stage；'
+                '没配档案的号可以传 use_recommended=true 用推荐的那个 XX-8。',
+    }
+    if info.get('warnings'):
+        out['warnings'] = info['warnings']
+    return out
+
+
+def _tool_daily_run(args, session=None):
+    """跑多账号一键长草：先摆确认卡，点了才开跑"""
+    from . import daily
+
+    req = _daily_req(args)
+    if args.get('use_recommended') and not req['stage']:
+        try:
+            rec = daily.recommended()
+        except Exception:                        # noqa: BLE001
+            rec = []
+        if rec:
+            # 只补「自己配置里没写关卡」的号；别人配好的 OS-9 / 剿灭不许被改掉
+            req['fallbackStage'] = rec[0]['code']
+            req['_fromRecommended'] = True
+
+    plan = daily.plan(req)
+    if not plan.get('ok'):
+        # 还缺关卡 / 切号名：原样交给模型去问用户，别自己编一个
+        return plan
+
+    if args.get('_confirmed'):
+        if args.get('start') is False:
+            return {'started': False, 'accounts': len(plan['rows']),
+                    'summary': plan['summary'],
+                    'note': '方案排好了但没开跑（start=false）。要开跑再调一次。'}
+        return {'started': True, 'taskId': daily.run_async(plan),
+                'accounts': len(plan['rows']),
+                'note': '已在后台跑：同一台模拟器的号轮替，不同模拟器并行；'
+                        '进度看跑机面板，别在这里等它跑完。'}
+
+    lines = [plan['summary'],
+             '切号交给 MAA 的开始唤醒（我们不发 adb 点击）；'
+             '理智作战由 MAA 自己找关卡，不再用我们的导航。']
+    if req.get('_fromRecommended'):
+        lines.append('没配档案的号用当前活动推荐关卡：%s（有自己配置的号照旧的）'
+                     % req['fallbackStage'])
+    if plan.get('warnings'):
+        lines += list(plan['warnings'])
+    blocked = _guard(session, 'daily_run', dict(args, _confirmed=True),
+                     '\n'.join(lines))
+    if blocked:
+        return blocked
+    return _tool_daily_run(dict(args, _confirmed=True), session)
+
+
 def _confirm_text(plan):
     rows = [a for a in plan.get('accounts') or [] if a.get('ops')]
     head = '要给 %d 个账号挂 %d 关（共 %d 份作业）：' % (
@@ -2041,6 +2165,7 @@ _HANDLERS = {
     'account_progress': _tool_account_progress,
     'run_status': _tool_run_status,
     'plan_multi_account': _tool_plan_multi,
+    'daily_check': _tool_daily_check,
     'maa_capabilities': _tool_maa_capabilities,
     'list_profiles': _tool_list_profiles,
     # skill：轻量的免确认，直接丢后台（失败自然有日志，用户看得到）
@@ -2054,6 +2179,7 @@ _HANDLERS = {
 _WRITE_HANDLERS = {
     'apply_plan': _tool_apply_plan,
     'build_run': _tool_build_run,
+    'daily_run': _tool_daily_run,
     'add_stages': _tool_add_stages,
     'stop_run': _tool_stop_run,
     # skill：会驱动 MAA 打关/过剧情，先摆出来等用户点头
@@ -2157,7 +2283,9 @@ SYSTEM = """你是 MAA-PRTS 的内置助手，帮用户管理明日方舟的挂�
 - 活动一条龙：唤醒 → 导航进活动（当期 OS 走终端页横幅）→ 普通/EX/S 逐段扫
   → 领奖励 → 搬商店（黑名单可配）
 - 多账号：同一台模拟器排队切号，不同模拟器真并行；能按账号单独停
-- 日常：开始唤醒、自动公招、基建换班、理智作战、信用收支、领取奖励
+- 日常 / 一键长草：读每个号自己 MAA 配置里的理智作战关卡，用 MAA 的
+  开始唤醒 + 自动公招 + 基建换班 + 理智作战 + 信用收支 + 领奖挂（同台轮替、
+  不同模拟器并行，切号也是 MAA 自己做的）
 - 森空岛签到、培养干员（精英化 / 技能 / 专精）、MAA 小工具（活动小游戏 / 商店）
 - 看状态：跑到第几关、卡在哪、为什么失败
 - 配任务：新建 PRTS- 开头的独立档案，**用户自己的配置一个字段都不动**
@@ -2189,6 +2317,27 @@ startup recruit infrast fight copilot mall award reclamation roguelike
 所以绝对不要说「已经写入，请你去 MAA 里点开始」，那是旧版本的错说法。
 用户说「先配好别跑」时传 `start=false`，那就只建档案、不碰模拟器。
 
+## 多账号日常（一键长草）走 daily_check → daily_run
+
+**这是另一条路，别拿 build_run 或 skill_fight 顶替**（2026-11-26 用户报障：
+以前的日常是用我们自己的导航 + 作业站 Copilot 打的，MAA 这时也在跑它自己的
+日常队列，两条腿抢同一台模拟器 → MAA 直接报错）。
+
+规矩：
+
+1. **先 daily_check**：它会读每个号自己配的 MAA 档案，报出「理智作战现在刷
+   哪一关」「勾了哪些日常任务」，还有没配档案的号（会用白本配置）。把关卡原样
+   报给用户确认——**别自己猜关卡，也别跳过确认**。
+2. 用户点头后 **daily_run**：账号自己配了关卡就什么都不用传；要统一改就传
+   `stage`；没配档案的号传 `use_recommended=true` 用当前活动的推荐关（XX-8）。
+3. 这套跑的是 MAA 的一键长草：**我们不发 adb 点击、不自己导航、不抄作业**。
+   关卡由 MAA 的理智作战自己进，切号由 MAA 的开始唤醒完成。所以回答里不要说
+   「我先导航到关卡」，也别提作业站。
+4. 同模拟器的号轮替（一个跑完切下一个），不同模拟器并行；每条日志带账号名。
+
+用户说「帮我使用推荐设置一键长草刷左侧所有账号」= accounts 留空 +
+use_recommended=true + 下面推荐的关卡（当期活动默认 XX-8）。
+
 ## 常见对话怎么做
 
 **「帮我把所有账号挂上 TL-5」**
@@ -2208,8 +2357,10 @@ set_account_name（account 尽量给上，按昵称或 file 认）。存进设�
 list_accounts 的 accountName 就有值了，后面挂机不用再问。
 只改我们自己的账号配置，MAA 里一个字都不动。
 
-**「清一下日常」/「帮我收菜」**
-build_run（mode=daily，不用 keyword）。这就是一键长草。
+**「清一下日常」/「帮我收菜」/「多账号一键长草」**
+daily_check（先看每个号配置里刷哪关）→ 报给用户确认 → daily_run。
+**不要用 build_run(mode=daily) 顶替多账号日常**：那个不读每个号自己的关卡，
+也不会按号继承公招/基建/信用的设置。
 
 **「刷点 1-7 的材料」**
 build_run（mode=fight、keyword=1-7）。纯理智作战，不抄作业。

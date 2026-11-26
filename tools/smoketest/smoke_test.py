@@ -8944,13 +8944,16 @@ def main():
                 lambda: check_mirror_source(tmp))
         r.check('B76 桌宠点一下播随机动作（点击与定时共用 / 播不起来也回待机）',
                 lambda: check_theme_pet(tmp))
-        # B77 留给还没合进来的「多开分组只认设备」分支，避免撞号
+        r.check('B77 多开分组只认设备（同一台模拟器不许拆成两个进程）',
+                lambda: check_emulator_group(tmp))
         r.check('B78 绿票 / 黄票商店（从主界面直跑 / 黄票必须先确认才连模拟器）',
                 lambda: check_maatools_shop(tmp))
         r.check('B79 单账号先看界面再干活（在主界面就不重启客户端 / 多账号必须真切号）',
                 lambda: check_home_before_task(tmp))
         r.check('B80 中文关键词兜底（「结城理模组」→ 作业站全文搜 / 关键词+关卡锁定）',
                 lambda: check_keyword_search(tmp))
+        r.check('B81 多账号一键长草（读每号配置的理智作战关卡 / 白本兜底 / 不自己导航）',
+                lambda: check_daily_longgrass(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -8962,6 +8965,55 @@ def main():
         return 1
     print('结果：全部通过')
     return 0
+
+
+def check_emulator_group(tmp):
+    """B77 多开分组只认设备，不认 MAA 目录
+
+    2026-11-26 现场：账号分别绑在 ``MAA-v6.20.1-win-x64`` 和它的 ``…-1``
+    副本上，分组 key 里带着目录，于是 emulator-5554 / 5556 各被拆成两组，
+    同一台模拟器上两个独立进程同时点账号列表 → MAA「点登录 没成功」→
+    ``Login failed, entering game-restart loop`` → 反复关掉并重启游戏。
+
+    这里不连模拟器：``_maa_dir_of`` / ``_conn_of`` 换成假的，只验 key 的
+    组成和地址归一。
+    """
+    from core import skills
+
+    # 同一台设备的两种写法（雷电：adb 口 = 控制台口 + 1）
+    assert skills._norm_addr('127.0.0.1:5557') == 'emulator-5556'
+    assert skills._norm_addr('127.0.0.1:5555') == 'emulator-5554'
+    assert skills._norm_addr('EMULATOR-5554 ') == 'emulator-5554'
+    assert skills._norm_addr('') == '' and skills._norm_addr(None) == ''
+
+    old = (skills._maa_dir_of, skills._conn_of)
+    try:
+        # 两个号绑不同的 MAA 目录、连同一台模拟器 → 必须同一组
+        skills._maa_dir_of = lambda f: 'D:/MAA-A' if f == 'a.json' else 'D:/MAA-B'
+        skills._conn_of = lambda f, d: {'address': 'emulator-5554'}
+        ka, da, _ = skills._emulator_key('a.json')
+        kb, db, _ = skills._emulator_key('b.json')
+        assert ka == kb == 'emulator-5554', (ka, kb)
+        # 目录还是要按号返回（组只保证串行，不能拿组的目录去跑别人的号）
+        assert da != db, 'MAA 目录没按号取'
+        # 换个写法还是同一台
+        skills._conn_of = lambda f, d: {'address': '127.0.0.1:5555'}
+        assert skills._emulator_key('b.json')[0] == ka, '换写法就分成了两台'
+        # 不同设备仍然要分开
+        skills._conn_of = lambda f, d: {'address': 'emulator-5556'}
+        assert skills._emulator_key('b.json')[0] != ka, '两台设备被并成了一组'
+    finally:
+        skills._maa_dir_of, skills._conn_of = old
+
+    # 一键挂机那条路（maaplan.plan_groups）同一条规矩
+    from core import maaplan
+    rows = [{'maaDir': 'D:/MAA-A', 'address': 'emulator-5554', 'name': 'A'},
+            {'maaDir': 'D:/MAA-B', 'address': '127.0.0.1:5555', 'name': 'B'}]
+    groups = maaplan.plan_groups(rows, {})
+    assert len(groups) == 1, '同地址不同 MAA 目录被拆成了 %d 组' % len(groups)
+    assert [r['name'] for r in groups[0][1]['rows']] == ['A', 'B']
+    rows[1]['address'] = 'emulator-5556'
+    assert len(maaplan.plan_groups(rows, {})) == 2, '两台设备被并成了一组'
 
 
 def check_theme_pet(tmp):
@@ -9377,6 +9429,219 @@ def check_keyword_search(tmp):
         assert out.get('keywordStages'), out
     finally:
         copilot._pull = orig
+
+
+def check_daily_longgrass(tmp):
+    """B81 多账号一键长草（读每号配置的理智作战关卡 / 白本兜底 / 不自己导航）
+
+    用户口径（2026-11-26）：多账号日常别再用「我们的导航 + 作业站」打——MAA
+    这时也在跑自己的日常队列，两条腿抢同一台模拟器就报错。改成：读每个号自己
+    MAA 配置里「理智作战」的关卡 → 用户确认 → 用 MAA 的开始唤醒 + 理智作战 +
+    公招/基建/信用/领奖跑；没配档案的号用白本（地址/切号名/关卡留空）。
+
+    五件事：白本内容、档案字段映射、核心任务链的形状（不带 Copilot、Fight
+    次数不写 0）、探测与排方案、工具与引导卡片接线。全程打桩，不连模拟器。
+    """
+    _reset_config(tmp)
+
+    from core import agent, daily, eventnav, maa, maaplan, multiacct
+
+    # ① 白本：任务顺序 + 从 181 抄来的参数；地址 / 切号名 / 关卡必须留空
+    tpl = daily.load_default()
+    assert tpl['tasks'] == ['startup', 'recruit', 'infrast', 'fight',
+                            'mall', 'award'], tpl['tasks']
+    ch = tpl['chain']
+    assert ch['recruit']['times'] == 4, ch['recruit']
+    assert ch['recruit']['first_tags'] == ['支援机械'], ch['recruit']
+    assert ch['infrast']['drones'] == 'CombatRecord', ch['infrast']
+    assert ch['infrast']['threshold'] == 0.3, ch['infrast']
+    assert ch['mall']['buy_first'] == ['招聘许可'], ch['mall']
+    assert ch['mall']['blacklist'] == ['碳', '家具', '加急许可'], ch['mall']
+    assert ch['award']['mail'] and ch['award']['orundum'], ch['award']
+    assert not tpl.get('stage') and not tpl.get('accountName'), tpl
+    assert not tpl.get('address'), tpl
+
+    # ② 档案 → 任务链：只认勾了的；Copilot 进不了核心队列要跳过；
+    #    只剩「开始唤醒」等于没配日常，得退回白本
+    prof = {'TaskQueue': [
+        {'TaskType': 'StartUp', 'IsEnable': True,
+         'AccountName': '181****5505', 'AccountSwitchEnabled': True},
+        {'TaskType': 'Recruit', 'IsEnable': True, 'MaxTimes': 4,
+         'Level3Choose': True, 'Level4Choose': True, 'Level5Choose': False,
+         'Level6Choose': False, 'PreserveTagEnabled': True,
+         'PreserveTagList': ['支援机械'], 'ForceRefresh': True, 'ExtraTagMode': 0},
+        {'TaskType': 'Infrast', 'IsEnable': True, 'UsesOfDrones': 'CombatRecord',
+         'DormThreshold': 30, 'OriginiumShardAutoReplenishment': True,
+         'DormFilterNotStationed': True, 'ReceptionMessageBoard': True,
+         'SendClue': True, 'RoomList': [{'Room': 'Mfg'}, {'Room': 'Trade'}],
+         'PlanSelect': -1},
+        {'TaskType': 'Fight', 'IsEnable': True, 'StagePlan': ['Annihilation']},
+        # 没勾的理智作战不算（用户档案里常见「日常/活动/剿灭」三档并排）
+        {'TaskType': 'Fight', 'IsEnable': False, 'StagePlan': ['OS-9']},
+        # Copilot 根本进不了 MaaCore 的任务队列（见 maaplan 顶部）
+        {'TaskType': 'Copilot', 'IsEnable': True},
+        {'TaskType': 'Mall', 'IsEnable': True, 'FirstList': '招聘许可',
+         'BlackList': '碳;家具', 'CreditFight': True, 'CreditFightFormation': 1,
+         'VisitFriends': True, 'Shopping': True},
+        {'TaskType': 'Award', 'IsEnable': True, 'Award': True, 'Mail': True,
+         'FreeGacha': True, 'Orundum': True, 'Mining': True,
+         'SpecialAccess': True},
+    ]}
+    keys, stages, chain = daily.chain_of_queue(prof['TaskQueue'])
+    assert keys == ['startup', 'recruit', 'infrast', 'fight', 'mall', 'award'], keys
+    assert stages == ['Annihilation'], stages
+    assert chain['recruit']['times'] == 4 and chain['recruit']['select'] == [3, 4]
+    assert chain['infrast']['drones'] == 'CombatRecord'
+    assert chain['infrast']['plan_index'] == -1
+    assert chain['mall']['blacklist'] == ['碳', '家具']
+    assert chain['mall']['formation_index'] == 0
+    assert chain['award']['recruit'] is True          # FreeGacha → MaaCore 的 recruit
+    assert 'times' not in chain['fight']              # 没勾次数限制就别乱给
+    only_wake = [{'TaskType': 'StartUp', 'IsEnable': True}]
+    k2, _s2, _c2 = daily.chain_of_queue(only_wake)
+    assert set(k2) <= {'startup'}, k2                 # detect 会据此退回白本
+
+    # ③ 核心任务链：一键长草的六个任务、没有 Copilot、Fight 次数不是 0
+    spec = {'tasks': keys, 'stages': stages, 'taskParams': chain,
+            'accountName': '181****5505', 'switchAccount': True,
+            'clientType': 'Bilibili', 'maaDir': tmp}
+    seq = maaplan.core_tasks(spec, tmp)
+    assert [t for t, _ in seq] == ['StartUp', 'Recruit', 'Infrast', 'Fight',
+                                   'Mall', 'Award'], [t for t, _ in seq]
+    p = {t: v for t, v in seq}
+    assert p['StartUp']['client_type'] == 'Bilibili', p['StartUp']
+    assert p['StartUp']['account_name'] == '181****5505', p['StartUp']
+    assert p['Fight']['stage'] == 'Annihilation', p['Fight']
+    assert p['Fight']['times'] == 999, p['Fight']     # 单关刷到理智不足
+    assert 'max_times' not in p['Recruit'], p['Recruit']
+    assert p['Infrast']['plan_index'] == -1, p['Infrast']
+    assert p['Mall']['buy_first'] == ['招聘许可'], p['Mall']
+    assert p['Award']['specialaccess'] is True, p['Award']
+
+    # 勾了「限制次数」就照办，别被 999 盖掉
+    spec2 = dict(spec, taskParams=dict(chain, fight={'times': 3}))
+    f2 = {t: v for t, v in maaplan.core_tasks(spec2, tmp)}
+    assert f2['Fight']['times'] == 3, f2['Fight']
+
+    # 一键长草的语义：档案里两关（剿灭 + 活动）也都要刷到理智不够，
+    # 不是「每关打一遍」——run_plan 会给逐号 spec 打 farmToEmpty
+    spec3 = dict(spec, farmToEmpty=True)
+    f3 = [p['times'] for t, p in maaplan.core_tasks(spec3, tmp) if t == 'Fight']
+    assert f3 and all(n == 999 for n in f3), f3
+
+    # ④ 探测：有档案读关卡；没档案用白本并要问关卡
+    orig_c = multiacct.candidates
+    orig_d = multiacct._maa_dir
+    orig_l = daily._load_cfg
+    orig_e = getattr(eventnav, 'ENTRIES')
+    try:
+        multiacct.candidates = lambda: [
+            {'file': 'own.json', 'name': '有档案的号', 'nickName': '',
+             'channel': '官服', 'level': 120, 'maaProfile': '181',
+             'accountName': '181****5505', 'maaDir': tmp, 'progress': {},
+             'adbAddress': 'emulator-5554'},
+            {'file': 'bare.json', 'name': '没档案的号', 'nickName': '',
+             'channel': 'bilibili服', 'level': 100, 'maaProfile': '',
+             'accountName': '某b服名', 'maaDir': tmp, 'progress': {},
+             'adbAddress': 'emulator-5554'},
+        ]
+        multiacct._maa_dir = lambda req=None: tmp
+        daily._load_cfg = lambda d: {'Configurations': {
+            '181': dict(prof, Gui={'ConnectSettings': {'Address': 'emulator-5554',
+                                                       'Config': 'LDPlayer'}})},
+            'Current': '181'}
+        info = daily.detect({'accounts': []})
+        assert info['ok'], info
+        by = {a['file']: a for a in info['accounts']}
+        own, bare = by['own.json'], by['bare.json']
+        assert own['source'] == 'profile' and own['profile'] == '181', own
+        assert own['stages'] == ['Annihilation'], own['stages']
+        assert own['address'] == 'emulator-5554', own['address']
+        assert not own['needStage'], own
+        assert bare['source'] == 'default' and not bare['stages'], bare
+        assert bare['needStage'] and bare['tasks'] == list(daily.ORDER), bare
+        assert [x['file'] for x in info['needStage']] == ['bare.json'], info['needStage']
+
+        # 用户没给关卡 → 没档案的号排不出来，原样告诉他缺什么
+        p0 = daily.plan({'accounts': []})
+        assert p0['ok'] and [r['file'] for r in p0['rows']] == ['own.json'], p0
+        assert [x['file'] for x in p0['needStage']] == ['bare.json'], p0['needStage']
+
+        # 给了关卡 → 两个号都刷它（用户改口以他为准）
+        p1 = daily.plan({'accounts': [], 'stage': 'OS-8'})
+        assert p1['ok'] and len(p1['rows']) == 2, p1
+        assert all(r['stages'] == ['OS-8'] for r in p1['rows']), p1['rows']
+        assert p1['rows'][0]['tasks'] == keys, p1['rows'][0]
+
+        # 只有没档案的号、又不给关卡 → 直接说排不出来（不偷偷用白本的空关卡）
+        p2 = daily.plan({'accounts': ['bare.json']})
+        assert not p2['ok'] and p2['needStage'], p2
+
+        # 推荐设置只补「自己没写关卡」的号：别人配好的剿灭不许被改掉
+        p3 = daily.plan({'accounts': [], 'fallbackStage': 'OS-8'})
+        assert p3['ok'], p3
+        by3 = {r['file']: r for r in p3['rows']}
+        assert by3['own.json']['stages'] == ['Annihilation'], by3['own.json']
+        assert by3['bare.json']['stages'] == ['OS-8'], by3['bare.json']
+
+        # 推荐关卡：只挑还开着的活动，默认 -8（用真实存在的前缀 OS，
+        # 关卡代号要能被资源包认出来——认不出就往下退一档，这本身也是逻辑）
+        eventnav.ENTRIES = {'OS': {'name': '测试活动', 'until': '2999-01-01'}}
+        rec = daily.recommended()
+        assert rec and rec[0]['code'] == 'OS-8', rec
+        # 活动没结束但关卡认不出（ZZ 不在资源包里）→ 宁可不推荐
+        eventnav.ENTRIES = {'ZZ': {'name': '假活动', 'until': '2999-01-01'}}
+        assert daily.recommended() == [], daily.recommended()
+
+        # ⑤ 执行：交给 run_plan 的「按模拟器分组」，逐号参数都带过去
+        got = {}
+        orig_run = maaplan.run_plan
+        try:
+            maaplan.run_plan = lambda rows, base, tid=None: got.update(
+                rows=rows, base=base) or {'ok': True}
+            daily.run({'rows': p1['rows'], 'maaDir': tmp}, None)
+        finally:
+            maaplan.run_plan = orig_run
+        assert len(got['rows']) == 2, got
+        assert got['base']['tasks'] == list(daily.ORDER), got['base']
+        assert got['rows'][0]['chain']['mall']['buy_first'] == ['招聘许可'], got['rows'][0]
+
+        # ⑤2 逐号 spec：任务清单 / 关卡 / 参数 / 档案 / 客户端类型都不能共用一份
+        seen = []
+        orig_core, orig_running = maaplan.run_core, maa.running_in
+        try:
+            maaplan.run_core = lambda spec, tid=None: seen.append(dict(spec)) or {'ok': True}
+            maa.running_in = lambda d: None
+            maaplan.run_plan(p1['rows'], {'tasks': list(daily.ORDER),
+                                          'maaDir': tmp}, None)
+        finally:
+            maaplan.run_core, maa.running_in = orig_core, orig_running
+        assert len(seen) == 2, seen
+        a0, a1 = seen
+        assert a0['tasks'] == keys and a0['stages'] == ['OS-8'], a0
+        assert a0['taskParams']['infrast']['drones'] == 'CombatRecord', a0['taskParams']
+        assert a0['profile'] == '181', a0            # 用他自己的连接设置
+        assert a0['clientType'] == 'Official', a0    # 官服按官服包开
+        assert a1['clientType'] == 'Bilibili', a1    # b 服不许被按官服启动
+        assert a1['accountName'] == '某b服名', a1
+        assert a0.get('farmToEmpty') is True, a0     # 一键长草：刷到理智不够
+        assert 'noNav' not in a0, a0                 # 一键长草不需要我们导航
+    finally:
+        multiacct.candidates = orig_c
+        multiacct._maa_dir = orig_d
+        daily._load_cfg = orig_l
+        eventnav.ENTRIES = orig_e
+
+    # ⑥ 接线：两个工具都在、daily_run 走写操作闸门、引导卡片有那一条
+    names = [t['function']['name'] for t in agent.TOOLS]
+    assert 'daily_check' in names and 'daily_run' in names, names
+    assert agent._HANDLERS.get('daily_check'), 'daily_check 是只读工具'
+    assert agent._WRITE_HANDLERS.get('daily_run'), 'daily_run 必须先确认'
+    js = open(os.path.join(REPO, 'frontend', 'app.js'),
+              encoding='utf-8', errors='ignore').read()
+    assert '帮我使用推荐设置一键长草刷左侧所有账号' in js, '引导卡片没加上'
+    # 提示词里必须点名这条路，否则模型还会拿 build_run(mode=daily) 顶替
+    assert 'daily_check' in agent.SYSTEM and 'daily_run' in agent.SYSTEM
 
 
 if __name__ == '__main__':

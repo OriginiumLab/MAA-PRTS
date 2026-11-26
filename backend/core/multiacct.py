@@ -83,6 +83,9 @@ def candidates():
             'level': row.get('level'),
             'maaProfile': row.get('maaProfile') or '',
             'accountName': nm,
+            # 这个号钉在哪台模拟器（设置 → 账号 → 模拟器）。多开分流靠它，
+            # 一键长草也用它分组：档案里全是同一台的八份配置分不出两台
+            'adbAddress': row.get('maaAdbAddress') or '',
             'maaDir': row.get('maaDir') or '',
             'progress': row.get('progress') or {},
         })

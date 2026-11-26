@@ -6,6 +6,7 @@ pywebview（WebView2）原生窗口 + 内置 HTTP 服务。
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import socket
@@ -15,6 +16,7 @@ import time
 import traceback
 import urllib.parse
 import webbrowser
+from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -429,15 +431,43 @@ def _quit(code=0, reason='退出'):
 
 
 # ---------------------------------------------------------------- 窗口位置记忆
-# pywebview 的 moved/resized/maximized/restored 事件都是逻辑像素，和
-# create_window(x=, y=, width=, height=) 的口径一致。关闭时写回
-# settings.json 的 windowGeom，下次启动按它还原；位置不在任何屏幕上
-# （换显示器/拔屏）就退回居中，别把窗口丢到看不见的地方。
-_WINGEOM = {'x': None, 'y': None, 'width': None, 'height': None,
-            'max': False, 'min': False}
-_WINGEOM_LOCK = threading.Lock()
+# 位置/大小写回 settings.json 的 windowGeom，下次启动按它还原；位置不在任何
+# 屏幕上（换显示器/拔屏）就退回居中，别把窗口丢到看不见的地方。
+#
+# 为什么不信 pywebview 的 moved/resized 事件：它们（连同 minimized 等）都是
+# Event.set 里另起线程异步回调的，先后没有保证。2026-11-26 实测：最小化时
+# moved 带着 Win32 的 -32000 哨兵坐标先于 minimized 到达（150% DPI 下就是
+# 存进 settings.json 的 -21333），最大化时 moved 先报屏幕左上角，restored
+# 之后那次合法的 moved 又会被「还在最小化」误挡——靠事件攒值必然存坏。
+# 现在事件只当「动过了」的触发信号，真正落盘时读 Win32 GetWindowPlacement
+# 的 rcNormalPosition：窗口最小化/最大化时它仍是正常态的矩形，正是
+# create_window 要还原的位置；再除以 GetDpiForWindow 的缩放换成逻辑像素，
+# 与 pywebview 的 create_window(x=, y=, width=, height=) 同口径。
 _WIN = [None]          # 主窗口（供 _quit 兜底保存）
 _WIN_SHOWN = [False]
+_WINGEOM_SAVED = [False]     # closing 已存过：_quit 时窗口已经没了，别再覆盖
+_WINGEOM_DIRTY = threading.Event()
+_SCREENS = [[]]              # 启动时的屏幕快照（_screens_now 取不到时兜底）
+
+_USER32 = ctypes.WinDLL('user32', use_last_error=True) if sys.platform == 'win32' else None
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [('length', wintypes.UINT), ('flags', wintypes.UINT),
+                ('showCmd', wintypes.UINT),
+                ('ptMinPosition', wintypes.POINT),
+                ('ptMaxPosition', wintypes.POINT),
+                ('rcNormalPosition', wintypes.RECT)]
+
+
+if _USER32 is not None:
+    _USER32.GetWindowPlacement.argtypes = [wintypes.HWND,
+                                           ctypes.POINTER(_WINDOWPLACEMENT)]
+    _USER32.GetWindowPlacement.restype = wintypes.BOOL
+_GET_DPI = getattr(_USER32, 'GetDpiForWindow', None) if _USER32 is not None else None
+if _GET_DPI is not None:
+    _GET_DPI.argtypes = [wintypes.HWND]
+    _GET_DPI.restype = wintypes.UINT
 
 
 def _geom_visible(g: dict, screens) -> bool:
@@ -454,53 +484,107 @@ def _geom_visible(g: dict, screens) -> bool:
     return False
 
 
-def _wingeom_moved(x, y):
-    with _WINGEOM_LOCK:
-        if not (_WINGEOM['max'] or _WINGEOM['min']):
-            _WINGEOM['x'], _WINGEOM['y'] = int(x), int(y)
+def _screens_now():
+    """当前屏幕列表（逻辑像素）。显示器热插拔后启动时那份会过时，落盘前现取；
+    取不到（还没起 webview / 平台异常）就退回启动时的快照。"""
+    try:
+        import webview as _wv
+        got = list(_wv.screens)
+        if got:
+            return got
+    except Exception:
+        pass
+    return _SCREENS[0]
 
 
-def _wingeom_resized(w, h):
-    with _WINGEOM_LOCK:
-        if not (_WINGEOM['max'] or _WINGEOM['min']):
-            _WINGEOM['width'], _WINGEOM['height'] = int(w), int(h)
+def _win_normal_geom():
+    """主窗口「正常态」几何（逻辑像素），读不到返回 None
+
+    最小化时读窗口坐标会拿到 -32000 哨兵、最大化时拿到屏幕左上角，
+    GetWindowPlacement 的 rcNormalPosition 这两种情况都保持正常态矩形。
+    """
+    if _USER32 is None:
+        return None
+    win = _WIN[0]
+    native = getattr(win, 'native', None) if win is not None else None
+    try:
+        hwnd = int(native.Handle.ToInt64())
+    except Exception:
+        return None
+    wp = _WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+    if not _USER32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+        return None
+    scale = 1.0
+    if _GET_DPI is not None:
+        try:
+            dpi = int(_GET_DPI(hwnd))
+            if dpi > 0:
+                scale = dpi / 96.0
+        except Exception:
+            pass
+    r = wp.rcNormalPosition
+    w = int((r.right - r.left) / scale)
+    h = int((r.bottom - r.top) / scale)
+    if w <= 0 or h <= 0:
+        return None
+    return {'x': int(r.left / scale), 'y': int(r.top / scale),
+            'width': w, 'height': h, 'max': wp.showCmd == 3}
 
 
-def _wingeom_maximized():
-    with _WINGEOM_LOCK:
-        _WINGEOM['max'] = True
-        _WINGEOM['min'] = False
+def _wingeom_touch(*_args):
+    """窗口动过 / 状态变了 → 让后台线程过一会儿存一次（不用每次事件都写盘）"""
+    _WINGEOM_DIRTY.set()
 
 
-def _wingeom_minimized():
-    with _WINGEOM_LOCK:
-        _WINGEOM['min'] = True
+def _wingeom_persist():
+    """把当前窗口几何写回 settings.json，返回是否写了。
+
+    不在任何屏幕上的位置一律不写，宁可保留上一次能用的值（拔显示器时
+    Windows 给的坐标可能还停在已断开的屏上）。
+    """
+    if _WINGEOM_SAVED[0] or not _WIN_SHOWN[0] or _WIN[0] is None:
+        return False
+    g = _win_normal_geom()
+    if not g or not _geom_visible(g, _screens_now()):
+        return False
+    try:
+        settings.save({'windowGeom': g})
+        return True
+    except Exception:
+        log(traceback.format_exc())
+        return False
 
 
-def _wingeom_restored():
-    with _WINGEOM_LOCK:
-        _WINGEOM['max'] = False
-        _WINGEOM['min'] = False
+def _wingeom_loop():
+    """窗口动过之后安静 1.2 秒再落盘一次。
+
+    不能只靠关窗时存：重新打包前惯用 taskkill /F 杀旧 exe，进程根本
+    没有 closing 事件，那次会话挪过的位置就丢了。动一下就存，即使被杀，
+    下次启动也会回到最后停下的位置。
+    """
+    while True:
+        _WINGEOM_DIRTY.wait()
+        time.sleep(1.2)
+        _WINGEOM_DIRTY.clear()
+        try:
+            _wingeom_persist()
+        except Exception:
+            log(traceback.format_exc())
+
+
+def _wingeom_shown():
+    _WIN_SHOWN[0] = True
+    _wingeom_touch()      # 启动时的落位也记一次（首次运行 / 没存过位置）
 
 
 def _wingeom_save():
-    """把主窗口几何写回 settings.json（窗口关闭/进程退出时调用，幂等）"""
-    with _WINGEOM_LOCK:
-        g = {k: _WINGEOM[k] for k in ('x', 'y', 'width', 'height')
-             if _WINGEOM.get(k) is not None}
-        g['max'] = bool(_WINGEOM.get('max'))
-        frozen = bool(_WINGEOM.get('max') or _WINGEOM.get('min'))
-    win = _WIN[0]
-    if win is not None and _WIN_SHOWN[0] and not frozen:
-        # 最大化/最小化时读出来的是屏幕尺寸或 -32000，用事件里攒的正常值
-        try:
-            g.update(x=int(win.x), y=int(win.y),
-                     width=int(win.width), height=int(win.height))
-        except Exception:
-            pass
+    """closing 事件 / 进程退出兜底：读权威几何落盘一次，之后不再覆盖"""
+    if _WINGEOM_SAVED[0]:
+        return True
     try:
-        if g.get('width') and g.get('height'):
-            settings.save({'windowGeom': g})
+        if _wingeom_persist():
+            _WINGEOM_SAVED[0] = True
     except Exception:
         log(traceback.format_exc())
     return True          # closing 事件：不返回 False 就不会拦关闭
@@ -625,6 +709,7 @@ def main():
         screens = list(webview.screens)   # 逻辑像素，和 create_window 同口径
     except Exception:
         screens = []
+    _SCREENS[0] = screens
     win_x, win_y = geom.get('x'), geom.get('y')
     if win_x is None or win_y is None or not _geom_visible(geom, screens):
         win_x = win_y = None              # 位置不在了（换屏/拔显示器）→ 居中
@@ -636,18 +721,15 @@ def main():
         win_kw['maximized'] = True
     window = webview.create_window('MAA-PRTS · 作业控制台', url, **win_kw)
     _WIN[0] = window
-    with _WINGEOM_LOCK:
-        _WINGEOM.update(x=int(win_x) if win_x is not None else None,
-                        y=int(win_y) if win_y is not None else None,
-                        width=win_w, height=win_h,
-                        max=bool(geom.get('max')), min=False)
-    window.events.shown += lambda: _WIN_SHOWN.__setitem__(0, True)
-    window.events.moved += _wingeom_moved
-    window.events.resized += _wingeom_resized
-    window.events.maximized += _wingeom_maximized
-    window.events.minimized += _wingeom_minimized
-    window.events.restored += _wingeom_restored
+    # 事件只用来触发「过一会儿存一次」，坐标以落盘时读到的窗口状态为准
+    window.events.shown += _wingeom_shown
+    window.events.moved += _wingeom_touch
+    window.events.resized += _wingeom_touch
+    window.events.maximized += _wingeom_touch
+    window.events.minimized += _wingeom_touch
+    window.events.restored += _wingeom_touch
     window.events.closing += _wingeom_save
+    threading.Thread(target=_wingeom_loop, daemon=True, name='wingeom').start()
     webview.start(debug=debug, private_mode=False)
     _quit(0, '窗口已关闭')
 

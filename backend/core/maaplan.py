@@ -682,8 +682,17 @@ def core_tasks(spec, maa_dir=None):
     # - 挂了多关：每关打一遍。否则第一关就把理智吃光，后面七关形同虚设
     if per_round:
         times = max(1, int(per_round))
+    elif spec.get('farmToEmpty'):
+        # 一键长草（core/daily.py）：每个理智作战任务都是「刷到理智不够」，
+        # 和排了几关无关。档案里勾了次数限制的会由 taskParams 覆盖掉这个值。
+        times = 999
     else:
         times = 999 if len(stages) <= 1 else 1
+
+    # 逐任务参数覆盖：日常（core/daily.py）会把用户档案里「一键长草」那几项的
+    # 设置翻译成 MaaCore 参数塞进来（公招几次、基建无人机用途、信用商店黑名单
+    # …）。键名照 MAA 的集成文档，这里不认识的键 MaaCore 自己会忽略。
+    ov = spec.get('taskParams') or {}
 
     out = []
     for key in want:
@@ -709,6 +718,15 @@ def core_tasks(spec, maa_dir=None):
             for st in (stages or []):
                 p = {'stage': st, 'medicine': 0, 'stone': 0,
                      'times': times, 'series': 0}
+                p.update(ov.get('fight') or {})
+                p['stage'] = st           # 关卡永远以 stages 为准，别被覆盖
+                # times=0 在 MaaCore 里是「打 0 次」，不是「不限次数」——档案
+                # 没勾次数限制时 daily 会传 0 进来，这里必须退回默认口径
+                try:
+                    if int(p.get('times') or 0) <= 0:
+                        p['times'] = times
+                except (TypeError, ValueError):
+                    p['times'] = times
                 out.append(('Fight', p))
         elif ttype == 'Copilot':
             rows = spec.get('copilotList') or []
@@ -716,24 +734,33 @@ def core_tasks(spec, maa_dir=None):
                 continue
             out.append(('Copilot', _copilot_params(rows, spec)))
         elif ttype == 'Recruit':
-            out.append(('Recruit', {'max_times': 4, 'refresh': True,
-                                    'select': [3, 4], 'confirm': [3, 4],
-                                    'expedite': False}))
+            # 次数在 MaaCore 里叫 ``times``（以前写的 ``max_times`` 一直是被
+            # 忽略的，等于「刷到没许可为止」；用户档案里的 MaxTimes=4 传不进来）
+            p = {'times': 4, 'refresh': True,
+                 'select': [3, 4], 'confirm': [3, 4],
+                 'expedite': False}
+            p.update(ov.get('recruit') or {})
+            out.append(('Recruit', p))
         elif ttype == 'Infrast':
-            out.append(('Infrast', {
-                'mode': 0,
-                'facility': ['Mfg', 'Trade', 'Control', 'Power', 'Reception',
-                             'Office', 'Dorm', 'Processing', 'Training'],
-                'drones': 'Money', 'threshold': 0.3, 'replenish': True}))
+            p = {'mode': 0,
+                 'facility': ['Mfg', 'Trade', 'Control', 'Power', 'Reception',
+                              'Office', 'Dorm', 'Processing', 'Training'],
+                 'drones': 'Money', 'threshold': 0.3, 'replenish': True,
+                 'filename': '', 'plan_index': 0}
+            p.update(ov.get('infrast') or {})
+            out.append(('Infrast', p))
         elif ttype == 'Mall':
-            out.append(('Mall', {'shopping': True, 'buy_first': ['招聘许可'],
-                                 'blacklist': ['碳', '家具', '加急许可'],
-                                 'force_shopping_if_credit_full': True,
-                                 'visit_friends': True}))
+            p = {'shopping': True, 'buy_first': ['招聘许可'],
+                 'blacklist': ['碳', '家具', '加急许可'],
+                 'force_shopping_if_credit_full': True,
+                 'visit_friends': True}
+            p.update(ov.get('mall') or {})
+            out.append(('Mall', p))
         elif ttype == 'Award':
-            out.append(('Award', {'award': True, 'mail': True, 'recruit': True,
-                                  'orundum': True, 'mining': True,
-                                  'specialaccess': True}))
+            p = {'award': True, 'mail': True, 'recruit': True,
+                 'orundum': True, 'mining': True, 'specialaccess': True}
+            p.update(ov.get('award') or {})
+            out.append(('Award', p))
         elif ttype == 'Roguelike':
             out.append(('Roguelike', {}))
         elif ttype == 'Reclamation':
@@ -2588,14 +2615,35 @@ def _wait_chain(eng, chain, log, timeout=300):
     return False
 
 
+def addr_key(addr):
+    """设备地址归一：同一台机器换个写法不能算成两台
+
+    雷电的控制台口比 adb 口大 1（``127.0.0.1:5557`` 就是 ``emulator-5556``），
+    两种写法在档案里都出现过；大小写和空白也统一掉。
+
+    分组只认它（**不认 MAA 目录**）——2026-11-26 现场：账号分别绑在
+    ``MAA-v6.20.1-win-x64`` 和它的 ``…-1`` 副本上，key 里带上目录就把同一台
+    模拟器拆成了两组、两个进程同时点账号列表，MAA 报「点登录 没成功」→
+    ``Login failed, entering game-restart loop`` → 反复关掉并重启游戏。
+    """
+    a = str(addr or '').strip().lower()
+    m = re.match(r'^(?:127\.0\.0\.1|localhost)[:\-](\d{4,5})$', a)
+    if m:
+        return 'emulator-%d' % (int(m.group(1)) - 1)
+    return a
+
+
 def plan_groups(rows, spec_base=None):
-    """按「MAA 目录 + adb 地址」把账号分组：同组=同一台模拟器
+    """按「模拟器地址」把账号分组：同组=同一台模拟器
 
     2026-11-22 用户要求：每个账号可以绑自己的 MAA（也就连着不同的模拟器）。
 
     - **不同模拟器** → 各开一条线程，真正同时跑（多开）；
     - **同一台模拟器** → 只能排队，一个号跑完切下一个（一台模拟器同一时刻
       只能登一个号）。
+
+    **key 只认设备地址，不带 MAA 目录**（2026-11-26 现场，见 :func:`addr_key`）：
+    同一台模拟器上换个 MAA 目录照样是同一台设备，拆成两组并行只会互相抢界面。
 
     返回 ``[(key, {'dir','address','rows'})]``，顺序按账号出现顺序。
 
@@ -2611,7 +2659,7 @@ def plan_groups(rows, spec_base=None):
         except Exception:
             conn = {'address': '', 'adb_path': ''}
         addr = str(r.get('address') or conn.get('address') or '')
-        key = (os.path.normcase(os.path.abspath(d or '.')), addr)
+        key = addr_key(addr)
         g = groups.setdefault(key, {'dir': d, 'address': addr,
                                     'rows': []})
         g['rows'].append(r)
@@ -2621,13 +2669,19 @@ def plan_groups(rows, spec_base=None):
 def _run_group(g, spec_base, tid, log):
     """一个模拟器上的账号排队跑（组内串行）"""
     out = []
-    d = g['dir'] or spec_base.get('maaDir') or ''
+    d0 = g['dir'] or spec_base.get('maaDir') or ''
     # 同一个模拟器不能两个人同时戳：MAA 自己在跑就先关掉，否则两条 adb 连接
     # 互相抢截图，表现成「点了没反应」。
-    if d and maa.running_in(d):
-        log('MAA 正在运行，先关掉（否则两边抢模拟器）…')
-        maa.close(d)
+    # 组只保证串行，组里可能混着绑不同 MAA 目录的号（2026-11-26），
+    # 所以每个号按自己的目录跑、各自的目录先关一次 MAA。
+    closed = set()
     for i, r in enumerate(g['rows'], 1):
+        d = str(r.get('maaDir') or d0)
+        if d and d not in closed:
+            closed.add(d)
+            if maa.running_in(d):
+                log('MAA 正在运行，先关掉（否则两边抢模拟器）…')
+                maa.close(d)
         log('=' * 20 + ' [%d/%d] %s ' % (i, len(g['rows']),
                                          r.get('name') or '') + '=' * 20)
         log('模拟器 %s（%s）；切号名 %s'
@@ -2650,6 +2704,22 @@ def _run_group(g, spec_base, tid, log):
             # 重挂（_retry_failed）换作业时按同一账号练度做替换（#92）
             'accountFile': r.get('file') or '',
         })
+        # 一键长草（core/daily.py）：任务清单 / 关卡 / 参数都是**这个号自己档案
+        # 里的**，不能和别的号共用一个 spec。row 上有就盖掉，只影响这一个号。
+        for k_src, k_dst in (('tasks', 'tasks'), ('stages', 'stages'),
+                             ('chain', 'taskParams'), ('profile', 'profile')):
+            if r.get(k_src):
+                spec[k_dst] = r[k_src]
+        if r.get('chain'):
+            # 一键长草的语义：每个理智作战任务刷到理智不够（不是每关打一遍）
+            spec['farmToEmpty'] = True
+            # 档案里的理智作战次数（EnableTimesLimit）优先于「单关就刷到没理智」
+            try:
+                per = int((r['chain'].get('fight') or {}).get('times') or 0)
+            except (TypeError, ValueError):
+                per = 0
+            if per > 0:
+                spec['stagesPerRound'] = per
         try:
             res = run_core(spec, tid)
             out.append({'name': r.get('name') or '',
