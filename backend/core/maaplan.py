@@ -682,8 +682,17 @@ def core_tasks(spec, maa_dir=None):
     # - 挂了多关：每关打一遍。否则第一关就把理智吃光，后面七关形同虚设
     if per_round:
         times = max(1, int(per_round))
+    elif spec.get('farmToEmpty'):
+        # 一键长草（core/daily.py）：每个理智作战任务都是「刷到理智不够」，
+        # 和排了几关无关。档案里勾了次数限制的会由 taskParams 覆盖掉这个值。
+        times = 999
     else:
         times = 999 if len(stages) <= 1 else 1
+
+    # 逐任务参数覆盖：日常（core/daily.py）会把用户档案里「一键长草」那几项的
+    # 设置翻译成 MaaCore 参数塞进来（公招几次、基建无人机用途、信用商店黑名单
+    # …）。键名照 MAA 的集成文档，这里不认识的键 MaaCore 自己会忽略。
+    ov = spec.get('taskParams') or {}
 
     out = []
     for key in want:
@@ -709,6 +718,15 @@ def core_tasks(spec, maa_dir=None):
             for st in (stages or []):
                 p = {'stage': st, 'medicine': 0, 'stone': 0,
                      'times': times, 'series': 0}
+                p.update(ov.get('fight') or {})
+                p['stage'] = st           # 关卡永远以 stages 为准，别被覆盖
+                # times=0 在 MaaCore 里是「打 0 次」，不是「不限次数」——档案
+                # 没勾次数限制时 daily 会传 0 进来，这里必须退回默认口径
+                try:
+                    if int(p.get('times') or 0) <= 0:
+                        p['times'] = times
+                except (TypeError, ValueError):
+                    p['times'] = times
                 out.append(('Fight', p))
         elif ttype == 'Copilot':
             rows = spec.get('copilotList') or []
@@ -716,24 +734,33 @@ def core_tasks(spec, maa_dir=None):
                 continue
             out.append(('Copilot', _copilot_params(rows, spec)))
         elif ttype == 'Recruit':
-            out.append(('Recruit', {'max_times': 4, 'refresh': True,
-                                    'select': [3, 4], 'confirm': [3, 4],
-                                    'expedite': False}))
+            # 次数在 MaaCore 里叫 ``times``（以前写的 ``max_times`` 一直是被
+            # 忽略的，等于「刷到没许可为止」；用户档案里的 MaxTimes=4 传不进来）
+            p = {'times': 4, 'refresh': True,
+                 'select': [3, 4], 'confirm': [3, 4],
+                 'expedite': False}
+            p.update(ov.get('recruit') or {})
+            out.append(('Recruit', p))
         elif ttype == 'Infrast':
-            out.append(('Infrast', {
-                'mode': 0,
-                'facility': ['Mfg', 'Trade', 'Control', 'Power', 'Reception',
-                             'Office', 'Dorm', 'Processing', 'Training'],
-                'drones': 'Money', 'threshold': 0.3, 'replenish': True}))
+            p = {'mode': 0,
+                 'facility': ['Mfg', 'Trade', 'Control', 'Power', 'Reception',
+                              'Office', 'Dorm', 'Processing', 'Training'],
+                 'drones': 'Money', 'threshold': 0.3, 'replenish': True,
+                 'filename': '', 'plan_index': 0}
+            p.update(ov.get('infrast') or {})
+            out.append(('Infrast', p))
         elif ttype == 'Mall':
-            out.append(('Mall', {'shopping': True, 'buy_first': ['招聘许可'],
-                                 'blacklist': ['碳', '家具', '加急许可'],
-                                 'force_shopping_if_credit_full': True,
-                                 'visit_friends': True}))
+            p = {'shopping': True, 'buy_first': ['招聘许可'],
+                 'blacklist': ['碳', '家具', '加急许可'],
+                 'force_shopping_if_credit_full': True,
+                 'visit_friends': True}
+            p.update(ov.get('mall') or {})
+            out.append(('Mall', p))
         elif ttype == 'Award':
-            out.append(('Award', {'award': True, 'mail': True, 'recruit': True,
-                                  'orundum': True, 'mining': True,
-                                  'specialaccess': True}))
+            p = {'award': True, 'mail': True, 'recruit': True,
+                 'orundum': True, 'mining': True, 'specialaccess': True}
+            p.update(ov.get('award') or {})
+            out.append(('Award', p))
         elif ttype == 'Roguelike':
             out.append(('Roguelike', {}))
         elif ttype == 'Reclamation':
@@ -2650,6 +2677,22 @@ def _run_group(g, spec_base, tid, log):
             # 重挂（_retry_failed）换作业时按同一账号练度做替换（#92）
             'accountFile': r.get('file') or '',
         })
+        # 一键长草（core/daily.py）：任务清单 / 关卡 / 参数都是**这个号自己档案
+        # 里的**，不能和别的号共用一个 spec。row 上有就盖掉，只影响这一个号。
+        for k_src, k_dst in (('tasks', 'tasks'), ('stages', 'stages'),
+                             ('chain', 'taskParams'), ('profile', 'profile')):
+            if r.get(k_src):
+                spec[k_dst] = r[k_src]
+        if r.get('chain'):
+            # 一键长草的语义：每个理智作战任务刷到理智不够（不是每关打一遍）
+            spec['farmToEmpty'] = True
+            # 档案里的理智作战次数（EnableTimesLimit）优先于「单关就刷到没理智」
+            try:
+                per = int((r['chain'].get('fight') or {}).get('times') or 0)
+            except (TypeError, ValueError):
+                per = 0
+            if per > 0:
+                spec['stagesPerRound'] = per
         try:
             res = run_core(spec, tid)
             out.append({'name': r.get('name') or '',

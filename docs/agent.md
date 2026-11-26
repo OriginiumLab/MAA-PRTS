@@ -76,7 +76,9 @@ Copilot 参数按用户在 MAA「自动战斗」页常勾的三项给：`formati
 | `maa_capabilities` | 这台 MAA 能配哪些任务、有哪些预设 | 只读 |
 | `list_profiles` | MAA 里有哪些档案、当前是哪个、几个作业 | 只读 |
 | `plan_multi_account` | 给多个账号排方案（**只生成**，不写盘） | 只读 |
+| `daily_check` | 多账号日常先看这个：每个号自己 MAA 配置里「理智作战」刷哪一关、勾了哪些日常任务，没配档案的号会说明用白本；另给当前活动推荐的材料关（XX-8） | 只读 |
 | **`build_run`** | **主力**：配任务 + 写作业 + 直连跑起来 | **写**，需确认 |
+| **`daily_run`** | **多账号日常主力**：MAA 一键长草（唤醒/公招/基建/理智作战/信用/领奖），读每号自己的关卡，**不自己导航、不抄作业** | **写**，需确认 |
 | `apply_plan` | 把 plan_multi_account 的方案跑起来 | **写**，需确认 |
 | `add_stages` | 单账号挂一组关卡（`build_run` 的快捷方式） | **写**，需确认 |
 | `set_account_name` | 存切号名（用户报的手机号尾号） | 写（不碰 MAA） |
@@ -119,6 +121,27 @@ fight copilot mall award reclamation roguelike`）。
 
 `run_plan` 开跑前会检查同目录的 MAA 进程，正在跑就先 `maa.close()`——同一个
 模拟器不能被两条 adb 连接同时戳，否则表现成「点了没反应」。
+
+### 多账号日常（`daily_check` → `daily_run`），别拿 `build_run` 顶替
+
+2026-11-26 用户报障：多账号日常以前是「我们的 `stagenav` 导航 + 作业站 Copilot」
+打的，而 MAA 这时也在跑它自己的日常队列——两条腿抢同一台模拟器，MAA 直接报错。
+
+现在的规矩：
+
+1. **`daily_check` 先看**：读每个号**自己**的 MAA 配置档案（`maaprofile`，或按
+   切号名对上），报出 `Fight` 里正在刷的关卡（`Annihilation`、`OS-9` 这种）和
+   勾了的日常任务。没配档案、或档案里只剩「开始唤醒」的号会标 `source=default`。
+   把关卡原样报给用户确认，**不许自己猜关卡**。
+2. **`daily_run` 再跑**：账号自己配了关卡就什么都不传；要统一改传 `stage`；
+   没配档案的号传 `use_recommended=true`（当期活动默认 `XX-8`）。
+3. 跑的是 MAA 的一键长草：**我们不发 adb 点击、不导航、不抄作业**。关卡由
+   MAA 的理智作战自己进，切号由 MAA 的开始唤醒做（`account_name`）。所以回答里
+   不能说「我先导航到关卡」，也别提作业站。
+4. 同一台模拟器的号轮替（一个跑完切下一个），不同模拟器并行（各自独立进程）。
+
+`build_run(mode=daily)` 仍在，但它用的是**我们的**默认链，不读账号自己的配置——
+多账号日常一律走 `daily_run`。
 
 **工具出参就是 `accounts.list_accounts()` / `progress.summary()` 的字段**，改这两个
 函数的键名时要同步改工具，否则模型拿到的是 `null` 或直接 `KeyError`（2026-11-16
