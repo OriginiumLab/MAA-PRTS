@@ -26,6 +26,18 @@
 这两项都在**当期活动地图**上（和「残照终尽」那些分区节点同一屏），所以流程
 是「活动地图 → 点节点 → 再交给 MaaCore」，导航部分见 :func:`eventnav.run_tool`。
 
+2026-11-26 又接了两项常驻商店（绿票 / 黄票），它们**不需要我们导航**：MAA 的
+``GreenTicket@Store@Begin`` / ``YellowTicket@Store@Begin`` 自己从主界面点
+「终端 → 仓库 → 凭证交易所」再切到对应区域，实测（v6.23.2，asst.log）：
+
+    asst::Assistant::append_task Custom {"task_names":["GreenTicket@Store@Begin"]}
+    ... cur_task":"GreenTicket@Store@ClickFirstFloor"   ← 一层逐个买
+    ... cur_task":"GreenTicket@Store@ClickSecondFloor"  ← 二层只买单抽 / 招募许可
+
+所以这两项只要求「人在主界面」（:func:`stagenav.reach_home`），不要再去活动
+地图上找入口。任务名里的 ``@Begin`` 在 ``resource/tasks/tasks.json`` 里查不到
+——MAA 牛杂面板传的就是这一串，asst.log 里核心照样跑起来了，别当成拼错去改。
+
 教程
 ----
 小游戏第一次进要过一段教程，MAA 的任务不会替你点教程里的对话/选项——它会
@@ -75,6 +87,39 @@ TOOLS = {
         'task': {'task_names': ['SS@Store@Begin']},
         'timeout': 1800,
         'note': '到商店页面再交给 MAA；黑名单里的商品不会买，无限池也不会碰。',
+    },
+    # ---- 常驻商店（2026-11-26）：不用导航，任务自己从主界面走到凭证交易所 ----
+    # 默认口径就是 MAA 内置的那套流程，用户原话：
+    #   绿票「1 层全买，2 层买寻访凭证和招聘许可」
+    #   黄票「花 258 黄票买 38 抽（高危）」
+    # 绿票一层买什么写在 GreenTicket@Store@ClickItemList 里（单抽 / 合成玉 /
+    # 龙门币 / 家具部件 / 招募许可 / 战斗记录 / 赤金），二层只有单抽 + 招募
+    # 许可——和用户要的一致，所以这边**不传 params**，照任务本身跑。
+    'green_shop': {
+        'name': '绿票商店',
+        'alias': ('绿票商店', '绿票', '资质凭证区', '资质凭证',
+                  'green_shop', 'green', 'greenshop', 'greenticket'),
+        'nav': None,                        # 不用导航，只要人到主界面
+        'home': True,
+        'task': {'task_names': ['GreenTicket@Store@Begin']},
+        'timeout': 900,
+        'note': '默认一层全买、二层只买寻访凭证与招聘许可（MAA 内置流程）。',
+    },
+    'yellow_shop': {
+        'name': '黄票商店',
+        'alias': ('黄票商店', '黄票', '高级凭证区', '高级凭证',
+                  'yellow_shop', 'yellow', 'yellowshop', 'yellowticket'),
+        'nav': None,
+        'home': True,
+        'task': {'task_names': ['YellowTicket@Store@Begin']},
+        'timeout': 900,
+        # 高危：一次点下去就是 258 黄票，且黄票没有别的获取来源能补回来。
+        # confirm 的闸门在 skills.skill_tool（没带 confirm 直接返回）和
+        # agent._tool_skill_tool（强制弹确认卡，**不受 autoApply 影响**）。
+        'confirm': True,
+        'risk': ('花 258 高级凭证（黄票）买 38 抽：只买寻访凭证，一次点下去'
+                 '不可撤销，黄票也没法重新攒回来。'),
+        'note': '默认花 258 黄票买 38 抽（MAA 内置流程）。',
     },
 }
 
@@ -150,6 +195,12 @@ def describe():
                      'prefix': ent.get('prefix') or '',
                      'alias': list(ent.get('alias') or ()),
                      'tutorial': bool(ent.get('tutorial')),
+                     # 常驻商店不用导航：只要人在主界面，任务自己走到商店
+                     'nav': ent.get('nav') or '',
+                     'home': bool(ent.get('home')),
+                     'confirm': bool(ent.get('confirm')),
+                     'risk': ent.get('risk') or '',
+                     'note': ent.get('note') or '',
                      'blacklist': (list(DEFAULT_BLACKLIST)
                                    if k == 'event_shop' else [])})
     return rows

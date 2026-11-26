@@ -1536,6 +1536,19 @@ _CN_NUM = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3,
            '0': 0, '1': 1, '2': 2, '3': 3}
 
 
+def _flag(v, default=False):
+    """工具参数里的开关 → bool
+
+    助手的模型经常把布尔写成字符串（``"true"`` / ``"0"`` / ``"false"``），
+    ``bool("false")`` 是 True，直接当真会「说不切号反而切了」。
+    """
+    if v is None or v == '':
+        return default
+    if isinstance(v, str):
+        return v.strip().lower() not in ('0', 'false', 'no', 'off', 'none', '不')
+    return bool(v)
+
+
 def _to_int(v):
     """'2' / 'Lv.7' / '精二' / 7 → int；认不出返回 None"""
     if v is None or v == '' or isinstance(v, bool):
@@ -2169,34 +2182,65 @@ def skill_sweep(params, log, tid=None):
 
 # ---------------------------------------------------------------- 小工具（牛杂）
 
-@skill("tool", "MAA 牛杂小工具：战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店",
+@skill("tool", "MAA 牛杂小工具：战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店 / "
+               "绿票商店 / 黄票商店",
        needs_game=True, aliases=("商店", "小工具"))
 def skill_tool(params, log, tid=None):
-    """跑 MAA「小工具 → 牛杂」里的功能：战时新闻委员会 / 活动商店
+    """跑 MAA「小工具 → 牛杂」里的功能
 
-    两项的共同点：入口都在**当期活动地图**上，点进去之后由 MAA 的 ``Custom``
-    任务接手（怎么调见 :mod:`maatools` 顶部注释）。所以这里只有三步：
+    这里有两类，到位方式完全不同（怎么调见 :mod:`maatools` 顶部注释）：
 
-        1. adb 导航：终端 → 活动地图 → 点入口节点
-        2. 交给 MaaCore 跑 Custom 任务
-        3. 把「成功没有 / 卡在哪 / 要不要手动过教程」讲清楚
+      - **活动里的入口**（战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店）：
+        入口在当期活动地图上，先 adb 导航到地图、点节点，再交给 MaaCore；
+      - **常驻商店**（绿票 / 黄票商店，2026-11-26）：任务自己从主界面走到
+        「终端 → 仓库 → 凭证交易所」，这边只要保证**人在主界面**
+        （:func:`stagenav.reach_home`），不要再去活动地图上找入口。
+
+    黄票商店是**高危**（258 黄票换 38 抽，不可撤销）：没带 ``confirm`` 就直接
+    返回 ``need_confirm``，连模拟器都不碰——上层必须先让用户亲口确认，再调一次。
 
     用户 2026-11-19 的原话：「然后运行 MAA 中小工具牛杂中的这个，并告诉用户
     如果被教程卡住，手动过一下教程再挂一遍」。所以卡住时不能只报失败。
     """
     from . import acctbind, eventnav, maatools
 
-    file = _account_file(params.get('account') or '')
+    # 先认名字：高危闸门要在**碰账号和模拟器之前**就拦住，否则「没有账号」
+    # 这种无关错误会把「请先确认」的提示顶掉。
     prefix = (params.get('prefix') or params.get('activity') or '').strip().upper()
     key, ent = maatools.resolve(params.get('name') or params.get('tool') or '',
                                 prefix=prefix or None)
     # 工具自己登记了活动代号（喀兰贸易技术研发部只在 OS 的地图上），用户没说
     # 活动时就用它，别去当期活动地图上瞎找
     prefix = prefix or str(ent.get('prefix') or '').upper()
+
+    # ---- 0) 高危闸门：在连模拟器、切号之前就拦住 ----
+    # 黄票商店一次点下去就是 258 黄票，且黄票没有别的来源补回来。这里不做
+    # 「先跑再说」，也不看 autoApply——那种开关是给「写入 MAA 配置」用的。
+    if ent.get('confirm') and not _flag(params.get('confirm')):
+        risk = ent.get('risk') or '这一步不可撤销'
+        log('「%s」是高危操作，先等用户确认：%s' % (ent.get('name'), risk))
+        return {'ok': False, 'need_confirm': True, 'tool': key,
+                'name': ent.get('name'),
+                'account': params.get('account') or '',
+                'risk': risk,
+                'summary': '%s：%s' % (ent.get('name'), risk),
+                'hint': '把 summary 原样告诉用户；他亲口同意后再调一次，'
+                        '参数带 confirm=true'}
+
+    file = _account_file(params.get('account') or '')
     d = _maa_dir_of(file)
     log('小工具：%s（MAA 牛杂里的同名项）' % ent.get('name'))
+    if ent.get('note'):
+        log(ent['note'])
 
-    # ---- 1) 导航到活动地图上的入口 ----
+    # 可选前置：唤醒 + 切号。单号、或用户明说不用切号时**不要传**，直接回主页跑
+    if _flag(params.get('wakeup')):
+        tail = (params.get('accountName') or params.get('tail')
+                or _account_name_tail(file) or '').strip()
+        log('先唤醒%s…' % ('（切到 %s）' % tail if tail else ''))
+        _call_skill('wakeup', {'account': file, 'accountName': tail}, log, tid)
+
+    # ---- 1) 到位：活动入口 → 活动地图；常驻商店 → 主界面 ----
     conn = _conn_of(file, d)
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
@@ -2207,15 +2251,22 @@ def skill_tool(params, log, tid=None):
     if not alive:
         raise RuntimeError(detail)
     if not t.game_alive():
-        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——先调 skill_wakeup '
-                           '唤醒，再挂')
+        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——这次传 wakeup=true，'
+                           '或先调 skill_wakeup 唤醒，再挂')
 
-    # 「小游戏」这种泛称已经按 prefix 选好了具体那一项（maatools.resolve），
-    # 导航这边用同一个 prefix 找对应的活动地图
-    ok, why = eventnav.run_tool(t, ent.get('nav'), prefix=prefix or None, log=log)
-    if not ok:
-        raise RuntimeError('导航没到位：%s' % why)
-    log(why)
+    if ent.get('nav'):
+        # 「小游戏」这种泛称已经按 prefix 选好了具体那一项（maatools.resolve），
+        # 导航这边用同一个 prefix 找对应的活动地图
+        ok, why = eventnav.run_tool(t, ent.get('nav'), prefix=prefix or None,
+                                    log=log)
+        if not ok:
+            raise RuntimeError('导航没到位：%s' % why)
+        log(why)
+    elif ent.get('home'):
+        ok, why = stagenav.reach_home(t, log)
+        if not ok:
+            raise RuntimeError('回不到主界面：%s' % why)
+        log('已确认在主界面，剩下的交给 MAA 自己点进商店')
 
     # ---- 2) 交给 MAA ----
     bl = params.get('blacklist')
@@ -2371,6 +2422,10 @@ def _wakes_itself(step_list):
     if name == 'claim':
         # 领奖也能带 wakeup（游戏停在登录页时先唤醒）
         return bool(p.get('wakeup'))
+    if name == 'tool':
+        # 小工具/商店本身不唤醒：传了 wakeup 才算（商店单号时不该白等一次
+        # 客户端重启，2026-11-26 口径）
+        return _flag(p.get('wakeup'))
     return False
 
 

@@ -8944,6 +8944,9 @@ def main():
                 lambda: check_mirror_source(tmp))
         r.check('B76 桌宠点一下播随机动作（点击与定时共用 / 播不起来也回待机）',
                 lambda: check_theme_pet(tmp))
+        # B77 留给还没合进来的「多开分组只认设备」分支，避免撞号
+        r.check('B78 绿票 / 黄票商店（从主界面直跑 / 黄票必须先确认才连模拟器）',
+                lambda: check_maatools_shop(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -8990,6 +8993,137 @@ def check_theme_pet(tmp):
     container = css.split('#theme-pet {', 1)[1].split('}', 1)[0]
     assert 'pointer-events: none' in container, '桌宠容器放开了点击，会拦住右栏'
     assert '#theme-pet.on video { pointer-events: auto' in css, '桌宠视频没接点击'
+
+
+def check_maatools_shop(tmp):
+    """B78 绿票 / 黄票商店（牛杂常驻商店，从主界面直接跑）
+
+    用户口径（2026-11-26）：
+
+      - **绿票**：一层全买、二层买寻访凭证和招聘许可——正好是 MAA 内置流程，
+        所以我们**不传 params**，照 ``GreenTicket@Store@Begin`` 跑；
+      - **黄票**：花 258 黄票买 38 抽，**高危**，没确认之前连模拟器都不许连；
+      - 两项都**不用我们导航**：任务自己从主界面走到「终端 → 仓库 → 凭证
+        交易所」，这边只保证「人在主界面」（``stagenav.reach_home``）。
+
+    全程打桩：不连模拟器、不花任何凭证。
+    """
+    _reset_config(tmp)
+
+    from core import agent, maaplan, maatools, settings, skills
+
+    # ① 名字 → 键 / 任务名（写错了 MAA 当成不存在，跑完什么也没买还不报错）
+    assert maatools.resolve('绿票商店')[0] == 'green_shop'
+    assert maatools.resolve('绿票')[0] == 'green_shop'
+    assert maatools.resolve('资质凭证区')[0] == 'green_shop'
+    assert maatools.resolve('黄票商店')[0] == 'yellow_shop'
+    assert maatools.resolve('高级凭证')[0] == 'yellow_shop'
+    # 「商店」这种泛称还是活动商店，别被新加的两项抢走
+    assert maatools.resolve('商店')[0] == 'event_shop'
+    assert maatools.build_params('green_shop') == {
+        'task_names': ['GreenTicket@Store@Begin']}
+    assert maatools.build_params('yellow_shop') == {
+        'task_names': ['YellowTicket@Store@Begin']}
+    # 不传 params：绿票「一层全买 / 二层只买单抽+招募许可」是任务自带的
+    assert 'params' not in maatools.build_params('green_shop')
+
+    # ② 两项都不用导航，但要求在主界面
+    for k in ('green_shop', 'yellow_shop'):
+        assert not maatools.TOOLS[k].get('nav'), k
+        assert maatools.TOOLS[k].get('home') is True, k
+    assert maatools.TOOLS['yellow_shop']['confirm'] is True
+    assert '258' in maatools.TOOLS['yellow_shop']['risk']
+
+    # ③ 黄票没确认：直接返回 need_confirm，**连 Touch 都不许构造**
+    def boom(*a, **k):
+        raise AssertionError('没确认就去连模拟器了')
+
+    orig = (skills._account_file, skills._default_maa_dir,
+            skills.stagenav.Touch, skills.stagenav.reach_home,
+            maaplan._connection, maaplan.run_custom)
+    logs = []
+    try:
+        skills.stagenav.Touch = boom
+        r = skills.skill_tool({'name': 'yellow_shop'}, logs.append)
+        assert r.get('need_confirm') and not r.get('ok'), r
+        assert '258' in (r.get('risk') or ''), r
+        assert any('高危' in m for m in logs), logs
+
+        # ④ 确认之后才走到 run_custom（仍旧不连模拟器）
+        seen = {}
+
+        class Touch:
+            def __init__(self, *a, **k):
+                pass
+
+            def ready(self):
+                return True, 'adb ok'
+
+            def game_alive(self):
+                return True
+
+        def fake_home(t, log):
+            seen['home'] = True
+            return True, '已在主界面'
+
+        def fake_custom(spec, tid=None, timeout=None):
+            seen['spec'] = spec
+            seen['timeout'] = timeout
+            return {'ok': True, 'stuck': '', 'timed_out': False,
+                    'tutorial': '', 'error': ''}
+
+        skills._account_file = lambda n: 'x.json'
+        skills._default_maa_dir = lambda: 'D:/fake-maa'
+        skills.stagenav.Touch = lambda *a, **k: Touch()
+        skills.stagenav.reach_home = fake_home
+        maaplan._connection = lambda d, profile=None: {
+            'adb_path': 'adb', 'address': '127.0.0.1:5555',
+            'config': 'General', 'touch': 'MiniTouch', 'maa_dir': d}
+        maaplan.run_custom = fake_custom
+
+        r2 = skills.skill_tool({'name': 'yellow_shop', 'account': 'x',
+                                'confirm': True}, logs.append)
+        assert r2.get('ok'), r2
+        assert seen.get('home'), '黄票商店没有先回到主界面'
+        assert seen['spec']['task'] == {
+            'task_names': ['YellowTicket@Store@Begin']}, seen['spec']
+
+        # 绿票同一条路：回主界面 → 交给 MAA，不导航、不传 params
+        seen.pop('home', None)
+        r3 = skills.skill_tool({'name': '绿票商店', 'account': 'x'}, logs.append)
+        assert r3.get('ok') and seen.get('home'), (r3, seen)
+        assert seen['spec']['task'] == {
+            'task_names': ['GreenTicket@Store@Begin']}, seen['spec']
+        assert 'params' not in seen['spec']['task'], seen['spec']
+    finally:
+        (skills._account_file, skills._default_maa_dir,
+         skills.stagenav.Touch, skills.stagenav.reach_home,
+         maaplan._connection, maaplan.run_custom) = orig
+
+    # ⑤ 唤醒口径：tool 默认不自己唤醒；多账号补一步，单号 / 明说不用切号不补
+    assert skills._wakes_itself([('tool', {})]) is False
+    assert skills._wakes_itself([('tool', {'wakeup': True})]) is True
+    one = [('tool', {'name': 'green_shop'})]
+    assert skills._with_auto_wake(one, False)[0] == one
+    many, added = skills._with_auto_wake(one, True)
+    assert added and many[0] == ('wakeup', {}) and many[1] == one[0], many
+    assert skills._with_auto_wake(one, True, False)[0] == one
+
+    # ⑥ 助手层：autoApply 开着，黄票照样先弹确认卡；批量步骤也能被认出来
+    settings.save({'agent': {'autoApply': True}})
+    try:
+        out = agent._tool_skill_tool({'name': 'yellow_shop', 'account': 'x.json'})
+        assert out.get('need_confirm') and not out.get('taskId'), out
+        assert '258' in (out.get('summary') or ''), out
+        hit, nm, risk = agent._tool_step_need_confirm(
+            {'skill': 'tool', 'name': 'yellow_shop'})
+        assert hit and nm == '黄票商店' and risk, (hit, nm, risk)
+        assert not agent._tool_step_need_confirm(
+            {'skill': 'tool', 'name': 'green_shop'})[0]
+        assert not agent._tool_step_need_confirm(
+            {'skill': 'sweep', 'stage': 'OS'})[0]
+    finally:
+        settings.save({'agent': {'autoApply': False}})
 
 
 if __name__ == '__main__':

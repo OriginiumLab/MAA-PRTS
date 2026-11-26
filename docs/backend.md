@@ -442,7 +442,7 @@ API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET
 | `weekly` | 周目编排：ST 关自动过剧情、连续战斗关合并成 fight 批次、EX 收尾；**任何一步失败立即停**并在日志写明卡在哪关 | 本文件 `_cycle_rows` + `_cycle_sort_key` |
 | `train` | 培养干员：精英化 / 技能基础等级 / 专精，可一次排多个；材料不足**暂停**并落盘剩下的计划 | `maaplan.run_core` 的 `OperProgress` 任务 |
 | `sweep` | 扫图：普通 → EX 普通 → EX 突袭 → S 关，段间自动重新导航 | 本文件 `_sweep_segments` |
-| `tool` | MAA 牛杂小工具（小游戏 / 活动商店） | `maatools` + `eventnav.run_tool` |
+| `tool` | MAA 牛杂小工具（小游戏 / 活动商店 / 绿票商店 / 黄票商店） | `maatools` + `eventnav.run_tool`；常驻商店走 `stagenav.reach_home` |
 | `claim` | 领活动奖励：进奖励页点「一键领取」（纯 adb，不连 MaaCore） | `eventnav.claim_reward` |
 
 **加一个新 skill 只要三步**（2026-11-22 重构，`REGISTRY` + `@skill` 装饰器）：
@@ -1549,11 +1549,32 @@ MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列�
 # 活动商店
 {"task_names": ["SS@Store@Begin"],
  "params": {"event_shop": {"blacklist": ["数据增补条", "数据增补", "龙门币", "家具零件"]}}}
+
+# 绿票商店 / 黄票商店（2026-11-26 加，常驻商店，不用导航）
+{"task_names": ["GreenTicket@Store@Begin"]}
+{"task_names": ["YellowTicket@Store@Begin"]}
 ```
 
 > 任务名是从 MaaCore 二进制里 grep 出来的（`MiniGame@OS@Begin` /
 > `MiniGame@WartimePressCommittee@Begin` 都在），不是猜的。以后再加小游戏，
 > 先 `grep -a 'MiniGame@' MaaCore.dll` 找名字，再进 `maatools.TOOLS`。
+
+**绿票 / 黄票商店与前三项不一样**（2026-11-26）：入口**不在活动地图上**，任务
+自己从主界面走「终端 → 仓库 → 凭证交易所」。所以：
+
+- `maatools.TOOLS` 里这两项 `nav=None` + `home=True`，`skill_tool` 只调
+  `stagenav.reach_home` 保证人在主界面，**不要**再走 `eventnav.run_tool`；
+- 绿票的默认买法就是 MAA 内置流程（`GreenTicket@Store@ClickItemList` 一层全买，
+  `ClickSecondFloorItemList` 二层只买单抽 + 招募许可），也就是用户要的
+  「一层全买、二层买寻访凭证和招聘许可」，所以**不传 params**；
+- 黄票默认花 258 黄票买 38 抽，`confirm=True` 走两道闸：`skill_tool` 没带
+  `confirm` 直接返回 `need_confirm`（连模拟器都不碰），助手层
+  `_tool_skill_tool` 用 `_guard(force=True)` **无视 autoApply** 强制弹卡；
+- `run_steps` 里混了黄票步骤时整批强制弹卡，用户点了之后才给那一步盖
+  `confirm=true`；
+- 任务名里的 `@Begin` 在 `resource/tasks/tasks.json` 里查不到，但 MAA 牛杂面板
+  传的就是这一串，asst.log 里核心照样按 `ClickFirstFloor` / `ClickSecondFloor`
+  一路跑完——别当成拼错去改。
 
 黑名单的三个坑（都实测过，别改）：
 
@@ -1576,9 +1597,10 @@ MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列�
 个节点。`run_custom` 每 10 秒看一次「多久没新事件」，超过 120 秒就把
 `spec['tutorial']` 那句话打进日志 —— 用户才知道要手动过一遍教程再挂。
 
-**入口**：`skill_tool({'name': 'wartime_press'|'os_rd'|'event_shop',
-'account': ..., 'blacklist': [...]})`，助手工具同名。导航和 MAA 都跑在同一个
-后台任务里，`tid` 透传给 `run_custom`，日志落在同一条任务上。
+**入口**：`skill_tool({'name': 'wartime_press'|'os_rd'|'event_shop'|
+'green_shop'|'yellow_shop', 'account': ..., 'blacklist': [...], 'confirm': true})`，
+助手工具同名。导航和 MAA 都跑在同一个后台任务里，`tid` 透传给 `run_custom`，
+日志落在同一条任务上。
 
 **`prefix` 与「小游戏」这个泛称**（2026-11-22 加）：每一项可以带
 `'prefix': 'OS'` 表示「它只在 OS 的活动地图上」。于是有两个用法：
