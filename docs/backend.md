@@ -434,7 +434,7 @@ API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET
 
 | skill | 能力 | 实现依托 |
 |---|---|---|
-| `wakeup` | 唤醒游戏到主界面；带 `accountName`（手机尾号等切号名）时走 MAA StartUp 换号 | `stagenav.restart_app` / `maaplan.run_core` |
+| `wakeup` | 唤醒游戏到主界面；带 `accountName`（手机尾号等切号名）时走 MAA StartUp 换号。**单账号先看界面**：已在主界面直接返回、停在别处按返回键走回来，都不重启客户端（见下方「单账号的前置界面检查」） | `stagenav.restart_app` / `maaplan.run_core` |
 | `navigate` | 从主界面导航到任意活动（老活动走曲谱、当期走区域列表、EX 也能到） | `stagenav.goto_stage_list` |
 | `fight` | 自动战斗：编队 / 借助战 / 吃理智药 / 开打，一次一组关 | `maaplan.run_core`（Copilot 参数 formation/support/sanityPotion） |
 | `skip_story` | 过剧情关（MN-ST-1 这类 ST 关）：MAA fight 单关当「点关探针」，剧情播放页出现后 `stagenav._skip_story_replay` 连续跳幕 | adb 跳幕 |
@@ -442,7 +442,7 @@ API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET
 | `weekly` | 周目编排：ST 关自动过剧情、连续战斗关合并成 fight 批次、EX 收尾；**任何一步失败立即停**并在日志写明卡在哪关 | 本文件 `_cycle_rows` + `_cycle_sort_key` |
 | `train` | 培养干员：精英化 / 技能基础等级 / 专精，可一次排多个；材料不足**暂停**并落盘剩下的计划 | `maaplan.run_core` 的 `OperProgress` 任务 |
 | `sweep` | 扫图：普通 → EX 普通 → EX 突袭 → S 关，段间自动重新导航 | 本文件 `_sweep_segments` |
-| `tool` | MAA 牛杂小工具（小游戏 / 活动商店） | `maatools` + `eventnav.run_tool` |
+| `tool` | MAA 牛杂小工具（小游戏 / 活动商店 / 绿票商店 / 黄票商店） | `maatools` + `eventnav.run_tool`；常驻商店走 `stagenav.reach_home` |
 | `claim` | 领活动奖励：进奖励页点「一键领取」（纯 adb，不连 MaaCore） | `eventnav.claim_reward` |
 
 **加一个新 skill 只要三步**（2026-11-22 重构，`REGISTRY` + `@skill` 装饰器）：
@@ -465,6 +465,33 @@ def skill_fishing(ctx):          # 第一个参数叫 ctx → _call_skill 传 Ct
    怎么调），现有 skill 可以一个一个慢慢迁。
 
 页面状态判断和「回主界面」不在这个文件，见 `pages.py`（下一节）。
+
+**单账号的前置界面检查（2026-11-26）**：`skills.ensure_home()` + `_home_check_on()`
+
+用户口径：「每个单账号任务的运行前检查当前明日方舟界面的位置，必须回到
+明日方舟主页，再开始导航」，目的是**减小重复自动唤醒的时间**（MAA 的 StartUp
+每次都要重启客户端，冷启动 40~80 秒）。分三档，越往下越贵：
+
+| 现状 | 做什么 | 代价 |
+|---|---|---|
+| 已在主界面（`at_home` 且不在剧情/登录页） | 什么都不做 | 一次截图 |
+| 游戏在跑但在别处 | `stagenav.reach_home`（返回键 / ESC；登录页点「开始唤醒」） | 几秒，**不重启客户端** |
+| 游戏没开 / 走不回去 | 才真唤醒（有切号名走 MAA StartUp） | 40~80 秒 |
+
+落点两处：`_skill_body` 在环境闸之后调一次（`_home_check_on` 决定要不要做），
+`skill_wakeup` 自己也先试这条捷径。**三条例外不能拦**：
+
+- `wakeup`（自己就是唤醒）、`signin`（不碰游戏）；
+- `fight` 默认 `noNav` 直跑——用户可能正停在关卡列表，硬拉回主页反而弄坏，
+  只有带了 `wakeup` / `navigate` 才检查；
+- 参数里有 `assumeStageList` / `noSwitch` / `direct`（用户亲口说「已经在关卡
+  列表 / 别切号」）。
+
+**多账号绝对不能走捷径**：界面恰好在主界面不代表登的是目标号，跳过 StartUp
+会让第二个号在第一个号的账号上开打。所以 `run_batch` 对多账号统一
+`_mark_switch()` 给每一步盖 `switch=true`，`skill_wakeup` 看到它就跳过快速
+路径（`_with_auto_wake` 补的那一步也自带 `switch: true`）。
+
 
 排序规则（`_cycle_sort_key`）：`ST-N → 主线 1..N → EX`，正好是 MN 这类周目的
 推图顺序；关卡清单来自 `resources._stages(True)`（含 story=True 的 208 条剧情关，
@@ -1549,11 +1576,32 @@ MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列�
 # 活动商店
 {"task_names": ["SS@Store@Begin"],
  "params": {"event_shop": {"blacklist": ["数据增补条", "数据增补", "龙门币", "家具零件"]}}}
+
+# 绿票商店 / 黄票商店（2026-11-26 加，常驻商店，不用导航）
+{"task_names": ["GreenTicket@Store@Begin"]}
+{"task_names": ["YellowTicket@Store@Begin"]}
 ```
 
 > 任务名是从 MaaCore 二进制里 grep 出来的（`MiniGame@OS@Begin` /
 > `MiniGame@WartimePressCommittee@Begin` 都在），不是猜的。以后再加小游戏，
 > 先 `grep -a 'MiniGame@' MaaCore.dll` 找名字，再进 `maatools.TOOLS`。
+
+**绿票 / 黄票商店与前三项不一样**（2026-11-26）：入口**不在活动地图上**，任务
+自己从主界面走「终端 → 仓库 → 凭证交易所」。所以：
+
+- `maatools.TOOLS` 里这两项 `nav=None` + `home=True`，`skill_tool` 只调
+  `stagenav.reach_home` 保证人在主界面，**不要**再走 `eventnav.run_tool`；
+- 绿票的默认买法就是 MAA 内置流程（`GreenTicket@Store@ClickItemList` 一层全买，
+  `ClickSecondFloorItemList` 二层只买单抽 + 招募许可），也就是用户要的
+  「一层全买、二层买寻访凭证和招聘许可」，所以**不传 params**；
+- 黄票默认花 258 黄票买 38 抽，`confirm=True` 走两道闸：`skill_tool` 没带
+  `confirm` 直接返回 `need_confirm`（连模拟器都不碰），助手层
+  `_tool_skill_tool` 用 `_guard(force=True)` **无视 autoApply** 强制弹卡；
+- `run_steps` 里混了黄票步骤时整批强制弹卡，用户点了之后才给那一步盖
+  `confirm=true`；
+- 任务名里的 `@Begin` 在 `resource/tasks/tasks.json` 里查不到，但 MAA 牛杂面板
+  传的就是这一串，asst.log 里核心照样按 `ClickFirstFloor` / `ClickSecondFloor`
+  一路跑完——别当成拼错去改。
 
 黑名单的三个坑（都实测过，别改）：
 
@@ -1576,9 +1624,10 @@ MAA GUI 的「小工具 → 牛杂」里那些按钮**不在一键长草队列�
 个节点。`run_custom` 每 10 秒看一次「多久没新事件」，超过 120 秒就把
 `spec['tutorial']` 那句话打进日志 —— 用户才知道要手动过一遍教程再挂。
 
-**入口**：`skill_tool({'name': 'wartime_press'|'os_rd'|'event_shop',
-'account': ..., 'blacklist': [...]})`，助手工具同名。导航和 MAA 都跑在同一个
-后台任务里，`tid` 透传给 `run_custom`，日志落在同一条任务上。
+**入口**：`skill_tool({'name': 'wartime_press'|'os_rd'|'event_shop'|
+'green_shop'|'yellow_shop', 'account': ..., 'blacklist': [...], 'confirm': true})`，
+助手工具同名。导航和 MAA 都跑在同一个后台任务里，`tid` 透传给 `run_custom`，
+日志落在同一条任务上。
 
 **`prefix` 与「小游戏」这个泛称**（2026-11-22 加）：每一项可以带
 `'prefix': 'OS'` 表示「它只在 OS 的活动地图上」。于是有两个用法：

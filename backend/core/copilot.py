@@ -517,13 +517,12 @@ def _pull(params, pages=2, limit=50):
     return out
 
 
-def fetch_ops(stage, pages=2, min_rating=0, force=False):
-    """拉某个关卡的作业（出口滤掉作者 / 作业黑名单）。
+def _unban(items):
+    """滤掉作者 / 作业黑名单（设置里拉黑的人和作业）
 
-    过滤包在 _fetch_ops_raw 外面：缓存里存的是全量，黑名单增删立即生效，
-    不用等 10 分钟缓存过期。
+    单独抽出来给关键词兜底那条路复用：它不经过 ``_fetch_ops_raw`` 的缓存，
+    但黑名单口径必须一模一样，否则「拉黑了还从关键词里冒出来」。
     """
-    items = _fetch_ops_raw(stage, pages=pages, min_rating=min_rating, force=force)
     st = settings.load()
     ban = set()
     for row in (st.get('authorBlacklist') or []):
@@ -537,6 +536,16 @@ def fetch_ops(stage, pages=2, min_rating=0, force=False):
     if ban_ops:
         items = [i for i in items if ('maa://%s' % i['meta'].get('id')) not in ban_ops]
     return items
+
+
+def fetch_ops(stage, pages=2, min_rating=0, force=False):
+    """拉某个关卡的作业（出口滤掉作者 / 作业黑名单）。
+
+    过滤包在 _fetch_ops_raw 外面：缓存里存的是全量，黑名单增删立即生效，
+    不用等 10 分钟缓存过期。
+    """
+    items = _fetch_ops_raw(stage, pages=pages, min_rating=min_rating, force=force)
+    return _unban(items)
 
 
 def _fetch_ops_raw(stage, pages=2, min_rating=0, force=False):
@@ -680,15 +689,12 @@ def rank_key(row, algo=DEFAULT_ALGO):
             -row['views'], row['total'])
 
 
-def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=DEFAULT_ALGO):
-    """拉一个关卡的作业并打分（不截断，供普通/突袭两行共用）
+def _rows_from_items(stage, items, owned_map, algo=DEFAULT_ALGO):
+    """已拉回来的作业 → 打分后的行（好评率门槛 + pass 规则 + 排序）
 
-    拉取后先按好评率门槛滤一轮（rating_ok，评价量太少的不筛），
-    全不达标时退回不过滤（跟下面的 pass 规则一致，免得一关作业都不剩）；
-    用户规则：0 人作业（仅 TR 关除外）、缺 ≥2 个干员、或练度不满足 ≥2 人
-    的作业直接 pass（不推荐）；整关全被 pass 时同样退回不过滤。
+    从 ``_collect_rows`` 里抽出来是为了关键词兜底复用：那条路的作业是
+    ``document`` 全文搜出来的（一屏混着好几关），不能再按关卡去拉一遍。
     """
-    items = fetch_ops(stage, pages=pages, min_rating=min_rating)
     rated = [it for it in items if rating_ok(it['meta'])]
     if rated:
         items = rated
@@ -706,6 +712,18 @@ def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=DEFAULT_ALGO):
         rows = dropped
     rows.sort(key=lambda r: rank_key(r, algo))
     return rows
+
+
+def _collect_rows(stage, owned_map, pages=2, min_rating=0, algo=DEFAULT_ALGO):
+    """拉一个关卡的作业并打分（不截断，供普通/突袭两行共用）
+
+    拉取后先按好评率门槛滤一轮（rating_ok，评价量太少的不筛），
+    全不达标时退回不过滤（跟下面的 pass 规则一致，免得一关作业都不剩）；
+    用户规则：0 人作业（仅 TR 关除外）、缺 ≥2 个干员、或练度不满足 ≥2 人
+    的作业直接 pass（不推荐）；整关全被 pass 时同样退回不过滤。
+    """
+    items = fetch_ops(stage, pages=pages, min_rating=min_rating)
+    return _rows_from_items(stage, items, owned_map, algo=algo)
 
 
 def _pack_stage(stage, rows, limit=12):
@@ -760,6 +778,172 @@ def row_sort_key(packed):
     return (resources.flow_key(st.get('stageId'))[:2], rank)
 
 
+#: 关键词兜底：作业站的 ``document`` 是标题 / 简介全文搜，「结城理模组」这种
+#: 不是关卡名的词只能靠它。网页上那个搜索框就是 document，旁边「关卡」下拉
+#: 是 levelKeyword——两个一起传就是**强制锁定**（2026-11-26 用户截图：
+#: 关键词「结城理模组」+ 关卡「4-3」→ 4 份全是这一关的模组作业）。
+KW_PAGES = 3          # 纯关键词最多看几页（一页 50 条）
+KW_STAGES = 12        # 兜底结果最多给几关，够点就行，别把整页刷满
+
+# 关键词里可能夹着的关卡代号：4-3 / TL-10 / TL-S-4 / H8-4 / 12-20
+_KW_CODE = re.compile(r'(?<![A-Za-z0-9])([A-Za-z]{1,4}(?:-[A-Za-z]{1,3})?-\d{1,2}'
+                      r'|\d{1,2}-\d{1,2})(?![0-9])')
+
+
+def split_keyword(keyword):
+    """「结城理模组 4-3」→ ``('结城理模组', <4-3 的关卡行>)``
+
+    用户只有一个输入框，而作业站是「关键词 + 关卡」两栏。所以这里把能认成
+    关卡的那一段摘出来当锁定关卡，剩下的字当全文关键词；认不出关卡就原样
+    返回 ``(keyword, None)``，走纯关键词。
+
+    只认 ``resources.resolve`` 说得清的代号：``模组`` 这种两三个字的词不会被
+    当成关卡，``4-3`` / ``TL-S-4`` 才会。
+    """
+    raw = str(keyword or '').strip()
+    if not raw:
+        return '', None
+    for m in _KW_CODE.finditer(raw):
+        code = m.group(1)
+        try:
+            r = resources.resolve(code)
+        except Exception:                       # noqa: BLE001 资源包坏了别拖垮搜索
+            continue
+        if r.get('mode') not in ('stage', 'story') or not r.get('stages'):
+            continue
+        stage = next((s for s in r['stages'] if s.get('difficulty') == 'normal'),
+                     r['stages'][0])
+        rest = (raw[:m.start()] + ' ' + raw[m.end():]).strip()
+        rest = re.sub(r'^[\s,，;；/|@、]+|[\s,，;；/|@、]+$', '', rest)
+        return rest, stage
+    return raw, None
+
+
+def _stage_of_name(stage_name):
+    """作业里的 ``stage_name`` → 结果行要的关卡字典（包里没有就现造一条）
+
+    关键词搜出来的可能是资源包还没跟上的新活动（当期 EX / S 分区），
+    这时没有代号也没有中文名，但作业本身是能抄的——照样给它一行，
+    至少让用户看到「这关有作业」。
+    """
+    sid = str(stage_name or '').strip()
+    if not sid:
+        return None
+    row = resources.stage_detail(sid)
+    if row:
+        return row
+    risky = sid.endswith('#s')
+    return {'stageId': sid, 'code': sid, 'name': '', 'zoneId': '',
+            'zoneName': '', 'zoneType': '', 'activity': '',
+            'raid': False, 'difficulty': 'risky' if risky else 'normal',
+            'difficultyCN': '险地' if risky else '',
+            'danger': '', 'story': False, 'inferred': True}
+
+
+def _pack_results(mode, title, keyword, collected, limit, keyword_mode=False):
+    """``[(关卡, 行)]`` → 前端认的搜索结果结构"""
+    results = []
+    for s, rows in collected:
+        results.extend(stage_variants(s, rows, limit=limit))
+    if keyword_mode:
+        # 关键词结果是跨关卡的清单，空行（比如某关的突袭一份作业都没有）
+        # 摆出来只是噪音——活动视图里那些空行有「这档没作业」的含义，这里没有
+        results = [r for r in results if (r.get('total') or 0) > 0]
+    results.sort(key=row_sort_key)
+    return {
+        'mode': mode,
+        'title': title,
+        'keyword': keyword,
+        'stages': results,
+        # 这一段里的剧情关（同活动 / 同章）：结果区拿它提示「挂到那里会停」，
+        # 不进结果行、不参与排序，也不去作业站查
+        'stories': ([] if keyword_mode
+                    else resources.stories_between([s for s, _ in collected])),
+        # 「下一关」按钮的数据：按置顶行（用户正在看的难度视角）推进。
+        # 关键词结果是一堆不相干的关，没有「下一关」这一说
+        'next': (None if keyword_mode or not results
+                 else resources.next_stage(results[0]['stage'])),
+    }
+
+
+def keyword_search(keyword, snap, pages=2, min_rating=0, limit=12):
+    """中文 / 干员 / 模组这类**不是关卡名**的关键词 → 作业站全文搜兜底
+
+    用户 2026-11-26 的原话：「搜索中文不能检索到对应关卡……我让 agent 帮我打
+    模组任务，他一直会说没有模组任务的作业」。以前 ``resources.resolve`` 认不出
+    就直接回 ``mode='unknown'``，界面一句「没有结果」、助手一句「搜不到作业」，
+    而作业站上「结城理模组」有 16 份作业。
+
+    两步（跟网页那颗搜索框 + 关卡下拉一一对应）：
+
+      1. 关键词里认得出关卡（``结城理模组 4-3``）→ ``levelKeyword`` + ``document``
+         一起传，**强制锁定**这一关；锁出来的作业一条都不剩才往下走；
+      2. 认不出关卡 → 只传 ``document`` 全文搜，按作业自己的 ``stage_name``
+         分组，一个关卡一行（就是网页上「全部关键词结果」那种列表）。
+    """
+    kw = str(keyword or '').strip()
+    owned = build_owned(snap)
+    algo = snap.get('preferAlgo')
+    if algo not in ALGOS:
+        algo = DEFAULT_ALGO
+    doc, lock = split_keyword(kw)
+
+    def _clean(items):
+        items = _unban(items)
+        if min_rating:
+            items = [i for i in items
+                     if (i['meta'].get('rating_level') or 0) >= min_rating]
+        return items
+
+    # ---- 1) 关键词 + 关卡：强制锁定 ----
+    if lock:
+        only = (lock['stageId'], lock.get('code') or '')
+        items = _clean(_pull({'levelKeyword': lock['stageId'], 'document': doc},
+                             pages=pages))
+        items = [i for i in items
+                 if (i['content'].get('stage_name') or '') in only]
+        rows = _rows_from_items(lock, items, owned, algo=algo) if items else []
+        if rows:
+            title = ('%s %s' % (lock.get('code') or '', lock.get('name') or '')
+                     ).strip() or lock['stageId']
+            out = _pack_results('stage', title, kw, [(lock, rows)], limit)
+            out['locked'] = {'keyword': doc, 'stage': lock.get('code') or ''}
+            # 关键词锁定的结果不是「一条推图线」上的关，下一关没有意义
+            out['next'] = None
+            return out
+
+    # ---- 2) 纯关键词：全文搜 → 按关卡分组 ----
+    text = doc or kw
+    items = _clean(_pull({'document': text}, pages=max(KW_PAGES, pages)))
+    groups = {}
+    for it in items:
+        sid = str((it['content'] or {}).get('stage_name') or '').strip()
+        if sid:
+            groups.setdefault(sid, []).append(it)
+    collected = []
+    for sid, its in groups.items():
+        stage = _stage_of_name(sid)
+        if not stage:
+            continue
+        rows = _rows_from_items(stage, its, owned, algo=algo)
+        if rows:
+            collected.append((stage, rows))
+    if not collected:
+        return {'mode': 'unknown', 'title': '', 'keyword': kw, 'stages': []}
+
+    collected.sort(key=lambda x: row_sort_key(
+        stage_variants(x[0], x[1], limit=limit)[0]))
+    total = sum(len(r) for _s, r in collected)
+    nstage = len({(s.get('code') or s.get('stageId')) for s, _r in collected})
+    out = _pack_results('keyword', '「%s」关键词（%d 关 / %d 份作业）'
+                        % (text, nstage, total),
+                        kw, collected[:KW_STAGES], limit, keyword_mode=True)
+    out['note'] = ('这是作业站全文搜的结果（标题 / 简介里带「%s」的作业），'
+                   '关卡不一定是同一个；想锁定某一关就再说一句关卡代号，'
+                   '例如「%s 4-3」' % (text, text))
+    return out
+
+
 def search(keyword, snap, pages=2, min_rating=0, limit=12):
     res = resources.resolve(keyword)
     if res['mode'] == 'story':
@@ -772,11 +956,13 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
         # 资源包里没有：按代号规则推真实 stageId（当期活动的 EX / S 分区）。
         # **不再拿「全文搜第一条的 stage_name」顶**——那条路会把 TL-S-4
         # 认成 act55side_s02，挂 S-4 抄 S-2 的作业，用户看到的就是
-        # 「说的和实际给我选择的关不一样」。推不出来就如实说搜不到。
+        # 「说的和实际给我选择的关不一样」。推不出来就走关键词兜底
+        # （「结城理模组」这类根本不是关卡名的词，2026-11-26 用户要求）：
+        # 作业站那边有全文搜，别直接回一句「搜不到」。
         inf = resources.infer_stage(keyword)
         if not inf:
-            return {'mode': 'unknown', 'title': '', 'keyword': keyword,
-                    'stages': []}
+            return keyword_search(keyword, snap, pages=pages,
+                                  min_rating=min_rating, limit=limit)
         res = {'mode': 'stage',
                'title': '%s %s' % (keyword.strip().upper(),
                                    inf.get('zoneName') or ''),
@@ -798,22 +984,8 @@ def search(keyword, snap, pages=2, min_rating=0, limit=12):
     # 有突袭版的关卡拆成两行：普通一行、突袭一行，通用作业（difficulty=3）
     # 在两边都出现；没有突袭版的关卡只有一行。主线难度变体（简单/磨难/险地）
     # 是独立关卡 id，天然各成一行，排序见 row_sort_key。
-    results = []
-    for s, rows in collected:
-        results.extend(stage_variants(s, rows, limit=limit))
-
-    results.sort(key=row_sort_key)
-    return {
-        'mode': res['mode'],
-        'title': res['title'],
-        'keyword': res['keyword'],
-        'stages': results,
-        # 这一段里的剧情关（同活动 / 同章）：结果区拿它提示「挂到那里会停」，
-        # 不进结果行、不参与排序，也不去作业站查
-        'stories': resources.stories_between([s for s, _ in collected]),
-        # 「下一关」按钮的数据：按置顶行（用户正在看的难度视角）推进
-        'next': resources.next_stage(results[0]['stage']) if results else None,
-    }
+    return _pack_results(res['mode'], res['title'], res['keyword'],
+                         collected, limit)
 
 
 def suggest_authors(name, timeout=10):

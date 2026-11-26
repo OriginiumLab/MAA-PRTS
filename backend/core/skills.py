@@ -510,6 +510,55 @@ class Ctx:
         return out
 
 
+def ensure_home(file, log, tid=None, tail='', wake=False):
+    """看一眼现在停在哪一页，**能走回主界面就不重启客户端** → ``dict`` / ``None``
+
+    用户 2026-11-26 的口径：「每个单账号任务的运行前检查当前明日方舟界面的
+    位置，必须回到明日方舟主页，再开始导航」。以前单号任务默认先跑一遍 MAA
+    的「开始唤醒」（StartUp 会把客户端整个重启，冷启动 40~80 秒），连着跑
+    几个任务就白等好几遍——用户的原话是「减小重复自动唤醒的时间」。
+
+    三档，越往下越贵：
+
+      1. 已经在主界面 → 什么都不做（一次截图，1 秒内）；
+      2. 游戏在跑、但停在关卡列表 / 基建 / 剧情页 / 登录页 → ``reach_home``
+         按返回键走回主页（登录页它会点「开始唤醒」，也不重启客户端）；
+      3. 游戏没开、或者走不回去 → 抛 ``RuntimeError``，由调用方决定要不要
+         真唤醒（``wake=True`` 时这里直接调 :func:`skill_wakeup`）。
+
+    多账号不归它管：切号必须真重启客户端（否则会在上一个号的账号上跑），
+    那条路传 ``switch=True`` 给 :func:`skill_wakeup`，到这里之前就被拦掉了。
+    """
+    file = _account_file(file or '')
+    d = _maa_dir_of(file)
+    conn = _conn_of(file, d)
+    t = stagenav.Touch(conn['adb_path'], conn['address'], log,
+                       package=stagenav.game_package(_client_of(file)),
+                       strict=_strict_addr(file))
+    alive, detail = t.ready()
+    if not alive:
+        if wake:
+            return {'how': 'wakeup', 'detail': detail,
+                    **skill_wakeup({'account': file, 'accountName': tail}, log, tid)}
+        raise RuntimeError(detail)
+    if not t.game_alive(quiet=True):
+        if wake:
+            r = skill_wakeup({'account': file, 'accountName': tail}, log, tid)
+            return dict(r, how='wakeup', detail='客户端没开，已唤醒')
+        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）')
+    if stagenav.at_home(t) and not stagenav.on_login_page(t) \
+            and not stagenav.in_story_page(t) and not stagenav.in_story_dialog(t):
+        return {'how': 'already-home', 'detail': '当前在明日方舟主界面'}
+    log('不在主界面，先走回主页（按返回键，不重启客户端）…')
+    ok, why = stagenav.reach_home(t, log)
+    if ok:
+        return {'how': 'reach-home', 'detail': '从其他页面收回主界面'}
+    if wake:
+        r = skill_wakeup({'account': file, 'accountName': tail}, log, tid)
+        return dict(r, how='wakeup', detail='走不回主界面（%s），已重新唤醒' % why)
+    raise RuntimeError('回不到主界面：%s' % why)
+
+
 @skill("wakeup", "唤醒游戏到主界面（可选按尾号切号）", needs_game=True,
        aliases=("唤醒",))
 def skill_wakeup(params, log, tid=None):
@@ -518,6 +567,10 @@ def skill_wakeup(params, log, tid=None):
     accountName / tail 有值时走 MAA StartUp（能按切号名换账号，官服填手机号
     后 4 位如 5505，也可以给前 3 位 + 后 4 位如 157****3635）；没给就用 adb
     直连重启（快，且登录页/START 页/弹窗都能自己处理——stagenav.restart_app）。
+
+    **默认先看界面**（2026-11-26）：已经在主界面就直接返回，停在关卡列表 /
+    基建就按返回键走回来——都不重启客户端。只有游戏没开、走不回去，或者
+    调用方明确要求切号（``switch=true``，多账号批量自动带）才跑 StartUp。
     """
     file = _account_file(params.get('account') or '')
     given = (params.get('accountName') or params.get('tail') or '').strip()
@@ -527,6 +580,27 @@ def skill_wakeup(params, log, tid=None):
         if saved:
             log('切号名 %s 已记到这个账号（设置 → MAA 路径）' % saved)
     tail = (given or _account_name_tail(file)).strip()
+
+    # ---- 先看界面再决定要不要真唤醒（2026-11-26 用户口径）----
+    # 单账号跑任务时界面很可能本来就在主界面，这时候跑一遍 MAA 的「开始唤醒」
+    # 等于白重启一次客户端（40~80 秒）。所以先 `ensure_home`：在家就直接返回，
+    # 在别的页面就按返回键走回来，只有游戏没开 / 走不回去才真唤醒。
+    #
+    # **多账号切号不能走这条捷径**（switch=True）：界面恰好在主界面不代表登的
+    # 是目标那个号，跳过 StartUp 会让第二个号在第一个号的账号上跑。
+    # 助手在用户亲口说「切到 X 号」时也会带 switch=true。
+    must_switch = _flag(params.get('switch')) or _flag(params.get('force'))
+    if not must_switch:
+        try:
+            r = ensure_home(file, log, tid, tail=tail)
+        except Exception as e:                  # noqa: BLE001 检查失败就退回老路
+            log('界面检查：%s' % e)
+            r = None
+        if r:
+            log('%s，这次不唤醒（省一次客户端重启）' % r.get('detail'))
+            return {'ok': True, 'how': r['how'], 'account': file,
+                    'detail': r.get('detail')}
+
     if tail:
         # 临时配置：StartUp 任务参数只有「开始唤醒 + 切号名」，MaaCore 按参数
         # 自己换号——不读也不改用户的 MAA 配置档案
@@ -1536,6 +1610,19 @@ _CN_NUM = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3,
            '0': 0, '1': 1, '2': 2, '3': 3}
 
 
+def _flag(v, default=False):
+    """工具参数里的开关 → bool
+
+    助手的模型经常把布尔写成字符串（``"true"`` / ``"0"`` / ``"false"``），
+    ``bool("false")`` 是 True，直接当真会「说不切号反而切了」。
+    """
+    if v is None or v == '':
+        return default
+    if isinstance(v, str):
+        return v.strip().lower() not in ('0', 'false', 'no', 'off', 'none', '不')
+    return bool(v)
+
+
 def _to_int(v):
     """'2' / 'Lv.7' / '精二' / 7 → int；认不出返回 None"""
     if v is None or v == '' or isinstance(v, bool):
@@ -1801,6 +1888,18 @@ def skill_train(params, log, tid=None):
     rows = saved['plans'] if saved else _train_rows(params)
     if not rows:
         raise ValueError('缺 operators（要培养谁、升到什么程度）')
+
+    # 单账号先看界面（2026-11-26）：已经在主界面就不用跑 StartUp——培养这条路
+    # 以前每次都要重启一遍客户端，连跑几个号/几次就是白等。要切号（switch）
+    # 或多账号批量（params.switch）时照旧，切号必须真重启。
+    if wakeup and not (switch or _flag(params.get('switch'))):
+        try:
+            r = ensure_home(file, log, tid, tail=tail)
+            if r:
+                log('%s，跳过开始唤醒' % (r.get('detail') or '界面检查通过'))
+                wakeup = False
+        except Exception as e:                  # noqa: BLE001
+            log('界面检查：%s（照旧走开始唤醒）' % e)
     plans = _train_plans(rows, file, log)
     if not plans:
         _save_train_plan(file, [])
@@ -2084,7 +2183,10 @@ def skill_sweep(params, log, tid=None):
     tail = (params.get('accountName') or params.get('tail')
             or _account_name_tail(file) or '').strip()
     if params.get('wakeup', True):
-        skill_wakeup({'account': file, 'accountName': tail}, log, tid=tid)
+        # switch 跟着上层走：多账号批量时这一步必须真切号，不能走「已在
+        # 主界面就跳过」的捷径（2026-11-26）
+        skill_wakeup({'account': file, 'accountName': tail,
+                      'switch': _flag(params.get('switch'))}, log, tid=tid)
 
     done, bad, all_swaps = [], [], []
     total = params.get('timeout') or 3 * 60 * 60
@@ -2169,34 +2271,66 @@ def skill_sweep(params, log, tid=None):
 
 # ---------------------------------------------------------------- 小工具（牛杂）
 
-@skill("tool", "MAA 牛杂小工具：战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店",
+@skill("tool", "MAA 牛杂小工具：战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店 / "
+               "绿票商店 / 黄票商店",
        needs_game=True, aliases=("商店", "小工具"))
 def skill_tool(params, log, tid=None):
-    """跑 MAA「小工具 → 牛杂」里的功能：战时新闻委员会 / 活动商店
+    """跑 MAA「小工具 → 牛杂」里的功能
 
-    两项的共同点：入口都在**当期活动地图**上，点进去之后由 MAA 的 ``Custom``
-    任务接手（怎么调见 :mod:`maatools` 顶部注释）。所以这里只有三步：
+    这里有两类，到位方式完全不同（怎么调见 :mod:`maatools` 顶部注释）：
 
-        1. adb 导航：终端 → 活动地图 → 点入口节点
-        2. 交给 MaaCore 跑 Custom 任务
-        3. 把「成功没有 / 卡在哪 / 要不要手动过教程」讲清楚
+      - **活动里的入口**（战时新闻委员会 / 喀兰贸易技术研发部 / 活动商店）：
+        入口在当期活动地图上，先 adb 导航到地图、点节点，再交给 MaaCore；
+      - **常驻商店**（绿票 / 黄票商店，2026-11-26）：任务自己从主界面走到
+        「终端 → 仓库 → 凭证交易所」，这边只要保证**人在主界面**
+        （:func:`stagenav.reach_home`），不要再去活动地图上找入口。
+
+    黄票商店是**高危**（258 黄票换 38 抽，不可撤销）：没带 ``confirm`` 就直接
+    返回 ``need_confirm``，连模拟器都不碰——上层必须先让用户亲口确认，再调一次。
 
     用户 2026-11-19 的原话：「然后运行 MAA 中小工具牛杂中的这个，并告诉用户
     如果被教程卡住，手动过一下教程再挂一遍」。所以卡住时不能只报失败。
     """
     from . import acctbind, eventnav, maatools
 
-    file = _account_file(params.get('account') or '')
+    # 先认名字：高危闸门要在**碰账号和模拟器之前**就拦住，否则「没有账号」
+    # 这种无关错误会把「请先确认」的提示顶掉。
     prefix = (params.get('prefix') or params.get('activity') or '').strip().upper()
     key, ent = maatools.resolve(params.get('name') or params.get('tool') or '',
                                 prefix=prefix or None)
     # 工具自己登记了活动代号（喀兰贸易技术研发部只在 OS 的地图上），用户没说
     # 活动时就用它，别去当期活动地图上瞎找
     prefix = prefix or str(ent.get('prefix') or '').upper()
+
+    # ---- 0) 高危闸门：在连模拟器、切号之前就拦住 ----
+    # 黄票商店一次点下去就是 258 黄票，且黄票没有别的来源补回来。这里不做
+    # 「先跑再说」，也不看 autoApply——那种开关是给「写入 MAA 配置」用的。
+    if ent.get('confirm') and not _flag(params.get('confirm')):
+        risk = ent.get('risk') or '这一步不可撤销'
+        log('「%s」是高危操作，先等用户确认：%s' % (ent.get('name'), risk))
+        return {'ok': False, 'need_confirm': True, 'tool': key,
+                'name': ent.get('name'),
+                'account': params.get('account') or '',
+                'risk': risk,
+                'summary': '%s：%s' % (ent.get('name'), risk),
+                'hint': '把 summary 原样告诉用户；他亲口同意后再调一次，'
+                        '参数带 confirm=true'}
+
+    file = _account_file(params.get('account') or '')
     d = _maa_dir_of(file)
     log('小工具：%s（MAA 牛杂里的同名项）' % ent.get('name'))
+    if ent.get('note'):
+        log(ent['note'])
 
-    # ---- 1) 导航到活动地图上的入口 ----
+    # 可选前置：唤醒 + 切号。单号、或用户明说不用切号时**不要传**，直接回主页跑
+    if _flag(params.get('wakeup')):
+        tail = (params.get('accountName') or params.get('tail')
+                or _account_name_tail(file) or '').strip()
+        log('先唤醒%s…' % ('（切到 %s）' % tail if tail else ''))
+        _call_skill('wakeup', {'account': file, 'accountName': tail,
+                               'switch': _flag(params.get('switch'))}, log, tid)
+
+    # ---- 1) 到位：活动入口 → 活动地图；常驻商店 → 主界面 ----
     conn = _conn_of(file, d)
     client = _client_of(file)
     t = stagenav.Touch(conn['adb_path'], conn['address'], log,
@@ -2207,15 +2341,22 @@ def skill_tool(params, log, tid=None):
     if not alive:
         raise RuntimeError(detail)
     if not t.game_alive():
-        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——先调 skill_wakeup '
-                           '唤醒，再挂')
+        raise RuntimeError('游戏没在跑（模拟器连着但客户端没开）——这次传 wakeup=true，'
+                           '或先调 skill_wakeup 唤醒，再挂')
 
-    # 「小游戏」这种泛称已经按 prefix 选好了具体那一项（maatools.resolve），
-    # 导航这边用同一个 prefix 找对应的活动地图
-    ok, why = eventnav.run_tool(t, ent.get('nav'), prefix=prefix or None, log=log)
-    if not ok:
-        raise RuntimeError('导航没到位：%s' % why)
-    log(why)
+    if ent.get('nav'):
+        # 「小游戏」这种泛称已经按 prefix 选好了具体那一项（maatools.resolve），
+        # 导航这边用同一个 prefix 找对应的活动地图
+        ok, why = eventnav.run_tool(t, ent.get('nav'), prefix=prefix or None,
+                                    log=log)
+        if not ok:
+            raise RuntimeError('导航没到位：%s' % why)
+        log(why)
+    elif ent.get('home'):
+        ok, why = stagenav.reach_home(t, log)
+        if not ok:
+            raise RuntimeError('回不到主界面：%s' % why)
+        log('已确认在主界面，剩下的交给 MAA 自己点进商店')
 
     # ---- 2) 交给 MAA ----
     bl = params.get('blacklist')
@@ -2283,7 +2424,8 @@ def skill_claim(ctx):
     if p.get('wakeup'):
         tail = (p.get('accountName') or p.get('tail')
                 or _account_name_tail(ctx.file) or '').strip()
-        _call_skill('wakeup', {'account': ctx.file, 'accountName': tail},
+        _call_skill('wakeup', {'account': ctx.file, 'accountName': tail,
+                               'switch': _flag(p.get('switch'))},
                     log, ctx.tid)
 
     t = ctx.touch()
@@ -2371,6 +2513,10 @@ def _wakes_itself(step_list):
     if name == 'claim':
         # 领奖也能带 wakeup（游戏停在登录页时先唤醒）
         return bool(p.get('wakeup'))
+    if name == 'tool':
+        # 小工具/商店本身不唤醒：传了 wakeup 才算（商店单号时不该白等一次
+        # 客户端重启，2026-11-26 口径）
+        return _flag(p.get('wakeup'))
     return False
 
 
@@ -2381,10 +2527,27 @@ def _with_auto_wake(step_list, many, switch=None):
     「开始唤醒」切号**——界面停在哪、登的是谁，从上一个号身上推不出来。
     第一步自己会唤醒的（``_wakes_itself``）不重复补；用户明说不用切号时
     传 ``switch=False``。
+
+    补进来的这一步带 ``switch=True``：**切号必须真跑 StartUp**，不能因为
+    界面恰好在主界面就跳过（2026-11-26 加的单账号「先看界面」捷径在这里
+    必须让路，否则第二个号会在第一个号的账号上跑）。
     """
     if not (many and switch is not False and not _wakes_itself(step_list)):
         return step_list, False
-    return [('wakeup', {})] + list(step_list), True
+    return [('wakeup', {'switch': True})] + list(step_list), True
+
+
+def _mark_switch(step_list, many):
+    """多账号：给每一步盖 ``switch=True``——这台号必须**真切号**
+
+    2026-11-26 单账号加了「已经在主界面就不重启客户端」的捷径（见
+    :func:`ensure_home`），这条捷径在多账号下会让第二个号直接在前一个号的
+    账号上开打。所以多账号统一在这里下死命令：skill 自己带的唤醒（sweep /
+    weekly / train 默认 wakeup=true）也走真 StartUp。
+    """
+    if not many:
+        return step_list
+    return [(n, dict(p, switch=True)) for n, p in step_list]
 
 
 def _emulator_key(file, address=''):
@@ -2515,6 +2678,15 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
                 p.setdefault('accountName', tail)
             plog('---- %d/%d %s ----' % (j, len(step_list),
                                          SKILLS[name][0]))
+            # 单账号批量也走同一条前置：界面不在主页就按返回键走回来（多账号
+            # 的步骤被盖了 switch=true，_home_check_on 直接返回 False）
+            if _home_check_on(name, p):
+                try:
+                    hr = ensure_home(f, plog, tid, tail=tail)
+                    plog('%s（不会整段重启客户端）'
+                         % (hr.get('detail') or '界面检查通过'))
+                except Exception as e:          # noqa: BLE001
+                    plog('界面检查没做成（%s），这一步自己处理界面' % e)
             try:
                 r = _call_skill(name, p, plog, tid)
                 acc_res.append({'skill': name, 'ok': True,
@@ -2608,6 +2780,9 @@ def run_batch(accounts_list, steps, names=None, emulators=None, switch=None):
     # 会唤醒的（wakeup / sweep / weekly / train / fight 带 wakeup）就不重复
     # 补，免得白等一遍客户端重启；用户明说「不用切号」时传 switch=False。
     step_list, auto_wake = _with_auto_wake(step_list, len(files) > 1, switch)
+    # 多账号：每个号都必须**真的切号**（不能因为界面恰好在主界面就跳过
+    # StartUp——那样第二个号会在第一个号的账号上跑，2026-11-26）
+    step_list = _mark_switch(step_list, len(files) > 1)
 
     # 分组：同模拟器的号必须排队
     groups = {}
@@ -2735,6 +2910,35 @@ SKILLS = {s.name: (s.desc, s.fn) for s in REGISTRY.values()}
 #: signin 走森空岛网页，跟游戏无关——用户只想签个到不该被要求开模拟器。
 _NEEDS_GAME = frozenset(s.name for s in REGISTRY.values() if s.needs_game)
 
+#: 单账号任务开跑前要做「界面检查」的 skill（2026-11-26 用户要求）：
+#: 先从当前页面收回主界面，再让 skill 自己导航——省掉一遍完整的自动唤醒。
+#:
+#: 不在表里的三条各有原因：``wakeup`` 自己就是唤醒；``signin`` 不碰游戏；
+#: ``fight`` 默认 noNav 直跑（用户可能正停在关卡列表，硬拉回主页反而把它弄坏），
+#: 只有显式带了 ``wakeup`` / ``navigate`` 才检查（见 :func:`_home_check_on`）。
+_HOME_CHECKED = frozenset(('navigate', 'sweep', 'weekly', 'train',
+                           'claim', 'tool', 'difficulty', 'skip_story', 'fight'))
+
+
+def _home_check_on(name, params):
+    """这一步要不要先做界面检查
+
+    单账号才做（多账号由批量流程自己「开始唤醒」切号，切完就在主页）；
+    调用方明确说要直跑（``assumeStageList`` / ``noSwitch`` / ``direct``）就不做
+    ——用户亲口说「已经在关卡列表了」，再把他拖回主页就是反着来。
+    """
+    if name not in _HOME_CHECKED:
+        return False
+    p = params or {}
+    if _flag(p.get('switch')):
+        return False
+    if p.get('assumeStageList') or p.get('noSwitch') or p.get('direct'):
+        return False
+    if name == 'fight':
+        # fight 默认直跑：只有它自己要去导航时，主页才是必需的前置
+        return bool(p.get('wakeup') or p.get('navigate'))
+    return True
+
 
 def _call_skill(name, params, log, tid=None):
     """按注册的签名调用 skill
@@ -2788,6 +2992,18 @@ def _skill_body(name, params, log, tid):
                                   address=addr or None)
         if not ok:
             raise RuntimeError('环境没准备好：%s' % why)
+
+        # ---- 单账号任务的前置界面检查（2026-11-26 用户要求）----
+        # 「必须回到明日方舟主页，再开始导航干他需要干的事情」。这一步只花
+        # 一次截图：在主界面就直接过，停在别的页面就按返回键走回来，都不重启
+        # 客户端。检查不成功也不拦——交给 skill 自己（它要真唤醒时会报清楚的错）。
+        if _home_check_on(name, params):
+            try:
+                r = ensure_home(f, log, tid, tail=_account_name_tail(f))
+                log('%s（不会整段重启客户端）' % (r.get('detail')
+                                              or '界面检查通过'))
+            except Exception as e:              # noqa: BLE001
+                log('界面检查没做成（%s），这一步自己处理界面' % e)
     return _call_skill(name, params, log, tid)
 
 

@@ -768,3 +768,72 @@ Python 跑即可；C 组会真实调用 Windows DPAPI，换电脑/换用户跑 B
 `v2.7.0` + 完整 release_note，无 CDK 时 `url` 为空；假 CDK 返回 7002
 并被翻成「CDK 不对，请检查后重新填写」；`POST /api/mirror/cdk` 存完掩码是
 `········1234`，清除后 `hasCdk: false`。
+
+### B78 绿票 / 黄票商店（2026-11-26）
+
+MAA 牛杂里那两个常驻商店接进助手。和前三项（活动里的小游戏 / 活动商店）
+最大的不同：**入口不在活动地图上**，任务自己从主界面走「终端 → 仓库 →
+凭证交易所」，所以我们只要保证「人在主界面」。
+
+- **任务名**：`GreenTicket@Store@Begin` / `YellowTicket@Store@Begin`——写错了
+  MAA 当不存在，跑完什么也没买还不报错，所以这两条断言钉死。
+- **不传 params**：绿票默认就是 MAA 内置流程（一层全买、二层只买单抽 +
+  招募许可），正好是用户要的口径；断言 `build_params` 里没有 `params`。
+- **不导航**：两项 `nav` 为空、`home` 为真；`skill_tool` 走
+  `stagenav.reach_home`，**不许**再进 `eventnav.run_tool`。
+- **黄票高危**：没带 `confirm` 时直接返回 `need_confirm`，测试把
+  `stagenav.Touch` 换成「一构造就断言失败」的桩，确保它连模拟器都没碰；
+  带了 `confirm` 才走到 `run_custom`，且 `spec['task']` 就是那条任务名。
+- **助手层**：`autoApply` 开着，`_tool_skill_tool` 也必须返回 `need_confirm`
+  （`_guard(force=True)`），卡片上要写明 258 黄票。
+- **批量**：`_tool_step_need_confirm` 能从 `run_steps` 的步骤里认出黄票，
+  绿票 / 扫图这些不算高危。
+- **唤醒口径**：`_wakes_itself([('tool', {})])` 为假（单号不白等一次客户端
+  重启），带 `wakeup` 才为真；多账号自动补一步 `wakeup`，`switch=False` 不补。
+
+> B77 号留给还没合进来的「多开分组只认设备」分支，这里直接排 B78。
+
+### B79 单账号先看界面再干活（2026-11-26）
+
+用户口径：「每个单账号任务的运行前检查当前明日方舟界面的位置，必须回到明日
+方舟主页，再开始导航」，目的是**减小重复自动唤醒的时间**——MAA 的 StartUp
+每次都要重启客户端（冷启动 40~80 秒），单号连着跑几个任务就白等好几遍。
+
+- **哪些 skill 要做**：`_home_check_on` 只对 `navigate / sweep / weekly /
+  train / claim / tool / difficulty / skip_story` 生效；`wakeup`（自己就是
+  唤醒）、`signin`（不碰游戏）不做；`fight` 默认 `noNav` 直跑也不做（用户可能
+  正停在关卡列表，拉回主页反而弄坏），带 `wakeup` / `navigate` 才做。
+- **几条不许拦的**：参数里有 `switch`（多账号）、`assumeStageList` /
+  `noSwitch` / `direct`（用户说已经在关卡列表 / 别切号）。
+- **`ensure_home` 四种走法**：在主界面 → `already-home`（不截图之外零动作）；
+  在别处 → `reach-home`（只按返回键）；走不回去 → 抛错（`wake=True` 才真唤醒）；
+  游戏没开 → 抛错（同样只有 `wake=True` 才唤醒）。
+- **`skill_wakeup` 的快速返回**：单账号在主界面时直接返回 `already-home`，
+  `maaplan.run_core` 一次都不许调；带 `switch=True` 时必须走 `maa-startup`。
+- **落点两处**：`_skill_body`（单个 skill 任务）和 `_run_group` 的步骤循环（`run_steps` 单账号批量）都调一次；多账号的步骤被 `_mark_switch` 盖了 `switch=true`，判定直接为假。
+- **多账号把捷径关掉**：`_with_auto_wake` 补的那一步是
+  `('wakeup', {'switch': True})`，`run_batch` 再用 `_mark_switch` 给每一步盖
+  `switch=True`——否则第二个号会在第一个号的账号上开打。
+
+全程打桩：假 `Touch` + 假 `run_core`，不连模拟器。
+
+### B80 中文关键词兜底（2026-11-26）
+
+用户现场：搜「结城理模组」没有结果，助手帮着打模组任务时只会说「没有作业」。
+根因不是作业站没有，而是 `resources.resolve` 认不出**不是关卡名**的词就直接
+`mode='unknown'`。
+
+- **前提**：`resolve('结城理模组')` 仍然是 `unknown`（这条不许改，它本来就不是
+  关卡）；兜底在 `copilot` 里。
+- **拆关键词**：`结城理模组 4-3` / `4-3 结城理模组` 都能拆出关卡（`main_04-03`），
+  剩下的字当全文关键词；`结城理模组` 拆不出关卡；`模组3` 这种带数字的不许被
+  当成关卡。
+- **纯关键词**：只传 `document`，按作业自己的 `stage_name` 分组 → `mode='keyword'`，
+  每行都带关卡代号，空行（某关没作业）不留，`next` 为空。
+- **关键词 + 关卡**：传 `levelKeyword` + `document` 强制锁定；作业站混进来的
+  别关作业必须被 `stage_name` 二次校验挡掉，只剩锁定那一关，`locked` 带关键词。
+- **真搜不到**：仍旧 `mode='unknown'`，界面照旧「没有结果」。
+- **助手**：`build_run` 遇到 `keyword` 结果**拒绝排计划**，把命中的关卡列回去，
+  让模型问清是哪一关再重排（横跨十来关照单全挂 = 替用户决定打一堆他没说的关）。
+
+作业站用打桩 `_pull`，不联网。
