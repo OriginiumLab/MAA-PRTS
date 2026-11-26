@@ -117,21 +117,27 @@
     },
     {
       "id": "auth-expired-relogin-v1111",
-      "why": "游戏被其他设备（另一台跑日常的模拟器）挤下线后会弹「登录认证已失效，请重新登录」（只有一个 ✔ 按钮），核心只会在 unknown 里空转 90 秒后中止。判定到后先等 30 分钟（等其他设备把日常跑完，避免刚登上去又被挤），再点硬编码的对勾 (1280,982)，然后轮询 OCR「开始唤醒」并点击，等待回到游戏主页。360×5s 分段等待（点停止最多 5 秒内生效），中途点停止能被 Ke 的 abort 信号中断；Z.__prtsAuthWaited 标记本次任务已等过（Z 每次 start 重建），避免因为一帧 OCR 拖带又等 30 分钟。",
+      "why": "游戏被其他设备（另一台跑日常的模拟器）挤下线后会弹「登录认证已失效，请重新登录」（只有一个 ✔ 按钮），核心只会在 unknown 里空转 90 秒后中止。判定到后先等 30 分钟（等其他设备把日常跑完，避免刚登上去又被挤），再点硬编码的对勾 (1280,982)，然后轮询 OCR「开始[唤喚]醒」并点击，等待回到游戏主页。360×5s 分段等待（点停止最多 5 秒内生效），中途点停止能被 Ke 的 abort 信号中断；Z.__prtsAuthWaited 标记本次任务已等过（Z 每次 start 重建），避免因为一帧 OCR 拖带又等 30 分钟。另加独立标题页分支兜底：OCR 会把「唤」读成繁体「喚」（日志实测「开始喚醒」），正则 [唤喚] 兼容；再不济用 账号管理+查看公告/扫码登录+ID:/Ver: 认出标题页，点硬编码 (1281,1016)。",
       "find": "if(Ue(C,/今日配给/)){await st(960,960,1500);continue}if(Ue(C,/签到",
-      "replace": "if(Ue(C,/登录认证已失效|请重新登录/)){if(!Z.__prtsAuthWaited){Z.__prtsAuthWaited=1;H(\"检测到登录认证已失效（被其他设备挤下线）：等待约 30 分钟后自动重新登录\");for(let _ad=0;_ad<360&&!p.aborted;_ad++)await Ke(5e3)}if(p.aborted)break;let _af=null;try{_af=await qe()}catch(_ae){_af=null}let _ak=0;for(let _ai=0;_ai<180&&!p.aborted;_ai++){try{if(_af&&Ue(_af,/登录认证已失效|请重新登录/)){await st(1280,982,2500);_ak=1;_af=await qe()}const _aw=_af?Ue(_af,/开始唤醒/):null;if(_aw){await st(...Ou(_aw),3e3);_ak=2;break}}catch(_ae){}await Ke(1000);try{_af=await qe()}catch(_ae){_af=null}}H(_ak===2?\"已点击开始唤醒，等待返回游戏主页\":_ak===1?\"已点掉线确认，未读到开始唤醒，继续等待画面恢复\":\"未读到登录失效确认按钮，继续等待画面恢复\");await Ke(8e3);continue}if(Ue(C,/开始唤醒/)){H(\"游戏停在标题页：点击开始唤醒\");await st(...Ou(Ue(C,/开始唤醒/)),3e3);await Ke(6e3);continue}if(Ue(C,/今日配给/)){await st(960,960,1.5e3);continue}if(Ue(C,/签到"
+      "replace": "if(Ue(C,/登录认证已失效|请重新登录/)){if(!Z.__prtsAuthWaited){Z.__prtsAuthWaited=1;H(\"检测到登录认证已失效（被其他设备挤下线）：等待约 30 分钟后自动重新登录\");for(let _ad=0;_ad<360&&!p.aborted;_ad++)await Ke(5e3)}if(p.aborted)break;let _af=null;try{_af=await qe()}catch(_ae){_af=null}let _ak=0;for(let _ai=0;_ai<180&&!p.aborted;_ai++){try{if(_af&&Ue(_af,/登录认证已失效|请重新登录/)){await st(1280,982,2500);_ak=1;_af=await qe()}const _aw=_af?Ue(_af,/开始[唤喚]醒/):null;if(_aw){await st(...Ou(_aw),3e3);_ak=2;break}}catch(_ae){}await Ke(1000);try{_af=await qe()}catch(_ae){_af=null}}H(_ak===2?\"已点击开始唤醒，等待返回游戏主页\":_ak===1?\"已点掉线确认，未读到开始唤醒，继续等待画面恢复\":\"未读到登录失效确认按钮，继续等待画面恢复\");await Ke(8e3);continue}if(Ue(C,/开始[唤喚]醒/)||(Ue(C,/账号管理/)&&Ue(C,/查看公告|扫码登录/)&&Ue(C,/ID:|Ver:/))){const _tw=Ue(C,/开始[唤喚]醒/);H(\"游戏停在标题页：点击开始唤醒\");await st(...(_tw?Ou(_tw):[1281,1016]),3e3);await Ke(6e3);continue}if(Ue(C,/今日配给/)){await st(960,960,1.5e3);continue}if(Ue(C,/签到"
     },
     {
       "id": "home-to-garrison-v1111",
-      "why": "游戏热更新/重登会把客户端踢回游戏主页。1.1.11 原文在主页直接点 (1750,215)（实为右上角「终端」入口），点进终端页后就没下文了；新活动开后终端页卡片流水变动，写死坐标点不到卫戍协议。改为：在主页点「终端」（OCR 文字框，没读到回退 1750,215），等待后在终端页按 OCR 「卫戍协议」最靠左的文字框点卡片（避开右侧待办列表），读不到才按当前首卡中心 (1459,404) 备用。仍保留累计 9 次中止保护，成功进卫戍协议后归零。",
+      "why": "游戏热更新/重登会把客户端踢回游戏主页。1.1.11 原文在主页直接点 (1750,215)（实为右上角「终端」入口），点进终端页后就没下文了；新活动开后终端页卡片流水变动，写死坐标点不到卫戍协议。改为：在主页点「终端」（OCR 文字框，没读到回退 1750,215），等待后在终端页按 OCR 「卫[戍戌]协[议議]」最靠左的文字框点卡片（容忍 戍/戌、议/議 误读）（避开右侧待办列表），读不到才按当前首卡中心 (1459,404) 备用。仍保留累计 9 次中止保护，成功进卫戍协议后归零。",
       "find": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){H(\"\\u56DE\\u5230\\u6E38\\u620F\\u4E3B\\u9875\\uFF0C\\u4ECE\\u53F3\\u4E0A\\u89D2 Banner \\u8FDB\\u5165\\u536B\\u620D\\u534F\\u8BAE\"),await st(1750,215,4e3);continue}",
-      "replace": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){if(__prtsHomeTries>=9)throw new Error(\"反复从游戏主页进入卫戍协议失败，已中止；请确认终端里的卫戍协议入口是否还在\");__prtsHomeTries++;H(\"回到游戏主页：点终端进入卫戍协议\");const _tp=Ue(C,/^终端$/);await st(...(_tp?Ou(_tp):[1750,215]),2500);let _tf=null;try{_tf=await qe()}catch(_te){_tf=null}let _gc=null;for(let _tq=0;_tq<6&&!p.aborted;_tq++){try{if(_tf)_gc=_tf.texts.filter(_t=>_t.score>=.55&&/卫戍协议/.test(_t.text.replace(/\\s/g,\"\"))).sort((_a,_b)=>(_a.box?.[0]??0)-(_b.box?.[0]??0))[0]??null;if(_gc)break;await Ke(700);_tf=await qe()}catch(_te){await Ke(700);_tf=null}}if(_gc){__prtsHomeTries=0;await st(...Ou(_gc),3500)}else{console.error(\"[主页入口] 终端页未读到卫戍协议入口，按备用坐标点一次\");await st(1459,404,3500)}continue}"
+      "replace": "if(Ue(C,/^终端$/)&&Ue(C,/理智/)){if(__prtsHomeTries>=9)throw new Error(\"反复从游戏主页进入卫戍协议失败，已中止；请确认终端里的卫戍协议入口是否还在\");__prtsHomeTries++;H(\"回到游戏主页：点终端进入卫戍协议\");const _tp=Ue(C,/^终端$/);await st(...(_tp?Ou(_tp):[1750,215]),2500);let _tf=null;try{_tf=await qe()}catch(_te){_tf=null}let _gc=null;for(let _tq=0;_tq<6&&!p.aborted;_tq++){try{if(_tf)_gc=_tf.texts.filter(_t=>_t.score>=.55&&/卫[戍戌]协[议議]/.test(_t.text.replace(/\\s/g,\"\"))).sort((_a,_b)=>(_a.box?.[0]??0)-(_b.box?.[0]??0))[0]??null;if(_gc)break;await Ke(700);_tf=await qe()}catch(_te){await Ke(700);_tf=null}}if(_gc){__prtsHomeTries=0;await st(...Ou(_gc),3500)}else{console.error(\"[主页入口] 终端页未读到卫戍协议入口，按备用坐标点一次\");await st(1459,404,3500)}continue}"
     },
     {
       "id": "lobby-unsettled-reconnect-v1111",
-      "why": "被挤下线时正在对局，重登后卫戍协议主页右下角不是「独立模拟」，而是「已终止 / 断线重连」；点一下会进入结算页（模拟完成 + 返回主页）。原来的分支要求 screen 先被识别成 lobby（需同时读到个人模拟/联合模拟/协议数据库），可联合模拟被置灰时可能识别不到；改为只要页面上有「断线重连」就点（这个入口只在未结算的游戏主页出现）。结算页的「返回主页」由核心现有 result 分支点掉，点完回到正常主页。",
+      "why": "被挤下线时正在对局，重登后卫戍协议主页右下角不是「独立模拟」，而是「已终止 / 断线重连」；点一下会进入结算页（模拟完成 + 返回主页）。原来的分支要求 screen 先被识别成 lobby（需同时读到个人模拟/联合模拟/协议数据库），可联合模拟被置灰时可能识别不到；改为只要页面上有「断线重连」就点（这个入口只在未结算的游戏主页出现）。结算页的「返回主页」由核心现有 result 分支点掉，点完回到正常主页。 正则做 [断斷]线重[连連] 兼容，避免 OCR 繁体/异体误读点不到。",
       "find": "if(C.screen===\"lobby\"&&Ue(C,/断线重连/))",
-      "replace": "if(Ue(C,/断线重连/))"
+      "replace": "if(Ue(C,/[断斷]线重[连連]/))"
+    },
+    {
+      "id": "reconnect-tap-tolerance-v1111",
+      "why": "「断线重连」按钮的点击也按 OCR 文本定位；OCR 在部分帧会把线/连读成繁体，Pt 找不到会抛「画面没有预期按钮」。与上一条同口径放宽为 [断斷]线重[连連]。",
+      "find": "await Pt(C,/断线重连/,6e3)",
+      "replace": "await Pt(C,/[断斷]线重[连連]/,6e3)"
     },
     {
       "id": "speed-nondebug-revert-v1111",
