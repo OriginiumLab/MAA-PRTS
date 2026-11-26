@@ -138,6 +138,18 @@
       "why": "标准模拟下三合一免费三选一的 0 价格气泡 OCR 读不出（偏中气泡重读也没命中）时，prep 循环会一直抛「尚未回到普通购买界面，等待免费候选卡识别」。三张免费卡在商店状态里（名字已读出，x 为卡槽位置）；这里补一条几何盲领：先用 Du(免费卡, 状态) 走核心自己的优先级（优先生成精锐 > 标准模拟推荐 > 购卡评分 > 品级），取不到再退回 x 最小的一张，按原免费领取同样的 blind 调用 Ye(x,\"免费奖励\",true,null,true)（跳过名字核对）。",
       "find": "if((Rt.reward||gt(C))&&!tu.length&&W<2){const re=Rt.scan.prices.filter(ot=>ot.value===0).map(ot=>ot.x).sort((ot,eu)=>ot-eu);if(re.length){W++;const ot=C.pc?Z.pcUiScale/100:1,eu=Math.round(re[0]-120*ot);H(`\\u7B2C ${N.round} \\u56DE\\u5408 \\xB7 \\u514D\\u8D39\\u4E09\\u9009\\u4E00\\u7684\\u5361\\u540D\\u90FD\\u6CA1\\u8BA4\\u51FA\\uFF08\\u53EF\\u80FD\\u662F\\u9884\\u5907\\u5E72\\u5458\\uFF09\\uFF0C\\u76F4\\u63A5\\u9886\\u53D6\\u6700\\u5DE6\\u8FB9\\u4E00\\u5F20`),e.diagnostics.note(\"\\u514D\\u8D39\\u5956\\u52B1.\\u76F2\\u9886\",{round:N.round,zeroXs:re,x0:eu,shop:Bt.shop.map(pu=>pu.name??\"?\")}),await Ye(eu,\"\\u514D\\u8D39\\u5956\\u52B1\",!0,null,!0)&&(e.clearSoldCards(),_t=null,Mt.clear()),Be=!1,me=!0;continue}}",
       "replace": "if((Rt.reward||gt(C))&&!tu.length&&W<2){const re=Rt.scan.prices.filter(ot=>ot.value===0).map(ot=>ot.x).sort((ot,eu)=>ot-eu);if(re.length){W++;const ot=C.pc?Z.pcUiScale/100:1,eu=Math.round(re[0]-120*ot);H(`\\u7B2C ${N.round} \\u56DE\\u5408 \\xB7 \\u514D\\u8D39\\u4E09\\u9009\\u4E00\\u7684\\u5361\\u540D\\u90FD\\u6CA1\\u8BA4\\u51FA\\uFF08\\u53EF\\u80FD\\u662F\\u9884\\u5907\\u5E72\\u5458\\uFF09\\uFF0C\\u76F4\\u63A5\\u9886\\u53D6\\u6700\\u5DE6\\u8FB9\\u4E00\\u5F20`),e.diagnostics.note(\"\\u514D\\u8D39\\u5956\\u52B1.\\u76F2\\u9886\",{round:N.round,zeroXs:re,x0:eu,shop:Bt.shop.map(pu=>pu.name??\"?\")}),await Ye(eu,\"\\u514D\\u8D39\\u5956\\u52B1\",!0,null,!0)&&(e.clearSoldCards(),_t=null,Mt.clear()),Be=!1,me=!0;continue}const _fcList=zt.shop.filter(ot=>!!ot.name);const _fc=Du(_fcList,Bt).pick||_fcList.slice().sort((ot,eu)=>ot.x-eu.x)[0];if(_fc){W++;H(`第 ${N.round} 回合 · 免费三选一价格未读出，按优先级盲领 ${_fc.name}`);e.diagnostics.note(\"免费奖励.几何盲领\",{round:N.round,x:_fc.x,name:_fc.name,shop:zt.shop.map(ot=>ot.name??\"?\")});if(await Ye(_fc.x,\"免费奖励\",!0,null,!0)){e.clearSoldCards();_t=null;Mt.clear()}Be=!1;me=!0;continue}}"
+    },
+    {
+      "id": "summon-skip-wolfpack-v1111",
+      "why": "伺夜的狼群是伴随召唤物，手动拖不上场。核心把它当可手动部署的召唤物，每回合在 deploy.summons 里尝试拖一次，失败后刷「狼群 无法手动部署，留在整备区」，白等几秒。按用户要求留在备战区不管，直接从召唤物上场列表里排除（其他召唤物逻辑不变）。",
+      "find": "const C=A.units.filter(z=>z.area===\"bench\"&&z.auxiliary&&!z.item&&z.name&&!e.chess.some(G=>G.name===z.name));",
+      "replace": "const C=A.units.filter(z=>z.area===\"bench\"&&z.auxiliary&&!z.item&&z.name&&z.name!==\"狼群\"&&!e.chess.some(G=>G.name===z.name));"
+    },
+    {
+      "id": "aux-skip-deploy-plan-v1111",
+      "why": "伺夜的狼群这类伴随召唤物会出现在求解器的 placements 里，主部署计划 dt 把它当可移动单位：拖到目标格后核对时调用 setUnitName(\"狼群\")，名字不在棋库 → 抛「未知干员 狼群」直接中止任务（12:04 那次就是拖放完成后在 deploy 核对时炸的）。召唤物本来由 Ju/deploy.summons 单独处理，这里把 auxiliary 单位从主部署计划里剔除，既不拖也不核对，留在备战区。",
+      "find": "dt=$t.map(He=>({...He,unit:Vt.find(We=>We.key===He.from)})),",
+      "replace": "dt=$t.map(He=>({...He,unit:Vt.find(We=>We.key===He.from)})).filter(He=>!He.unit?.auxiliary),"
     }
   ]
 }
