@@ -181,6 +181,12 @@ jobs:
             echo '```'
             echo "SHA256 ($ZIP) = $(sha256sum "$ZIP" | cut -d' ' -f1)"
             echo '```'
+            # 国内源：Mirror 酱建议在 release 末尾放这条链接（他们后台数据显示
+            # 新用户有一大块从这儿来）。没 CDK 也能打开页面查版本，不写死文案。
+            echo
+            echo '---'
+            echo
+            echo '已有 [Mirror 酱](https://mirrorchyan.com/zh/projects?rid=MAA-PRTS&channel=stable&source=maaprts) CDK？[前往 Mirror 酱高速下载](https://mirrorchyan.com/zh/projects?rid=MAA-PRTS&channel=stable&source=maaprts)'
           } > CHANGELOG.md
           cat CHANGELOG.md
 

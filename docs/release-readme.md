@@ -66,5 +66,6 @@ token 解不开，到新机器重新粘贴一次 token 即可。
 
 ---
 
-项目主页：<https://github.com/HuiParu/MAA-PRTS>
+项目主页：<https://github.com/OriginiumLab/MAA-PRTS>
+国内下载慢可以用 [Mirror 酱](https://mirrorchyan.com/zh/projects?rid=MAA-PRTS&channel=stable&source=maaprts) 的 CDN。
 遇到问题请到 GitHub 提 Issue。
