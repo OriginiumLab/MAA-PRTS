@@ -1,0 +1,86 @@
+{
+  "_note": "多账号「一键长草」白本：任务清单与参数抄自 MAA 6.20.1 的 181 档案。模拟器地址、切号名、理智作战关卡一律留空，由调用方按账号填。只保留一键长草这一套（开始唤醒 / 自动公招 / 基建换班 / 理智作战 / 信用收支 / 领取奖励），结束后脚本、主题、快捷键这些一概不抄。",
+  "source": "MAA 6.20.1 · 用户档案 181",
+  "wrote": "2026-11-26",
+  "tasks": [
+    "startup",
+    "recruit",
+    "infrast",
+    "fight",
+    "mall",
+    "award"
+  ],
+  "stage": "",
+  "chain": {
+    "fight": {
+      "medicine": 0,
+      "stone": 0
+    },
+    "recruit": {
+      "refresh": true,
+      "select": [
+        3,
+        4
+      ],
+      "confirm": [
+        3,
+        4
+      ],
+      "first_tags": [
+        "支援机械"
+      ],
+      "extra_tags_mode": 0,
+      "times": 4,
+      "expedite": false
+    },
+    "infrast": {
+      "mode": 0,
+      "facility": [
+        "Mfg",
+        "Trade",
+        "Control",
+        "Power",
+        "Reception",
+        "Office",
+        "Dorm",
+        "Processing",
+        "Training"
+      ],
+      "drones": "CombatRecord",
+      "threshold": 0.3,
+      "replenish": true,
+      "dorm_notstationed_enabled": true,
+      "dorm_trust_enabled": false,
+      "reception_message_board": true,
+      "reception_clue_exchange": true,
+      "reception_send_clue": true,
+      "filename": "",
+      "plan_index": -1
+    },
+    "mall": {
+      "shopping": true,
+      "buy_first": [
+        "招聘许可"
+      ],
+      "blacklist": [
+        "碳",
+        "家具",
+        "加急许可"
+      ],
+      "visit_friends": true,
+      "credit_fight": true,
+      "formation_index": 0,
+      "force_shopping_if_credit_full": false,
+      "only_buy_discount": false,
+      "reserve_max_credit": false
+    },
+    "award": {
+      "award": true,
+      "mail": true,
+      "recruit": true,
+      "orundum": true,
+      "mining": true,
+      "specialaccess": true
+    }
+  }
+}

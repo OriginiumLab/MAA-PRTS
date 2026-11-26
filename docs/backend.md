@@ -38,6 +38,7 @@
 | `core/acctname.py` | 切号名（MAA `AccountName`）的归一化与校验，**唯一一份规则**。MAA 是拿它和登录界面那行 OCR 做子串匹配，所以 `5505` / `136` / `23****45` / `157****3635` / `181****5505` 都合法；用户给全号、带横线、全角数字、星号数量不对都归一成 `前3****后4`，只给「前 3 + 后 4」（`1573635` / `157 3635`）也收。官服只拦「填了昵称」（拿昵称切号会死循环几十次然后失败），B 服不拦 |
 | `core/acctbind.py` | 「这个账号跑 StartUp 写哪个切号名」的唯一解析入口：账号绑了配置文件（`maa.profile`）且没手改过 → 读那份档案 StartUp 的 `AccountName`（`maa.profile_account_name()`，**只读**）；否则用账号存的 `maa.accountName`；都没有才返回空让调用方去问用户。手改过的值标 `accountNameFrom=manual`，不会被档案里的旧号码盖回去 |
 | `core/multiacct.py` | 多账号编排：MAA「一个配置档案 = 一个账号」，按各账号练度各挑作业，串行切换执行。档案一律新建 `PRTS-` 前缀的那份，用户自己的档案一个字段都不动。切号名统一走 `acctname.check()`；`maaProfile` 是档案名不是切号名，别混用 |
+| `core/daily.py` | 多账号日常（一键长草）：读每号自己 MAA 档案里「理智作战」的关卡和勾了的日常任务 → 用户确认 → 拼成 MaaCore 任务链（唤醒/公招/基建/理智作战/信用/领奖）。没配档案的号用 `resources/daily-plan.json` 白本。**我们自己不导航、不抄作业**，关卡由 MAA 的 Fight 进、切号由 MAA 的 StartUp 做。执行复用 `maaplan.run_plan`（同台轮替 / 多台并行） |
 | `core/maaplan.py` | 把「用户想怎么挂」翻成可执行的东西，两条路线：① `build_queue`/`ensure_profile` 写 GUI 的 `TaskQueue` + `RunDirectly`（能看界面，但**不能抄作业**：MAA 的 `InitializeItems` 不认 CopilotTask，会抛 NotImplementedException 让整个任务列表空白）；② `core_tasks`/`run_core` 生成 MaaCore 的任务序列直接驱动（能抄作业、能跑 Custom 小活动、自己按开始）。`run_core` 跑抄作业固定四段：**登录（StartUp）→ `AsstStop` 把 MAA 停住 → 用 `stagenav` 点到关卡地图 → 再 append Copilot + `AsstStart`**。停这一步不能省：不停的话 MaaCore 还在按自己的逻辑截屏/滑动，和我们的 adb 点击抢界面。导航失败且这一关有卡片模板（老故事集）时**直接报错**，不把作业交给 MAA——它只会横向滑主线，白跑 30 秒再失败（2026-11-17 SV 实测：停住后 24 秒内 MAA 就在地图上 OCR 到 SV-1、点开始行动、自动编队开打） |
 | `core/maacore.py` | MaaCore 直连：`AsstCreateEx` → `AsstLoadResource` → `AsstConnect` → `AsstAppendTask` → `AsstStart`，回调翻成事件流。三个坑写在文件头：`AsstCreateEx` 的 restype 必须是 `c_void_p`（否则 64 位句柄截断成 32 位，每次 append 都 access violation）、Copilot 的 `filename` 必须绝对路径、`copilot_list` 的键是 `filename` 不是 `file_name`（写错会让进程 C++ 异常崩溃）；还有第四个**静默**坑——子任务回调码是 20000 段不是 70000 段（见下一节） |
 | `core/pages.py` | 认「现在停在哪一页」+ 回主界面。主页 = 左上角「设置齿轮 + 邮件」两个图标定点比对（实测 0.0 分；活动地图/设置页/基建都不命中）；基建「是否确认离开罗德岛基建？」= 底部按钮条上左「✕」右「✓」两个白圆钮同时定点命中，认出就点右半「确认」的中心（这个弹窗按 ESC / 返回都退不出去）。**「是否确认退出游戏？」按钮条长得一样**，靠「背后是模糊的主界面（亮）」区分，认出点左边「✕」取消并直接当到家——点错右边就是把游戏关掉。`to_home()` 每轮先看一帧再决定按返回 / ESC / 点确认。 |
@@ -1449,6 +1450,39 @@ StartUp 连着三次「回到主界面」都没认出来，最后重试到上限
 
 `_with_auto_wake` 是纯函数（返回新的步骤表，不改原列表），所以冒烟可以直接钉。
 日志在任务开头写「多账号：每个号开跑前先「开始唤醒」切号」。
+
+## 多账号日常 = MAA 一键长草（`daily.py`，2026-11-26）
+
+用户报障：多账号日常打关卡是**我们的 `stagenav` 导航 + 作业站 Copilot** 在打，
+而 MAA 这时也在跑自己的日常队列——两条腿抢同一台模拟器，MAA 直接报错。
+所以日常整条线改成「读每号自己的 MAA 配置 → 用 MAA 的一键长草跑」。
+
+**读什么**（`daily.chain_of_queue`，字段名照 MAA 6.20.1 的 `gui.new.json`）：
+
+| 任务 | 读的字段 → MaaCore 参数 |
+|---|---|
+| `Fight` | `StagePlan` → 关卡（`Annihilation` 剿灭也在里面）；`EnableTimesLimit`/`TimesLimit` → `times`（**不勾就别给**：核心写 0 是「一次都不打」） |
+| `Recruit` | `MaxTimes` → `times`（以前写成 `max_times`，一直被忽略）；`Level3~6Choose` → `select`/`confirm`；`PreserveTagList` → `first_tags`；`ForceRefresh` → `refresh` |
+| `Infrast` | `UsesOfDrones` → `drones`（枚举字符串两边一致）；`DormThreshold`/100 → `threshold`；`PlanSelect` → `plan_index`（-1 = 默认排班） |
+| `Mall` | `FirstList`/`BlackList`（分号串）→ `buy_first`/`blacklist`；`CreditFightFormation`-1 → `formation_index` |
+| `Award` | `FreeGacha` → `recruit`（核心的 `recruit` 是免费抽卡，不是公招） |
+
+只抄「一键长草这一套」：任务开关 + 上面这些参数 + 关卡 + 模拟器地址。主题、
+快捷键、结束后脚本、作业列表一概不碰，也不改写用户档案（`chain_of_queue` 只读）。
+
+**没配档案的号用白本** `resources/daily-plan.json`（从 181 抄的一份，切号名 /
+地址 / 关卡留空）。`maaProfile` 指向的档案找不到时按切号名反查；档案里只剩
+「开始唤醒」也退回白本——那种档案照抄过来就是「唤醒了什么都不干」。
+
+**执行**：每号一条 MaaCore 链（`StartUp(account_name) → Recruit → Infrast →
+Fight → Mall → Award`），交给 `maaplan.run_plan` 按「MAA 目录 + 模拟器地址」
+分组：同台轮替、不同台各起一个独立进程。逐号差异（任务清单 / 关卡 / 参数 /
+档案）由 `_run_group` 的 row 级覆盖带进 spec，`core_tasks` 用 `spec['taskParams']`
+合并参数。
+
+**不导航**：这条链里没有 Copilot，`run_core` 只在有作业时才 `_navigate`，所以
+一次 adb 点击都不发；关卡由 MAA 的 `Fight` 自己找，切号由 MAA 的 `StartUp`
+自己做（`SwitchAccount@StartUpBegin`）。单账号也一样，不再重启客户端。
 
 ## 散点关卡（S 关，`scatter.py`，2026-11-23）
 
