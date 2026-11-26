@@ -528,7 +528,10 @@ function renderHero() {
   const a0 = (d && d.account) || {};
   const ef = !!(d && (d.game === 'endfield' || a0.game === 'endfield'));
   const importBtn = $('#btn-import-maa');
-  if (importBtn) importBtn.hidden = !d || ef;   // 终末地没有 MAA 练度可导
+  // 终末地没有 MAA 练度可导；森空岛 token 建的号有自己的同步入口，
+  // 「从 MAA 更新」对它反而是降级数据（丢技能/专精/模组），不摆这个按钮。
+  // 只有 MAA 建的号（没 token）才需要它手动刷新练度。
+  if (importBtn) importBtn.hidden = !d || ef || !!d.hasToken;
   const algoSel = $('#algo-select');
   if (algoSel) {
     // 算法下拉跟账号走：没有账号、或终末地账号（不搜作业）都不可用
