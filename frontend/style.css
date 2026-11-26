@@ -1385,6 +1385,19 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 /* 活动：关卡行 */
 .stage-list { display: flex; flex-direction: column; gap: 9px; }
 
+/* 关键词兜底结果的说明条（作业站全文搜，命中横跨好几关） */
+.kw-note {
+  margin: -2px 0 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-left: 2px solid rgba(94, 234, 212, 0.45);
+  background: rgba(var(--tint), 0.03);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
 .stage-row {
   border-radius: 14px;
   border: 1px solid var(--line);

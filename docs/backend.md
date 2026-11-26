@@ -434,7 +434,7 @@ API：`POST /api/skill/run`（body：`{"skill": ..., "params": {...}}`）、`GET
 
 | skill | 能力 | 实现依托 |
 |---|---|---|
-| `wakeup` | 唤醒游戏到主界面；带 `accountName`（手机尾号等切号名）时走 MAA StartUp 换号 | `stagenav.restart_app` / `maaplan.run_core` |
+| `wakeup` | 唤醒游戏到主界面；带 `accountName`（手机尾号等切号名）时走 MAA StartUp 换号。**单账号先看界面**：已在主界面直接返回、停在别处按返回键走回来，都不重启客户端（见下方「单账号的前置界面检查」） | `stagenav.restart_app` / `maaplan.run_core` |
 | `navigate` | 从主界面导航到任意活动（老活动走曲谱、当期走区域列表、EX 也能到） | `stagenav.goto_stage_list` |
 | `fight` | 自动战斗：编队 / 借助战 / 吃理智药 / 开打，一次一组关 | `maaplan.run_core`（Copilot 参数 formation/support/sanityPotion） |
 | `skip_story` | 过剧情关（MN-ST-1 这类 ST 关）：MAA fight 单关当「点关探针」，剧情播放页出现后 `stagenav._skip_story_replay` 连续跳幕 | adb 跳幕 |
@@ -465,6 +465,33 @@ def skill_fishing(ctx):          # 第一个参数叫 ctx → _call_skill 传 Ct
    怎么调），现有 skill 可以一个一个慢慢迁。
 
 页面状态判断和「回主界面」不在这个文件，见 `pages.py`（下一节）。
+
+**单账号的前置界面检查（2026-11-26）**：`skills.ensure_home()` + `_home_check_on()`
+
+用户口径：「每个单账号任务的运行前检查当前明日方舟界面的位置，必须回到
+明日方舟主页，再开始导航」，目的是**减小重复自动唤醒的时间**（MAA 的 StartUp
+每次都要重启客户端，冷启动 40~80 秒）。分三档，越往下越贵：
+
+| 现状 | 做什么 | 代价 |
+|---|---|---|
+| 已在主界面（`at_home` 且不在剧情/登录页） | 什么都不做 | 一次截图 |
+| 游戏在跑但在别处 | `stagenav.reach_home`（返回键 / ESC；登录页点「开始唤醒」） | 几秒，**不重启客户端** |
+| 游戏没开 / 走不回去 | 才真唤醒（有切号名走 MAA StartUp） | 40~80 秒 |
+
+落点两处：`_skill_body` 在环境闸之后调一次（`_home_check_on` 决定要不要做），
+`skill_wakeup` 自己也先试这条捷径。**三条例外不能拦**：
+
+- `wakeup`（自己就是唤醒）、`signin`（不碰游戏）；
+- `fight` 默认 `noNav` 直跑——用户可能正停在关卡列表，硬拉回主页反而弄坏，
+  只有带了 `wakeup` / `navigate` 才检查；
+- 参数里有 `assumeStageList` / `noSwitch` / `direct`（用户亲口说「已经在关卡
+  列表 / 别切号」）。
+
+**多账号绝对不能走捷径**：界面恰好在主界面不代表登的是目标号，跳过 StartUp
+会让第二个号在第一个号的账号上开打。所以 `run_batch` 对多账号统一
+`_mark_switch()` 给每一步盖 `switch=true`，`skill_wakeup` 看到它就跳过快速
+路径（`_with_auto_wake` 补的那一步也自带 `switch: true`）。
+
 
 排序规则（`_cycle_sort_key`）：`ST-N → 主线 1..N → EX`，正好是 MN 这类周目的
 推图顺序；关卡清单来自 `resources._stages(True)`（含 story=True 的 208 条剧情关，
