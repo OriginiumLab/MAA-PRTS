@@ -768,3 +768,27 @@ Python 跑即可；C 组会真实调用 Windows DPAPI，换电脑/换用户跑 B
 `v2.7.0` + 完整 release_note，无 CDK 时 `url` 为空；假 CDK 返回 7002
 并被翻成「CDK 不对，请检查后重新填写」；`POST /api/mirror/cdk` 存完掩码是
 `········1234`，清除后 `hasCdk: false`。
+
+### B78 绿票 / 黄票商店（2026-11-26）
+
+MAA 牛杂里那两个常驻商店接进助手。和前三项（活动里的小游戏 / 活动商店）
+最大的不同：**入口不在活动地图上**，任务自己从主界面走「终端 → 仓库 →
+凭证交易所」，所以我们只要保证「人在主界面」。
+
+- **任务名**：`GreenTicket@Store@Begin` / `YellowTicket@Store@Begin`——写错了
+  MAA 当不存在，跑完什么也没买还不报错，所以这两条断言钉死。
+- **不传 params**：绿票默认就是 MAA 内置流程（一层全买、二层只买单抽 +
+  招募许可），正好是用户要的口径；断言 `build_params` 里没有 `params`。
+- **不导航**：两项 `nav` 为空、`home` 为真；`skill_tool` 走
+  `stagenav.reach_home`，**不许**再进 `eventnav.run_tool`。
+- **黄票高危**：没带 `confirm` 时直接返回 `need_confirm`，测试把
+  `stagenav.Touch` 换成「一构造就断言失败」的桩，确保它连模拟器都没碰；
+  带了 `confirm` 才走到 `run_custom`，且 `spec['task']` 就是那条任务名。
+- **助手层**：`autoApply` 开着，`_tool_skill_tool` 也必须返回 `need_confirm`
+  （`_guard(force=True)`），卡片上要写明 258 黄票。
+- **批量**：`_tool_step_need_confirm` 能从 `run_steps` 的步骤里认出黄票，
+  绿票 / 扫图这些不算高危。
+- **唤醒口径**：`_wakes_itself([('tool', {})])` 为假（单号不白等一次客户端
+  重启），带 `wakeup` 才为真；多账号自动补一步 `wakeup`，`switch=False` 不补。
+
+> B77 号留给还没合进来的「多开分组只认设备」分支，这里直接排 B78。

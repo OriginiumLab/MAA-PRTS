@@ -619,26 +619,40 @@ TOOLS = [
                            'description': '切号名（官服=手机号后 4 位，或前 3 位 + 后 4 位）'}},
           ['stage']),
     _tool('skill_tool',
-          '**MAA 小工具（牛杂）**：跑 MAA「小工具 → 牛杂」里的功能。会自动导航到'
-          '当期活动地图 → 点对应入口 → 交给 MAA 跑。现在接了三项：\n'
-          '- `name="wartime_press"` 战时新闻委员会（TL 的小游戏，第一次要手动过教程）\n'
-          '- `name="os_rd"` 喀兰贸易技术研发部（OS 的小游戏，第一次要手动过引导）\n'
-          '- `name="event_shop"` 活动商店（按黑名单买，不碰无限池）\n'
-          '用户说「挂一下牛杂里的战时新闻委员会 / 喀兰贸易」时就它。只给「小游戏」'
-          '这种泛称时要带 prefix（OS / TL）——两个活动的小游戏是两条不同的任务。'
-          '**活动商店要给黑名单**（不给就用默认四个：数据增补条 / 数据增补 / '
-          '龙门币 / 家具零件）。返回 taskId。',
+          '**MAA 小工具（牛杂）**：跑 MAA「小工具 → 牛杂」里的功能，分两类：\n'
+          '- **活动里的入口**（会先导航到当期活动地图再点进去）：\n'
+          '  `name="wartime_press"` 战时新闻委员会（TL 的小游戏，第一次要手动过教程）\n'
+          '  `name="os_rd"` 喀兰贸易技术研发部（OS 的小游戏，第一次要手动过引导）\n'
+          '  `name="event_shop"` 活动商店（按黑名单买，不碰无限池）\n'
+          '- **常驻商店**（不用导航，人在主界面就行，任务自己走到凭证交易所）：\n'
+          '  `name="green_shop"` 绿票商店——默认一层全买、二层只买寻访凭证和招聘许可\n'
+          '  `name="yellow_shop"` 黄票商店——默认花 258 黄票买 38 抽\n'
+          '用户说「牛杂里的绿票商店 / 黄票商店」就是这两项，**别去调活动商店**。\n'
+          '**黄票商店是高危**（花 258 黄票换 38 抽，不可撤销）：程序一定会先弹'
+          '确认卡，用户点了才跑；把卡上的内容复述给用户，别自己替他确认。\n'
+          '绿票 / 黄票都从主界面跑，不需要先导航到活动地图。返回 taskId。',
           {'name': {'type': 'string',
-                    'enum': ['wartime_press', 'os_rd', 'event_shop'],
+                    'enum': ['wartime_press', 'os_rd', 'event_shop',
+                             'green_shop', 'yellow_shop'],
                     'description': 'wartime_press=战时新闻委员会；'
-                                   'os_rd=喀兰贸易技术研发部；event_shop=活动商店'},
+                                   'os_rd=喀兰贸易技术研发部；event_shop=活动商店；'
+                                   'green_shop=绿票商店；yellow_shop=黄票商店（高危）'},
            'account': _ACC,
            'blacklist': {'type': 'array', 'items': {'type': 'string'},
                          'description': '活动商店黑名单（商品名，子串匹配）。'
                                         '不传就用默认四个；**别传空数组**，'
                                         '空着 MAA 会把无限池也买掉'},
            'prefix': {'type': 'string',
-                      'description': '活动代号（OS / TL…），默认按工具自己登记的那个'}},
+                      'description': '活动代号（OS / TL…），默认按工具自己登记的那个'},
+           'wakeup': {'type': 'boolean',
+                      'description': 'true=先唤醒并按尾号切号再跑。多账号批量时程序'
+                                     '会自动补；单账号、或用户说「不用切号」时不要传'},
+           'accountName': {'type': 'string',
+                           'description': '切号名（官服=手机号后 4 位，或前 3 位 + 后 4 位；'
+                                          'B 服=游戏内用户名）。不传就用账号里存的'},
+           'confirm': {'type': 'boolean',
+                       'description': '只有黄票商店认这个：用户已明确同意花 258 黄票'
+                                      '才传 true（一般不用传——助手这边是先弹确认卡）'}},
           ['name']),
     _tool('skill_claim',
           '**领取活动奖励**：导航到活动奖励页（OS 是「神谕谜题」），点一次'
@@ -659,12 +673,15 @@ TOOLS = [
           '用户说「把这 5 个号的 OS 活动挂一下（普通/突袭/S/领奖/商店）」时用它。\n'
           '每步形如 {"skill":"sweep","stage":"OS","tiers":["base","ex","s"],'
           '"raid":"normal"}、{"skill":"claim","prefix":"OS"}、'
-          '{"skill":"tool","name":"event_shop","prefix":"OS"}。'
+          '{"skill":"tool","name":"event_shop","prefix":"OS"}、'
+          '{"skill":"tool","name":"green_shop"}。'
           '可用 skill：wakeup navigate fight skip_story sweep tool claim '
-          'weekly train signin。**steps 里不用写 account**（程序按账号循环）。'
+          'weekly train signin。**steps 里不用写 account**（程序按账号循环）。\n'
           '**两个以上账号时，每个号开跑前程序会自动补一步「开始唤醒」切号**'
           '（第一步本身带唤醒的 sweep/weekly/train 不重复补），别自己再写 '
-          'wakeup 步骤；用户明说不用切号才传 switchAccount=false。'
+          'wakeup 步骤；用户明说不用切号才传 switchAccount=false。\n'
+          '步骤里要是有**黄票商店**（花 258 黄票换 38 抽），整批会先弹一次确认卡，'
+          '用户点了才开跑；这一步的钱是按账号算的，卡上会写清哪些号要花。'
           '**调用前先跟用户确认：哪些号、按什么顺序做哪几步**。',
           {'accounts': {'type': 'array', 'items': {'type': 'string'},
                         'description': '账号文件名列表；空数组 = 当前选中的账号'},
@@ -1650,9 +1667,14 @@ def _confirm_text(plan):
     return '\n'.join(lines)
 
 
-def _guard(session, action, args, summary):
-    """写操作的闸门：autoApply 关着就停下来等用户点确认"""
-    if settings.load().get('agent', {}).get('autoApply'):
+def _guard(session, action, args, summary, force=False):
+    """写操作的闸门：autoApply 关着就停下来等用户点确认
+
+    ``force=True`` 用在高危动作上（黄票商店一次 258 张黄票）：**不看
+    autoApply**，一定要用户亲手点一次。确认重入带 ``_confirmed``，调用方
+    自己判断，别在这里再拦一遍。
+    """
+    if not force and settings.load().get('agent', {}).get('autoApply'):
         return None
     if session is None:
         return {'need_confirm': True, 'summary': summary,
@@ -1829,8 +1851,55 @@ def _tool_skill_sweep(args, session=None):
     return _skill_via_guard('sweep', args, session)
 
 
+def _tool_step_need_confirm(st):
+    """run_steps 里的某一步是不是「要用户先点头」的小工具 → ``(是否, 名字, 风险)``
+
+    目前只有黄票商店（258 黄票换 38 抽，不可撤销）。名字认不出就返回 False，
+    交给 skill 那边报错——这里只负责挑出高危步骤，不做校验。
+    """
+    from . import maatools
+    if not isinstance(st, dict):
+        return False, '', ''
+    if str(st.get('skill') or st.get('step') or '').strip().lower() != 'tool':
+        return False, '', ''
+    try:
+        _k, ent = maatools.resolve(st.get('name') or st.get('tool') or '',
+                                   prefix=st.get('prefix') or None)
+    except Exception:
+        return False, '', ''
+    return bool(ent.get('confirm')), ent.get('name') or '', ent.get('risk') or ''
+
+
 def _tool_skill_tool(args, session=None):
-    return _skill_via_guard('tool', args, session)
+    """MAA 小工具 / 商店
+
+    普通项（小游戏 / 活动商店 / 绿票商店）点完直接后台跑；**黄票商店**先摆
+    确认卡——这一张卡不受 autoApply 影响（``force=True``），因为它是花钱的：
+    258 高级凭证换 38 抽，点错没法撤销。
+    """
+    from . import maatools
+    args = dict(args or {})
+    try:
+        key, ent = maatools.resolve(args.get('name') or args.get('tool') or '',
+                                    prefix=args.get('prefix') or None)
+    except Exception:
+        key, ent = '', None          # 名字不认识：原样丢给 skill，由它回可选值
+    if ent and ent.get('confirm') and not args.get('_confirmed'):
+        who = args.get('account') or '当前账号'
+        summary = ('%s · %s\n%s\n确认后立刻开跑，不会再问第二次。'
+                   % (ent.get('name'), who, ent.get('risk') or ''))
+        blocked = _guard(session, 'skill_tool', dict(args, _confirmed=True),
+                         summary, force=True)
+        if blocked:
+            return blocked
+    if args.get('_confirmed'):
+        clean = {k: v for k, v in args.items() if not str(k).startswith('_')}
+        if ent and ent.get('confirm'):
+            clean['confirm'] = True      # 用户刚点过那张卡
+        return {'started': True, 'taskId': skills.run_skill('tool', clean),
+                'note': '已在后台跑：日志里会写进了哪个商店、买了哪几样。'}
+    return {'started': True, 'taskId': skills.run_skill('tool', args),
+            'note': '已在后台跑：日志里会写进了哪个商店、买了哪几样。'}
 
 
 def _tool_skill_claim(args, session=None):
@@ -1902,12 +1971,22 @@ def _tool_run_steps(args, session=None):
         hint = ('\n注：%d 个号被算成同一台模拟器，但这台机器上还有别的设备在线'
                 '（%s）。要并行的话告诉我「哪个号用哪台」，我用 emulators 传进去。'
                 % (sum(len(g['rows']) for g in same), '、'.join(devs)))
+
+    # 批次里混着「花钱」的小工具（黄票商店）时，一律先摆确认卡，**不看
+    # autoApply**；用户点了卡之后，那一两步才带上 confirm=true 放行。
+    risky = [_tool_step_need_confirm(st) for st in steps]
+    risky = [x for x in risky if x[0]]
+    if risky:
+        lines.append('⚠ ' + '；'.join('%s：%s' % (n, r) for _f, n, r in risky))
+        steps = [dict(st, confirm=True) if _tool_step_need_confirm(st)[0] else st
+                 for st in steps]
     summary = '\n'.join(lines) + hint
 
     payload = {'accounts': [r['file'] for r in rows], 'steps': steps,
                'names': {r['file']: r['accountName'] for r in rows},
                'emulators': emus, 'switchAccount': sw}
-    blocked = _guard(session, 'run_steps', dict(payload, _confirmed=True), summary)
+    blocked = _guard(session, 'run_steps', dict(payload, _confirmed=True), summary,
+                     force=bool(risky))
     if blocked:
         return blocked
     tid = skills.run_batch(payload['accounts'], steps, names=payload['names'],
