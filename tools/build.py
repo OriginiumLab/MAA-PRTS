@@ -26,10 +26,14 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ——不同 Pillow 版本产出的 ICO 字节可能不同，重写会让工作树变脏（#62），
 # 仓库里那份只作为源码资产保留。
 ICON = os.path.join(HERE, 'build', 'work', 'app.ico')
+# 图标美术源：见方的透明底 PNG（仓库里 512，画到 1024 也只是插值）。
+# 有它就当图标用；没有（或读不出来）才回退到下面那套 Pillow 现画的占位图。
+ICON_SRC = os.path.join(HERE, 'resources', 'assets', 'icon.png')
+ICON_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
 
-def make_icon():
-    """用 Pillow 画一个图标：深色圆角方块 + 薄荷色六边形 + 播放三角"""
+def _make_icon_drawn():
+    """回退图标（美术源缺失时用）：深色圆角方块 + 薄荷色六边形 + 播放三角"""
     try:
         from PIL import Image, ImageDraw
     except ImportError:
@@ -82,10 +86,45 @@ def make_icon():
     d.polygon([(cx - tR * 0.72, cy - tR), (cx - tR * 0.72, cy + tR), (cx + tR, cy)],
               fill=(120, 240, 220, 255))
 
-    sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    img.save(ICON, format='ICO', sizes=sizes)
-    print('icon generated: %s' % ICON)
+    img.save(ICON, format='ICO', sizes=ICON_SIZES)
+    print('icon drawn (no %s): %s' % (os.path.basename(ICON_SRC), ICON))
     return ICON
+
+
+def make_icon():
+    """生成 exe 图标：优先吃 ``resources/assets/icon.png``，没有才现画
+
+    图标是**构建期中间产物**：只写 ``build/work/app.ico``，不回写仓库里那份
+    ``resources/assets/app.ico`` —— 不同 Pillow 版本产出的 ICO 字节可能不同，
+    重写会让工作树变脏（#62）。仓库里那份是给「要一个 .ico 文件」的人留的成品。
+
+    多尺寸（16~256）一次写进同一个 ICO：任务栏 / 开始菜单 / 大图标视图各取
+    自己那一档，只放 256 会被 Windows 硬缩，小尺寸糊成一片。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        print('Pillow not installed, skipping icon generation (system default icon will be used)')
+        return None
+
+    os.makedirs(os.path.dirname(ICON), exist_ok=True)
+    if os.path.isfile(ICON_SRC):
+        try:
+            im = Image.open(ICON_SRC).convert('RGBA')
+            side = max(im.size)
+            if im.size != (side, side):        # 非正方形：居中垫透明，别拉伸变形
+                sq = Image.new('RGBA', (side, side), (0, 0, 0, 0))
+                sq.paste(im, ((side - im.width) // 2, (side - im.height) // 2))
+                im = sq
+            im.resize((256, 256), Image.LANCZOS).save(
+                ICON, format='ICO', sizes=ICON_SIZES)
+            print('icon from %s: %s' % (os.path.basename(ICON_SRC), ICON))
+            return ICON
+        except Exception as e:                 # noqa: BLE001
+            # 美术源坏了不该让整个打包挂掉，退回占位图标继续构建
+            print('icon source failed (%s: %s), falling back'
+                  % (type(e).__name__, e))
+    return _make_icon_drawn()
 
 
 def _stage_resources(dst):
