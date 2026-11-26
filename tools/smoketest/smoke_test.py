@@ -8944,7 +8944,8 @@ def main():
                 lambda: check_mirror_source(tmp))
         r.check('B76 桌宠点一下播随机动作（点击与定时共用 / 播不起来也回待机）',
                 lambda: check_theme_pet(tmp))
-        # B77 留给还没合进来的「多开分组只认设备」分支，避免撞号
+        r.check('B77 多开分组只认设备（同一台模拟器不许拆成两个进程）',
+                lambda: check_emulator_group(tmp))
         r.check('B78 绿票 / 黄票商店（从主界面直跑 / 黄票必须先确认才连模拟器）',
                 lambda: check_maatools_shop(tmp))
         r.check('B79 单账号先看界面再干活（在主界面就不重启客户端 / 多账号必须真切号）',
@@ -8964,6 +8965,55 @@ def main():
         return 1
     print('结果：全部通过')
     return 0
+
+
+def check_emulator_group(tmp):
+    """B77 多开分组只认设备，不认 MAA 目录
+
+    2026-11-26 现场：账号分别绑在 ``MAA-v6.20.1-win-x64`` 和它的 ``…-1``
+    副本上，分组 key 里带着目录，于是 emulator-5554 / 5556 各被拆成两组，
+    同一台模拟器上两个独立进程同时点账号列表 → MAA「点登录 没成功」→
+    ``Login failed, entering game-restart loop`` → 反复关掉并重启游戏。
+
+    这里不连模拟器：``_maa_dir_of`` / ``_conn_of`` 换成假的，只验 key 的
+    组成和地址归一。
+    """
+    from core import skills
+
+    # 同一台设备的两种写法（雷电：adb 口 = 控制台口 + 1）
+    assert skills._norm_addr('127.0.0.1:5557') == 'emulator-5556'
+    assert skills._norm_addr('127.0.0.1:5555') == 'emulator-5554'
+    assert skills._norm_addr('EMULATOR-5554 ') == 'emulator-5554'
+    assert skills._norm_addr('') == '' and skills._norm_addr(None) == ''
+
+    old = (skills._maa_dir_of, skills._conn_of)
+    try:
+        # 两个号绑不同的 MAA 目录、连同一台模拟器 → 必须同一组
+        skills._maa_dir_of = lambda f: 'D:/MAA-A' if f == 'a.json' else 'D:/MAA-B'
+        skills._conn_of = lambda f, d: {'address': 'emulator-5554'}
+        ka, da, _ = skills._emulator_key('a.json')
+        kb, db, _ = skills._emulator_key('b.json')
+        assert ka == kb == 'emulator-5554', (ka, kb)
+        # 目录还是要按号返回（组只保证串行，不能拿组的目录去跑别人的号）
+        assert da != db, 'MAA 目录没按号取'
+        # 换个写法还是同一台
+        skills._conn_of = lambda f, d: {'address': '127.0.0.1:5555'}
+        assert skills._emulator_key('b.json')[0] == ka, '换写法就分成了两台'
+        # 不同设备仍然要分开
+        skills._conn_of = lambda f, d: {'address': 'emulator-5556'}
+        assert skills._emulator_key('b.json')[0] != ka, '两台设备被并成了一组'
+    finally:
+        skills._maa_dir_of, skills._conn_of = old
+
+    # 一键挂机那条路（maaplan.plan_groups）同一条规矩
+    from core import maaplan
+    rows = [{'maaDir': 'D:/MAA-A', 'address': 'emulator-5554', 'name': 'A'},
+            {'maaDir': 'D:/MAA-B', 'address': '127.0.0.1:5555', 'name': 'B'}]
+    groups = maaplan.plan_groups(rows, {})
+    assert len(groups) == 1, '同地址不同 MAA 目录被拆成了 %d 组' % len(groups)
+    assert [r['name'] for r in groups[0][1]['rows']] == ['A', 'B']
+    rows[1]['address'] = 'emulator-5556'
+    assert len(maaplan.plan_groups(rows, {})) == 2, '两台设备被并成了一组'
 
 
 def check_theme_pet(tmp):

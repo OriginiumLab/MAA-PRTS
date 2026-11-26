@@ -2615,14 +2615,35 @@ def _wait_chain(eng, chain, log, timeout=300):
     return False
 
 
+def addr_key(addr):
+    """设备地址归一：同一台机器换个写法不能算成两台
+
+    雷电的控制台口比 adb 口大 1（``127.0.0.1:5557`` 就是 ``emulator-5556``），
+    两种写法在档案里都出现过；大小写和空白也统一掉。
+
+    分组只认它（**不认 MAA 目录**）——2026-11-26 现场：账号分别绑在
+    ``MAA-v6.20.1-win-x64`` 和它的 ``…-1`` 副本上，key 里带上目录就把同一台
+    模拟器拆成了两组、两个进程同时点账号列表，MAA 报「点登录 没成功」→
+    ``Login failed, entering game-restart loop`` → 反复关掉并重启游戏。
+    """
+    a = str(addr or '').strip().lower()
+    m = re.match(r'^(?:127\.0\.0\.1|localhost)[:\-](\d{4,5})$', a)
+    if m:
+        return 'emulator-%d' % (int(m.group(1)) - 1)
+    return a
+
+
 def plan_groups(rows, spec_base=None):
-    """按「MAA 目录 + adb 地址」把账号分组：同组=同一台模拟器
+    """按「模拟器地址」把账号分组：同组=同一台模拟器
 
     2026-11-22 用户要求：每个账号可以绑自己的 MAA（也就连着不同的模拟器）。
 
     - **不同模拟器** → 各开一条线程，真正同时跑（多开）；
     - **同一台模拟器** → 只能排队，一个号跑完切下一个（一台模拟器同一时刻
       只能登一个号）。
+
+    **key 只认设备地址，不带 MAA 目录**（2026-11-26 现场，见 :func:`addr_key`）：
+    同一台模拟器上换个 MAA 目录照样是同一台设备，拆成两组并行只会互相抢界面。
 
     返回 ``[(key, {'dir','address','rows'})]``，顺序按账号出现顺序。
 
@@ -2638,7 +2659,7 @@ def plan_groups(rows, spec_base=None):
         except Exception:
             conn = {'address': '', 'adb_path': ''}
         addr = str(r.get('address') or conn.get('address') or '')
-        key = (os.path.normcase(os.path.abspath(d or '.')), addr)
+        key = addr_key(addr)
         g = groups.setdefault(key, {'dir': d, 'address': addr,
                                     'rows': []})
         g['rows'].append(r)
@@ -2648,13 +2669,19 @@ def plan_groups(rows, spec_base=None):
 def _run_group(g, spec_base, tid, log):
     """一个模拟器上的账号排队跑（组内串行）"""
     out = []
-    d = g['dir'] or spec_base.get('maaDir') or ''
+    d0 = g['dir'] or spec_base.get('maaDir') or ''
     # 同一个模拟器不能两个人同时戳：MAA 自己在跑就先关掉，否则两条 adb 连接
     # 互相抢截图，表现成「点了没反应」。
-    if d and maa.running_in(d):
-        log('MAA 正在运行，先关掉（否则两边抢模拟器）…')
-        maa.close(d)
+    # 组只保证串行，组里可能混着绑不同 MAA 目录的号（2026-11-26），
+    # 所以每个号按自己的目录跑、各自的目录先关一次 MAA。
+    closed = set()
     for i, r in enumerate(g['rows'], 1):
+        d = str(r.get('maaDir') or d0)
+        if d and d not in closed:
+            closed.add(d)
+            if maa.running_in(d):
+                log('MAA 正在运行，先关掉（否则两边抢模拟器）…')
+                maa.close(d)
         log('=' * 20 + ' [%d/%d] %s ' % (i, len(g['rows']),
                                          r.get('name') or '') + '=' * 20)
         log('模拟器 %s（%s）；切号名 %s'

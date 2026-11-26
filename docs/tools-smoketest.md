@@ -769,6 +769,28 @@ Python 跑即可；C 组会真实调用 Windows DPAPI，换电脑/换用户跑 B
 并被翻成「CDK 不对，请检查后重新填写」；`POST /api/mirror/cdk` 存完掩码是
 `········1234`，清除后 `hasCdk: false`。
 
+### B77 多开分组只认设备（2026-11-26 用户现场「唤醒把游戏关掉」）
+
+用户的账号分别绑在 `MAA-v6.20.1-win-x64` 和它的 `…-1` 副本上。旧的分组键
+是 `(MAA 目录, 地址)`，于是 `emulator-5554` 和 `emulator-5556` 各被拆成两组，
+同一台模拟器上两个独立进程同时点账号列表 —— MAA 报「点登录 没成功」→
+`Login failed, entering game-restart loop` → 反复关掉并重启游戏，8 个号全挂。
+
+- `maaplan.addr_key`（`skills._norm_addr` 是薄包装）：`127.0.0.1:5557` →
+  `emulator-5556`（雷电 adb 口 = 控制台口 + 1）、`EMULATOR-5554 ` →
+  `emulator-5554`、空 / None → 空串。
+- `skills._emulator_key`：两个号绑不同 MAA 目录、连同一台 → key 相同；
+  目录仍然**按号返回**（组里混绑目录时不能拿组的目录跑别人的号）；
+  换地址写法还是同 key；不同设备必须不同 key。
+- `maaplan.plan_groups`（一键挂机）同一条规矩：同地址不同目录合并成一组、
+  两台设备仍分两组。
+- 不连模拟器：`_maa_dir_of` / `_conn_of` 换假的，`plan_groups` 靠 `address`
+  字段短路，不会去读真实 MAA 配置。
+
+真机验证（2026-11-26，emulator-5554）：单号带切号名 2144 连跑两次都
+`TaskChainCompleted`（冷启动 84 秒 / 已在目标号主界面 37 秒），说明切号本身
+没问题，失败只在「两个进程抢同一台」时出现。
+
 ### B78 绿票 / 黄票商店（2026-11-26）
 
 MAA 牛杂里那两个常驻商店接进助手。和前三项（活动里的小游戏 / 活动商店）
