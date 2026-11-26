@@ -840,13 +840,21 @@ adb 路径；不同就多开并行；同一台就切号 → 普通 → 突袭 �
 
 ```python
 # maaplan.plan_groups(rows, spec_base)
-key = (os.path.normcase(os.path.abspath(d or '.')), str(conn.get('address') or ''))
+key = addr_key(str(r.get('address') or conn.get('address') or ''))
 ```
 
-- `d` 是这个账号的 MAA 目录，`address` 是那份档案里 adb 指向的模拟器地址
-  （雷电 `emulator-5554` / MuMu `127.0.0.1:16384` 之类）；
-- 同一个键 = 同一份 MAA + 同一台模拟器 → **组内串行**（两条 adb 同时戳同一台
-  会表现成「点了没反应」）；
+- `address` 是那份档案里 adb 指向的模拟器地址（雷电 `emulator-5554` /
+  MuMu `127.0.0.1:16384` 之类），用户点名时以点名为准；
+- **key 只认设备地址，不带 MAA 目录**（2026-11-26 现场）：账号分别绑在
+  `MAA-v6.20.1-win-x64` 和它的 `…-1` 副本上时，旧 key 把同一台模拟器拆成
+  两组、两个进程同时点账号列表，MAA 报「点登录 没成功」→
+  `Login failed, entering game-restart loop` → 反复关掉并重启游戏，整批全挂。
+  用哪份 MAA 是「这个号怎么跑」，不是「它占着哪台设备」；
+- `addr_key()` 顺手归一 `127.0.0.1:5557` ↔ `emulator-5556`（雷电 adb 口 =
+  控制台口 + 1），两种写法不能算两台；
+- 同一个键 = 同一台模拟器 → **组内串行**（两条 adb 同时戳同一台
+  会表现成「点了没反应」）。组只保证串行，组里可能混着不同 MAA 目录的号，
+  所以目录/档案一律按号取（`skills._run_group`、`maaplan._run_group`）；
 - 不同键 → 每组一个**独立进程并行**，这就是「多开」。
 
 `run_plan` 只在单组时保持原来的同步行为，多组才开线程（每组再起子进程），

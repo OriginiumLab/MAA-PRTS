@@ -2550,11 +2550,27 @@ def _mark_switch(step_list, many):
     return [(n, dict(p, switch=True)) for n, p in step_list]
 
 
+def _norm_addr(addr):
+    """设备地址归一（实现只有一份：:func:`maaplan.addr_key`）
+
+    雷电的控制台口比 adb 口大 1（``127.0.0.1:5557`` 就是 ``emulator-5556``），
+    两种写法在档案里都出现过；大小写和空白也统一掉。
+    """
+    return maaplan.addr_key(addr)
+
+
 def _emulator_key(file, address=''):
-    """账号 → 它在哪台模拟器上 ``((maa目录, 地址), MAA目录, 连接参数)``
+    """账号 → 它在哪台模拟器上 ``(设备, MAA目录, 连接参数)``
 
     同一台模拟器同一时间只能登一个号，所以同 key 的账号只能串行；不同 key
     的可以并行（各连各的 adb，互不抢截图）。
+
+    **key 只认设备地址，不带 MAA 目录**（2026-11-26 现场）：用户的账号分别
+    绑在 ``MAA-v6.20.1-win-x64`` 和它的 ``…-1`` 副本上，key 里带上目录就把
+    emulator-5554 拆成了两组、emulator-5556 也拆成两组，于是同一台模拟器上
+    有两个独立进程同时在点账号列表——MAA 报「点登录 没成功」→ ``Login failed,
+    entering game-restart loop`` → 反复关掉并重启游戏，8 个号一个没成。
+    用哪个 MAA 目录是「这个号怎么跑」，不是「它占着哪台设备」，不能进 key。
 
     ``address`` 是**用户点名的模拟器**（``emulator-5556`` / ``127.0.0.1:16384``），
     给了就用它覆盖档案里的地址——用户的 MAA 里八份档案全指向 ''emulator-5554''
@@ -2565,8 +2581,7 @@ def _emulator_key(file, address=''):
     conn = _conn_of(file, d)
     # 「这台号用哪台」的优先级：批量点名 > 账号绑定 > 档案
     addr = str(address or _addr_of(file) or conn.get('address') or '')
-    key = (os.path.normcase(os.path.abspath(d or '.')), addr)
-    return key, d, dict(conn, address=addr)
+    return _norm_addr(addr), d, dict(conn, address=addr)
 
 
 def online_devices(maa_dir=None):
@@ -2643,9 +2658,18 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
         if any(n in _NEEDS_GAME for n, _ in step_list):
             # 按这个号自己的档案判断模拟器开没开（多开时每份档案
             # 连的是不同的模拟器，不能一律看全局那份）。
+            # 组只保证「同一台设备串行」，组里可能混着绑不同 MAA 目录的号
+            # （2026-11-26），所以目录/档案也按号取，别用组的。
+            mine = _maa_dir_of(f) or g['dir']
+            prof = g.get('profile') or ''
+            try:
+                from . import acctbind
+                prof = acctbind.profile_of(f) or prof
+            except Exception:
+                pass
             # 地址先按「绑定 > 点名 > 档案」定下来：钉死的地址不在线直接
             # 判这个号失败，**不许**换成在线的那台（否则会串到隔壁那台）。
-            addr, _src, bad = device_of(f, g['dir'], g.get('profile') or None)
+            addr, _src, bad = device_of(f, mine, prof or None)
             if bad:
                 with lock:
                     results[f] = {'ok': False, 'name': nm,
@@ -2656,8 +2680,8 @@ def _run_group(g, step_list, names, log, results, lock, tid=None):
             if addr:
                 plog('模拟器 %s' % addr)
             ok, why = envcheck.ensure(
-                plog, maa_dir=g['dir'],
-                profile=g.get('profile') or None,
+                plog, maa_dir=mine,
+                profile=prof or None,
                 address=addr or None)
             if not ok:
                 with lock:
