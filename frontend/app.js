@@ -1478,7 +1478,7 @@ function renderResult(d) {
     return;
   }
   if (!d.stages || !d.stages.length) {
-    box.innerHTML = '<div class="empty-state"><h3>没有结果</h3><p>换个关卡代号试试，例如 TL-10 或 act55side</p></div>';
+    box.innerHTML = '<div class="empty-state"><h3>没有结果</h3><p>换个关卡代号试试，例如 TL-10 或 act55side；也可以直接搜关键词（作业标题里带这个词就行，例如「结城理模组」）</p></div>';
     return;
   }
   if (d.stages.length === 1) {
@@ -1590,7 +1590,13 @@ function renderResult(d) {
       </div>`;
   }).join('');
 
-  box.innerHTML = head + '<div class="stage-list">' + rows + '</div>';
+  // 关键词兜底（2026-11-26）：「结城理模组」这类不是关卡名的词，后端会去作业站
+  // 做全文搜，命中横跨好几关。这里说明白结果是怎么来的、怎么锁定其中一关。
+  const kwNote = d.mode === 'keyword'
+    ? `<div class="kw-note">作业站全文搜：标题 / 简介里带「${esc(d.keyword)}」的作业，关卡不一定是同一个。
+        想锁定某一关，在搜索框里带上关卡代号再搜一次，例如「${esc(d.keyword)} 4-3」。</div>`
+    : '';
+  box.innerHTML = head + kwNote + '<div class="stage-list">' + rows + '</div>';
 
   const allOps = [];
   d.stages.forEach(s => (s.ops || []).forEach(o => allOps.push(o)));

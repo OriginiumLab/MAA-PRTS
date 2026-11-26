@@ -284,11 +284,18 @@ TOOLS = [
           {'limit': {'type': 'integer', 'description': '返回几个，默认 12'}}),
     _tool('search_stages',
           '把关键词翻成具体关卡，返回关卡代号/内部 id/难度/是否剧情关。'
-          '**任何关卡号都必须先过这一步**，不要凭印象写 stageCode。',
+          '**任何关卡号都必须先过这一步**，不要凭印象写 stageCode。'
+          '用户说的是模组/干员/玩法这类**不是关卡名**的词（「结城理模组」）时'
+          '这里会返回 0 关——别就此说「没有作业」，改用 find_ops：它会走作业站'
+          '全文搜，把带这个词的作业连同关卡一起列出来。',
           {'keyword': _STAGE}, ['keyword']),
     _tool('find_ops',
           '查这些关卡在作业站上有哪些作业，按该账号练度分档。'
-          '返回每关最优几份（copilotId / 星级 / 能否直接抄）。',
+          '返回每关最优几份（copilotId / 星级 / 能否直接抄）。'
+          '**关键词不是关卡名也能用**（「结城理模组」这种）：会退回作业站全文搜，'
+          '跨关卡把相关的作业列出来，每行都带关卡代号。'
+          '要锁定某一关就在关键词后面带上关卡代号（「结城理模组 4-3」），'
+          '作业站那边是「关键词 + 关卡」强制过滤，基本必出。',
           {'keyword': _STAGE, 'account': _ACC,
            'limit': {'type': 'integer', 'description': '每关返回几份，默认 3'}},
           ['keyword']),
@@ -1018,6 +1025,13 @@ def _tool_search_stages(args):
                 out['activity'] = EVENTS[pfx]
     if res.get('mode') == 'story':
         out['note'] = '这是剧情关，没有作业可抄，挂机会停在这里'
+    elif res.get('mode') == 'unknown':
+        # 「结城理模组」这类不是关卡名的词：这里查不到关是正常的，
+        # 作业站有全文搜，得让模型换 find_ops 而不是回一句「没有作业」
+        out['note'] = ('「%s」不是关卡代号，这里翻不出关卡。改用 find_ops 搜：'
+                       '它会走作业站全文搜（标题/简介里带这个词的作业），'
+                       '要锁定某一关就把关卡代号一起给它（「%s 4-3」）'
+                       % (kw, kw))
     st = resources.stories_between(res.get('stages') or []) \
         if hasattr(resources, 'stories_between') else []
     if st:
@@ -1510,6 +1524,7 @@ def _tool_build_run(args, session=None):
 
     if need_ops:
         raid_all, raid_got = set(), set()
+        kw_mode = ''
         for r in rows:
             try:
                 snap = multiacct._snap_of(r['file'])
@@ -1517,6 +1532,7 @@ def _tool_build_run(args, session=None):
             except Exception as e:
                 r['note'] = '搜作业失败：%s' % e
                 continue
+            kw_mode = kw_mode or (res.get('mode') or '')
             seen = set()
             for packed in (res.get('stages') or [])[:limit]:
                 st = packed.get('stage') or {}
@@ -1549,6 +1565,18 @@ def _tool_build_run(args, session=None):
             return {'error': '这些账号在这批关卡里一份能打的作业都没有',
                     'hint': '要求突袭时还会更少——换成「普通」或 raid="both" 再试'}
         rows = usable
+        if kw_mode == 'keyword':
+            # 「结城理模组」这种关键词搜出来的作业横跨十来关（4-3 / VEC-01 /
+            # H6-2…），照单全挂就是给用户排一堆他没说要打的关。这时必须让他
+            # 先说清是哪一关——关键词 + 关卡代号一锁，基本必出模组作业。
+            codes = sorted({o['stageCode'] for r in rows for o in (r['ops'] or [])})
+            return {'error': '「%s」是关键词搜索结果，命中的作业横跨 %d 个关卡'
+                             '（%s），不能直接排挂机'
+                             % (kw, len(codes), '、'.join(codes[:6])),
+                    'keywordStages': codes,
+                    'hint': '先问用户要打哪一关，再把关卡代号写进关键词重新调'
+                            '（例如「%s 4-3」），作业站会按「关键词 + 关卡」强制锁定'
+                            % kw}
         if raid == 'raid' and raid_all - raid_got:
             raid_missing = sorted(raid_all - raid_got)
         else:

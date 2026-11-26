@@ -272,6 +272,17 @@ def plan(req):
         except Exception as e:
             warnings.append('账号「%s」搜作业失败：%s' % (row['name'], e))
             continue
+        if res.get('mode') == 'keyword':
+            # 关键词兜底（「结城理模组」这类不是关卡名的词）会翻出横跨十来关的
+            # 作业，照单排进计划等于替用户决定打一堆他没说的关。这里不排，
+            # 明确让他带关卡代号再排一次。
+            codes = sorted({(p.get('stage') or {}).get('code') or ''
+                            for p in (res.get('stages') or [])} - {''})
+            warnings.append('「%s」是关键词搜索结果（%d 关：%s），没有排进计划'
+                            '——带关卡代号再排一次，例如「%s 4-3」'
+                            % (keyword, len(codes), '、'.join(codes[:6]),
+                               keyword))
+            continue
         for packed in (res.get('stages') or [])[:limit_stages]:
             st = packed.get('stage') or {}
             best = None

@@ -8947,6 +8947,10 @@ def main():
         # B77 留给还没合进来的「多开分组只认设备」分支，避免撞号
         r.check('B78 绿票 / 黄票商店（从主界面直跑 / 黄票必须先确认才连模拟器）',
                 lambda: check_maatools_shop(tmp))
+        r.check('B79 单账号先看界面再干活（在主界面就不重启客户端 / 多账号必须真切号）',
+                lambda: check_home_before_task(tmp))
+        r.check('B80 中文关键词兜底（「结城理模组」→ 作业站全文搜 / 关键词+关卡锁定）',
+                lambda: check_keyword_search(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9106,7 +9110,10 @@ def check_maatools_shop(tmp):
     one = [('tool', {'name': 'green_shop'})]
     assert skills._with_auto_wake(one, False)[0] == one
     many, added = skills._with_auto_wake(one, True)
-    assert added and many[0] == ('wakeup', {}) and many[1] == one[0], many
+    # 多账号补的这一步要带 switch=True：2026-11-26 起单账号可以「已在主界面
+    # 就不重启客户端」，切号必须把这条捷径关掉，否则第二个号跑在前一个号上
+    assert added and many[0] == ('wakeup', {'switch': True}) \
+        and many[1] == one[0], many
     assert skills._with_auto_wake(one, True, False)[0] == one
 
     # ⑥ 助手层：autoApply 开着，黄票照样先弹确认卡；批量步骤也能被认出来
@@ -9124,6 +9131,252 @@ def check_maatools_shop(tmp):
             {'skill': 'sweep', 'stage': 'OS'})[0]
     finally:
         settings.save({'agent': {'autoApply': False}})
+
+
+def check_home_before_task(tmp):
+    """B79 单账号先看界面再干活（在主界面就不重启客户端 / 多账号必须真切号）
+
+    用户口径（2026-11-26）：「每个单账号任务的运行前检查当前明日方舟界面的
+    位置，必须回到明日方舟主页，再开始导航干他需要干的事情」——目的是
+    **减小重复自动唤醒的时间**（MAA 的 StartUp 每次都要重启一遍客户端，
+    冷启动 40~80 秒）。多账号不用这一步：自动唤醒切完号本来就在主页。
+
+    四件事：哪些 skill 要做检查、``ensure_home`` 的四种走法、``skill_wakeup``
+    的快速返回，以及多账号必须把这条捷径关掉（否则第二个号跑在前一个号上）。
+
+    全程打桩：不连模拟器、不跑 MaaCore。
+    """
+    _reset_config(tmp)
+
+    from core import maaplan, skills, stagenav
+
+    # ① 谁要做前置检查
+    assert skills._home_check_on('sweep', {})
+    assert skills._home_check_on('tool', {})
+    assert skills._home_check_on('navigate', {})
+    assert not skills._home_check_on('wakeup', {})     # 它自己就是唤醒
+    assert not skills._home_check_on('signin', {})     # 不碰游戏
+    assert not skills._home_check_on('fight', {})      # 默认 noNav 直跑
+    assert skills._home_check_on('fight', {'wakeup': True})
+    assert skills._home_check_on('fight', {'navigate': True})
+    # 多账号（switch）/ 用户说已经停在关卡列表 → 都不许把人拖回主页
+    assert not skills._home_check_on('sweep', {'switch': True})
+    assert not skills._home_check_on('navigate', {'assumeStageList': True})
+    assert not skills._home_check_on('navigate', {'noSwitch': True})
+
+    def run(home, alive, reach, wake=None):
+        """假 Touch 跑一次 ensure_home，返回 (结果, 走了哪几步)"""
+        calls = {'reach': 0, 'wake': 0}
+        orig = (stagenav.Touch, stagenav.at_home, stagenav.on_login_page,
+                stagenav.in_story_page, stagenav.in_story_dialog,
+                stagenav.reach_home, skills.skill_wakeup, skills._account_file,
+                skills._maa_dir_of, skills._conn_of, skills._client_of,
+                skills._strict_addr, skills._account_name_tail)
+
+        class Touch:
+            def ready(self):
+                return True, 'adb 正常'
+
+            def game_alive(self, quiet=False):
+                return alive
+
+        stagenav.Touch = lambda *a, **k: Touch()
+        stagenav.at_home = lambda _t: home
+        stagenav.on_login_page = lambda _t: False
+        stagenav.in_story_page = lambda _t: False
+        stagenav.in_story_dialog = lambda _t: False
+
+        def fake_home(_t, _log):
+            calls['reach'] += 1
+            return reach, ('在主界面' if reach else '卡在弹窗里')
+
+        def fake_wake(_p, _l, tid=None):
+            calls['wake'] += 1
+            return {'ok': True, 'how': 'maa-startup'}
+
+        stagenav.reach_home = fake_home
+        skills.skill_wakeup = fake_wake
+        skills._account_file = lambda x: 'x.json'
+        skills._maa_dir_of = lambda f: 'D:/fake-maa'
+        skills._conn_of = lambda f, d: {'adb_path': 'adb',
+                                        'address': 'emulator-5554'}
+        skills._client_of = lambda f: 'Official'
+        skills._strict_addr = lambda f: False
+        skills._account_name_tail = lambda f: '2144'
+        try:
+            r = {'how': None}
+            try:
+                r = skills.ensure_home('', lambda *_: None, wake=wake) or {}
+                out = r.get('how')
+            except RuntimeError as e:
+                out = 'raise:%s' % str(e)[:12]
+            return out, calls
+        finally:
+            (stagenav.Touch, stagenav.at_home, stagenav.on_login_page,
+             stagenav.in_story_page, stagenav.in_story_dialog,
+             stagenav.reach_home, skills.skill_wakeup, skills._account_file,
+             skills._maa_dir_of, skills._conn_of, skills._client_of,
+             skills._strict_addr, skills._account_name_tail) = orig
+
+    # ② ensure_home 的四种走法
+    how, calls = run(True, True, True)
+    assert how == 'already-home' and calls == {'reach': 0, 'wake': 0}, (how, calls)
+    how, calls = run(False, True, True)
+    assert how == 'reach-home' and calls == {'reach': 1, 'wake': 0}, (how, calls)
+    how, calls = run(False, True, False)
+    assert how.startswith('raise') and calls == {'reach': 1, 'wake': 0}, (how, calls)
+    how, calls = run(False, False, False)
+    assert how.startswith('raise') and calls == {'reach': 0, 'wake': 0}, (how, calls)
+    # wake=True：走不回去才真唤醒（这是唯一会重启客户端的一档）
+    how, calls = run(False, True, False, wake=True)
+    assert how == 'wakeup' and calls == {'reach': 1, 'wake': 1}, (how, calls)
+
+    # ③ skill_wakeup：单账号在主界面 → 直接返回，不跑 StartUp
+    ran = {'core': 0}
+    orig = (skills.ensure_home, skills._account_file, skills._account_name_tail,
+            skills._remember_tail, skills._spec_kw, skills._maa_dir_of,
+            maaplan.run_core)
+    try:
+        def fake_ensure(f, log, tid=None, tail='', wake=False):
+            return {'how': 'already-home', 'detail': '当前在明日方舟主界面'}
+
+        def fake_core(spec, tid=None, timeout=0):
+            ran['core'] += 1
+            return {'ok': True}
+
+        skills.ensure_home = fake_ensure
+        skills._account_file = lambda x: 'x.json'
+        skills._account_name_tail = lambda f: '2144'
+        skills._remember_tail = lambda f, g: ''
+        skills._spec_kw = lambda f: {}
+        skills._maa_dir_of = lambda f: 'D:/fake-maa'
+        maaplan.run_core = fake_core
+
+        r1 = skills.skill_wakeup({'accountName': '2144'}, lambda *_: None)
+        assert r1['how'] == 'already-home' and ran['core'] == 0, (r1, ran)
+        # 切号（多账号批量盖章）→ 必须真跑 StartUp
+        r2 = skills.skill_wakeup({'accountName': '2144', 'switch': True},
+                                 lambda *_: None)
+        assert r2['how'] == 'maa-startup' and ran['core'] == 1, (r2, ran)
+    finally:
+        (skills.ensure_home, skills._account_file, skills._account_name_tail,
+         skills._remember_tail, skills._spec_kw, skills._maa_dir_of,
+         maaplan.run_core) = orig
+
+    # ④ 多账号：补的那一步自带 switch，且每一步都被盖上——这条捷径在多账号
+    #    下绝不能生效（否则第二个号在前一个号的账号上开打）
+    #    用 claim：它不像 sweep / weekly / train 那样自己会唤醒，正好验证「补」
+    one = [('claim', {'prefix': 'OS'})]
+    many, added = skills._with_auto_wake(one, True)
+    assert added and many[0] == ('wakeup', {'switch': True}), many
+    marked = skills._mark_switch(many, True)
+    assert all(p.get('switch') is True for _n, p in marked), marked
+    assert skills._mark_switch(one, False) == one
+
+
+def check_keyword_search(tmp):
+    """B80 中文关键词兜底（「结城理模组」→ 作业站全文搜 / 关键词+关卡锁定）
+
+    用户 2026-11-26：「搜索中文不能检索到对应关卡……我让 agent 帮我打模组
+    任务，他一直会说没有模组任务的作业」。以前 ``resources.resolve`` 认不出
+    就直接 ``mode='unknown'``，界面一句「没有结果」，而作业站上带这个词的
+    作业有十几份。
+
+    现在：关键词里认得出关卡就 ``levelKeyword`` + ``document`` **强制锁定**
+    （网页上那颗搜索框 + 关卡下拉就是这个组合），认不出就只传 ``document``
+    全文搜、按作业自己的 ``stage_name`` 分组。
+
+    作业站用打桩 ``_pull``，不联网。
+    """
+    _reset_config(tmp)
+
+    from core import copilot, resources
+
+    # ① 前提：这几个词在资源包里压根不是关卡（旧路径就是在这里落空的）
+    assert resources.resolve('结城理模组')['mode'] == 'unknown'
+    assert resources.resolve('结城理模组')['stages'] == []
+
+    # ② 拆关键词：认得出关卡就拆出来，认得出的形态不止一种
+    doc, lock = copilot.split_keyword('结城理模组 4-3')
+    assert doc == '结城理模组' and lock and lock['stageId'] == 'main_04-03', (doc, lock)
+    doc, lock = copilot.split_keyword('4-3 结城理模组')
+    assert doc == '结城理模组' and lock and lock['code'] == '4-3', (doc, lock)
+    doc, lock = copilot.split_keyword('结城理模组')
+    assert doc == '结城理模组' and lock is None, (doc, lock)
+    # 「模组3」这种带数字但不是代号的东西不许被当成关卡
+    assert copilot.split_keyword('模组3')[1] is None
+
+    def item(sid, title, rid):
+        return {'meta': {'id': rid, 'rating_level': 9, 'views': 10,
+                         'uploader': 'zane', 'uploader_id': '7'},
+                'content': {'stage_name': sid, 'doc': {'title': title},
+                            'opers': [{'name': '银灰', 'skill': 1}],
+                            'groups': []}}
+
+    calls = []
+
+    def fake_pull(params, pages=2, limit=50):
+        calls.append(dict(params))
+        text = str(params.get('document') or '')
+        if '结城理' not in text:
+            return []
+        if params.get('levelKeyword'):
+            # 故意混一条别的关进来：锁定必须靠 stage_name 二次校验兜住
+            return [item('main_04-03', '4-3 人工制冷【结城理模组任务】', 11),
+                    item('act55side_s03', '别关的作业', 12)]
+        return [item('main_04-03', '4-3 人工制冷【结城理模组任务】', 11),
+                item('act55side_s03', '时间啊，向前！- TL-S-3', 12),
+                item('main_04-03', '4-3 结城理单核', 13)]
+
+    orig = copilot._pull
+    copilot._pull = fake_pull
+    try:
+        # ③ 纯关键词：全文搜 → 按关卡分组，每行都带关卡代号，空行不留
+        r = copilot.search('结城理模组', {}, pages=1, limit=5)
+        assert r['mode'] == 'keyword', r.get('mode')
+        assert calls and calls[0] == {'document': '结城理模组'}, calls
+        assert r['stages'], '关键词兜底一条都没出来'
+        codes = {s['stage']['code'] for s in r['stages']}
+        assert codes == {'4-3', 'act55side_s03'}, codes
+        assert all((s['total'] or 0) > 0 for s in r['stages']), r['stages']
+        assert all(s['stage']['stageId'] for s in r['stages'])
+        # 关键词结果不是一条推图线，没有「下一关」；说明里要讲清怎么锁定
+        assert r['next'] is None, r['next']
+        assert '全文搜' in (r.get('note') or ''), r.get('note')
+
+        # ④ 关键词 + 关卡：强制锁定，混进来的别关作业必须被 stage_name 挡掉
+        calls.clear()
+        r2 = copilot.search('结城理模组 4-3', {}, pages=1, limit=5)
+        assert calls and calls[0] == {'levelKeyword': 'main_04-03',
+                                      'document': '结城理模组'}, calls
+        assert r2['mode'] == 'stage', r2.get('mode')
+        assert (r2.get('locked') or {}).get('stage') == '4-3', r2.get('locked')
+        assert {s['stage']['code'] for s in r2['stages']} == {'4-3'}, r2['stages']
+        assert r2['next'] is None
+
+        # ⑤ 真搜不到还是 unknown（界面照旧显示「没有结果」）
+        r3 = copilot.search('不存在的词xyz', {}, pages=1, limit=5)
+        assert r3['mode'] == 'unknown' and not r3['stages'], r3
+
+        # ⑥ 助手：build_run 不许照单全挂跨关卡的作业，要问清是哪一关
+        from core import agent, multiacct, settings
+        settings.save({'maaDir': 'D:/fake-maa'})
+        orig_roster, orig_snap = agent._roster, multiacct._snap_of
+        try:
+            agent._roster = lambda files, names, d: ([
+                {'file': 'a.json', 'name': 'A', 'channel': '',
+                 'accountName': '1234', 'nameSource': 'settings',
+                 'maaDir': d, 'profile': '', 'ops': [], 'stages': []}], [], '')
+            multiacct._snap_of = lambda f: {}
+            out = agent._tool_build_run({'keyword': '结城理模组',
+                                         'accounts': [], 'mode': 'copy',
+                                         'start': False})
+        finally:
+            agent._roster, multiacct._snap_of = orig_roster, orig_snap
+        assert out.get('error') and '关卡' in out['error'], out
+        assert out.get('keywordStages'), out
+    finally:
+        copilot._pull = orig
 
 
 if __name__ == '__main__':
