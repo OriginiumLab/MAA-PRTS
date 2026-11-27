@@ -901,3 +901,20 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
 
 打桩 `update_dir/_current/_state/_save_state`，只在临时目录写 `pending.json`，
 不碰真实 `update/` 和 `config/appupdate.json`；最后真调一次函数验 API 可用。
+
+### B84 干员头像按需下载（2026-11-28）
+
+抽卡界面要显示干员头像，但 469 张 96px WebP 约 2MB，不能进安装包。做法是
+「用到哪张下哪张」，B84 钉的是这条链路的边界：
+
+- **id 校验**：只认 `[A-Za-z0-9_]`，`../x`、`a/b`、超长串一律当场 `KeyError`，
+  别指望后面的路径拼接兜住穿越；
+- **缓存优先**：命中 `config/cache/avatar/<id>.webp` 就直接返回，不再发请求；
+- **索引决定要不要走镜像**：`pack-data` 上 `resources/avatars/avatar-index.json` 里有这张才去试
+  三个镜像，没有就直接走 PRTS 兜底——否则每张都要白等三次 404/超时（实测首张 5.7s→0.7s）；
+- **兜底**：镜像全挂时从 `torappu.prts.wiki/assets/char_avatar/<id>.png` 取原图，
+  服务端转 96px WebP；转不了就存原 PNG，宁可大一点也别丢功能；
+- **负缓存**：两条路都挂记 5 分钟，第二次请求不再打网络（列表页一屏十几张，不能每刷一次重打一遍）；
+- **不认假图**：空包、HTML 错误页、只有 `RIFF` 头的假 WebP 都不许落盘。
+
+打桩 `settings.CONFIG_DIR`、`avatar_index`、`_from_mirrors`、`_from_prts`，不联网、不写真缓存。
