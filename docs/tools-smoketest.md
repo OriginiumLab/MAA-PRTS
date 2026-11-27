@@ -885,3 +885,19 @@ MAA 牛杂里那两个常驻商店接进助手。和前三项（活动里的小�
   点名这两个工具，前端第一条引导是「帮我使用推荐设置一键长草刷左侧所有账号」。
 
 全程打桩（假 candidates / 假 `_load_cfg` / 假 `run_core`），不连模拟器、不读真配置。
+
+### B83 换完 exe 刷图标缓存（2026-11-28）
+
+v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直接起新进程，全程
+没通知 shell；本机 `iconcache_*.db` 时间戳停在 11-25 02:49，而系统 11-26 12:23
+重启过——**重启电脑不会重建图标缓存**，只能主动发 `SHCNE_ASSOCCHANGED`。
+
+- **时机**：`on_start()` 里「`pending.to` 等于当前版本」那条分支，`refresh_icon_cache()`
+  紧跟着清理备份执行；版本对不上（没装成功）一律不刷，免得白扫一遍缓存目录。
+- **实现**：`ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)`，
+  失败只吞掉异常返回 False，不许连累启动结算。
+- **不在安装脚本里做**：`install.ps1` 无窗口跑，`Add-Type` 编译 C# 还可能被安全
+  软件拦；放进新版本启动路径更稳，而且这时候 exe 已经是新的，扫出来就是新图。
+
+打桩 `update_dir/_current/_state/_save_state`，只在临时目录写 `pending.json`，
+不碰真实 `update/` 和 `config/appupdate.json`；最后真调一次函数验 API 可用。
