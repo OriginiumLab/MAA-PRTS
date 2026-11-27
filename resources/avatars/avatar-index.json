@@ -1,0 +1,2354 @@
+{
+ "schema": 1,
+ "generatedAt": "2026-11-28T01:40:14",
+ "size": 96,
+ "count": 469,
+ "bytes": 2290568,
+ "chars": {
+  "char_376_therex": {
+   "name": "THRM-EX",
+   "bytes": 3500,
+   "sha256": "fa410607d6c67c9307175d54e33020838f01bae7ba3d36766906efdfda60c317"
+  },
+  "char_285_medic2": {
+   "name": "Lancet-2",
+   "bytes": 3528,
+   "sha256": "7e24d1d28f941e32cad2aebf9edb343672929f2c88cb67da1c1ea5844fb0efe7"
+  },
+  "char_4220_kormr": {
+   "name": "虎狼丸",
+   "bytes": 4210,
+   "sha256": "84c0295aaa895feafe0328cfdf6301f0cf2ee7c6eb0b221d30ab390a707e2431"
+  },
+  "char_4091_ulika": {
+   "name": "U-Official",
+   "bytes": 4278,
+   "sha256": "9bb656cb9ccf3fa399be96b795cd503e8d68af54095f23b8a060966e66a6153c"
+  },
+  "char_4077_palico": {
+   "name": "泰拉大陆调查团",
+   "bytes": 4502,
+   "sha256": "97ab73d4d673853286128e66d1060d383e0bae99eefd40c39a9a790853a8ac5c"
+  },
+  "char_4093_frston": {
+   "name": "Friston-3",
+   "bytes": 4080,
+   "sha256": "6339ff286f708749271cde72ef89fef5760329a7d734eb63b0479a0cd4894e61"
+  },
+  "char_286_cast3": {
+   "name": "Castle-3",
+   "bytes": 3054,
+   "sha256": "be67b3a95f1d46272aed2f1f975cd23fac7a3f20877b9461a4d6b46acc44c337"
+  },
+  "char_4136_phonor": {
+   "name": "PhonoR-0",
+   "bytes": 3522,
+   "sha256": "a0eb91653e418e8211a8c47ddf4ccc68f6a71bb9e398897d74a168da853a68f8"
+  },
+  "char_4227_gallus": {
+   "name": "GALLUS²",
+   "bytes": 5376,
+   "sha256": "3baa9cf6264955a15c800419e3febe9bd70f06a1d0fdb8572f9560ff8af03892"
+  },
+  "char_4188_confes": {
+   "name": "CONFESS-47",
+   "bytes": 3656,
+   "sha256": "f1a7a78796ebdaecbcd0a84fe875622c71af6f50fc97e3a9c14487e082be8ac9"
+  },
+  "char_4215_buddy": {
+   "name": "罗德岛隐秘队",
+   "bytes": 4730,
+   "sha256": "56643943cc63296e943ad0cb86a41505e04b42860babcd3f1a24f6bcb36cec93"
+  },
+  "char_4000_jnight": {
+   "name": "正义骑士号",
+   "bytes": 6344,
+   "sha256": "2e6b36f3d73f7261b73239bb8ac29215d7f2fc84fef34f061dcd9556eac32e0b"
+  },
+  "char_123_fang": {
+   "name": "芬",
+   "bytes": 4394,
+   "sha256": "64f68edd55e3281a5777c99c738bd141e164a7e2e0b3e3475050eac496444d8d"
+  },
+  "char_500_noirc": {
+   "name": "黑角",
+   "bytes": 4978,
+   "sha256": "09c7e6d4cc183ace4ae75032ca1ebe49fd58568496ff805a07e5e5338fa60a6d"
+  },
+  "char_009_12fce": {
+   "name": "12F",
+   "bytes": 4968,
+   "sha256": "8b6b0f2dda3489e3dabceef74d25c52fe859135c440456d4a43267c57aba4d20"
+  },
+  "char_502_nblade": {
+   "name": "夜刀",
+   "bytes": 4114,
+   "sha256": "59427a418ff9ef8f222bc6886c4c5d32a8250a0e3827c1c5cdb39fe3171e2247"
+  },
+  "char_240_wyvern": {
+   "name": "香草",
+   "bytes": 4622,
+   "sha256": "3f457f7590c78c94b6d35d4ce181676f24e50a7d12c90ff2e8612583e4e3b75e"
+  },
+  "char_503_rang": {
+   "name": "巡林者",
+   "bytes": 4760,
+   "sha256": "99c2ab72545482732b841e8f3838fc7f872e54be8d1d8623d87268f92a1defce"
+  },
+  "char_501_durin": {
+   "name": "杜林",
+   "bytes": 3768,
+   "sha256": "1004eef06679f8bcda1cc28f943f2f34cbfc6b6a2c2ac38f7a9cf8fcdc5db4bd"
+  },
+  "char_504_rguard": {
+   "name": "预备干员-近战",
+   "bytes": 3436,
+   "sha256": "ac1cb63ab7dbc2bd288b8039b7e756b19a201571917fddd413cc74329cc308e1"
+  },
+  "char_192_falco": {
+   "name": "翎羽",
+   "bytes": 5060,
+   "sha256": "303b7b109b38e6d43180d78ee8685c44c7dc21b7c890578b7621b40888023ed3"
+  },
+  "char_284_spot": {
+   "name": "斑点",
+   "bytes": 4102,
+   "sha256": "6e28f7897741545de8bb3f6e9ce5f4315381e2c60eeeaa0b2c21d55cc9536242"
+  },
+  "char_122_beagle": {
+   "name": "米格鲁",
+   "bytes": 4896,
+   "sha256": "b8665d1e3e0a36980dceb1b47aa7640affb88bc66b78ff81fdff517a3b8ea81b"
+  },
+  "char_281_popka": {
+   "name": "泡普卡",
+   "bytes": 4870,
+   "sha256": "f3742111706561b2e2c1afa3648176c4cb37d12db34452f0f806c76b1847134d"
+  },
+  "char_208_melan": {
+   "name": "玫兰莎",
+   "bytes": 4678,
+   "sha256": "7ce6a5de4a77005bffaf89037d95f5eb77d0ac280ed8fdf8ba85331d15f5fc79"
+  },
+  "char_209_ardign": {
+   "name": "卡缇",
+   "bytes": 6154,
+   "sha256": "417fb42570f6ed123b73602deefca8d689cf3c42686fe2b9403751743e24fb04"
+  },
+  "char_124_kroos": {
+   "name": "克洛丝",
+   "bytes": 5190,
+   "sha256": "be2d0f68088cde22081a43e167ea177a59d390a72ffb227dc549e9371897583e"
+  },
+  "char_120_hibisc": {
+   "name": "芙蓉",
+   "bytes": 5388,
+   "sha256": "34a8a4b5a33f6e93deefa9bc68d33dbf6c357834ce54ee4867431942201c2d50"
+  },
+  "char_121_lava": {
+   "name": "炎熔",
+   "bytes": 6434,
+   "sha256": "9f9ef6e446fbb9a54124740e7b7c06d858aadb79cf3611e5c11eadd5f760e117"
+  },
+  "char_514_rdfend": {
+   "name": "预备干员-重装",
+   "bytes": 3820,
+   "sha256": "4797631503dc474f0cb8f5111d0666f5bfe620bc813d01bc388fcf1642d2eaf0"
+  },
+  "char_211_adnach": {
+   "name": "安德切尔",
+   "bytes": 5568,
+   "sha256": "5ee503cfe061351585aaa4db5b20d1f646f26899400a2ce79b4280d742d73b67"
+  },
+  "char_212_ansel": {
+   "name": "安赛尔",
+   "bytes": 5552,
+   "sha256": "bca1ea42ad06a40389b01e15170e797e5bb9d589130f1885d81e59533caee520"
+  },
+  "char_507_rsnipe": {
+   "name": "预备干员-狙击",
+   "bytes": 3984,
+   "sha256": "89477e48a6ab0c45dd38de761a1d39d800063ec7d278bd6c68b7ef5da13cd21e"
+  },
+  "char_506_rmedic": {
+   "name": "预备干员-后勤",
+   "bytes": 4316,
+   "sha256": "da73373ef7d151d5949c6297c3825ab45f9caf720f0b2de73ec5f20c46cdf17c"
+  },
+  "char_278_orchid": {
+   "name": "梓兰",
+   "bytes": 4542,
+   "sha256": "65626dd84f066e5c88cd5d6392ec9e9cf5c39f31acc920d57e0c2efdefa284c6"
+  },
+  "char_210_stward": {
+   "name": "史都华德",
+   "bytes": 5476,
+   "sha256": "0e5f3316e80103a2f599c2ed8dee767c2789f52d0013ec554ef605455c2778c4"
+  },
+  "char_109_fmout": {
+   "name": "远山",
+   "bytes": 4640,
+   "sha256": "abe532704af3743040ceb05ea030e72367a97822674b8ba366b86bde11d09a8f"
+  },
+  "char_253_greyy": {
+   "name": "格雷伊",
+   "bytes": 4810,
+   "sha256": "11fbbef96d383c4bd5c71568b1e76775b3cd1a61b4b57c45f5c1e987d24e63e8"
+  },
+  "char_141_nights": {
+   "name": "夜烟",
+   "bytes": 4620,
+   "sha256": "720d0a77fc9f7ae480fbc503534fa2d96d006bddba3ef9558877349bb6c5a066"
+  },
+  "char_328_cammou": {
+   "name": "卡达",
+   "bytes": 4346,
+   "sha256": "260fa13f5a8c11f4a75baf1f970c946fc532b56f93304438ea0b84153ec5081e"
+  },
+  "char_505_rcast": {
+   "name": "预备干员-术师",
+   "bytes": 3412,
+   "sha256": "9c3467b3abc231b06590cfc604bbdfccdadee8d6b5ee74b5a02e7e8f1513eb32"
+  },
+  "char_604_ccast": {
+   "name": "预备干员-术师",
+   "bytes": 3412,
+   "sha256": "9c3467b3abc231b06590cfc604bbdfccdadee8d6b5ee74b5a02e7e8f1513eb32"
+  },
+  "char_4051_akkord": {
+   "name": "协律",
+   "bytes": 4754,
+   "sha256": "d99bf571eb76558e66419dcd3ee30da1be27d147db0f22bd5168a7cb89f0ac1a"
+  },
+  "char_469_indigo": {
+   "name": "深靛",
+   "bytes": 5810,
+   "sha256": "a37e26aaa96ae357c6f222fe9d5f6ab59f87892fc942ae59fb690240a7d05b2c"
+  },
+  "char_4004_pudd": {
+   "name": "布丁",
+   "bytes": 5178,
+   "sha256": "74769f87bcd95106b81a99f51a934fc7b9c2cd441769a9edd0fe09ab5ec6c073"
+  },
+  "char_603_csnipe": {
+   "name": "预备干员-狙击",
+   "bytes": 3984,
+   "sha256": "89477e48a6ab0c45dd38de761a1d39d800063ec7d278bd6c68b7ef5da13cd21e"
+  },
+  "char_126_shotst": {
+   "name": "流星",
+   "bytes": 4322,
+   "sha256": "8461c8caa2c58d6158aef94e1b7972fe10fe450be5c8c8f527a87d0f7b66522f"
+  },
+  "char_235_jesica": {
+   "name": "杰西卡",
+   "bytes": 5012,
+   "sha256": "348bc9b966a8e2e1fa72597fe38a88ba6969452950018f1e1fde3cd610faf8a6"
+  },
+  "char_133_mm": {
+   "name": "梅",
+   "bytes": 6022,
+   "sha256": "fa0da29bec3c0349556ca520edf94b96115f312e484137f5cc8b4850b46aad0e"
+  },
+  "char_190_clour": {
+   "name": "红云",
+   "bytes": 4692,
+   "sha256": "3dc6a069dee83ed4d07ef679631b240f3071f931c6c49cba0612281cec67648c"
+  },
+  "char_118_yuki": {
+   "name": "白雪",
+   "bytes": 3898,
+   "sha256": "18a622d619883ed52ec2523c5322dbae42b130139edc3b3aa8fe58ae8b1ef855"
+  },
+  "char_440_pinecn": {
+   "name": "松果",
+   "bytes": 5378,
+   "sha256": "61e9073df2f14b58ae1cf21ccc66b7e0321a8a64329f37522a04f9d689d786af"
+  },
+  "char_302_glaze": {
+   "name": "安比尔",
+   "bytes": 5666,
+   "sha256": "2f65fc084c9ed83e756c9d53756dcad109b9e143dd9833bf7482d7c037db4cb8"
+  },
+  "char_198_blackd": {
+   "name": "讯使",
+   "bytes": 4772,
+   "sha256": "4d37d5589139b20809117ba46c1760c56ad973d74511358b90f5f50a3055db38"
+  },
+  "char_366_acdrop": {
+   "name": "酸糖",
+   "bytes": 4712,
+   "sha256": "cbe03bf36fafb06fe88a7a2a0bcd99712f64d65c1f8b2b8a6a375f20efa16071"
+  },
+  "char_4062_totter": {
+   "name": "铅踝",
+   "bytes": 3942,
+   "sha256": "1ddd1dce7eb7f57b7bbce7e6bdbf2873c692d031e787a6598b7597748f747e9e"
+  },
+  "char_4100_caper": {
+   "name": "跃跃",
+   "bytes": 4028,
+   "sha256": "8321016fdcf3daa2b3d89bdc19584c5de9d79c609bfabe624f809037a3cce685"
+  },
+  "char_149_scave": {
+   "name": "清道夫",
+   "bytes": 4268,
+   "sha256": "d43d9c86129b364a9fe6ee6d31d26d90e4b89f2ba2ca0b5fc2443e25f3da4d49"
+  },
+  "char_290_vigna": {
+   "name": "红豆",
+   "bytes": 4672,
+   "sha256": "04b15a202396d83cb90ec38dac9ca46eb7b3938412a0c45e38584d83f02d7f2e"
+  },
+  "char_151_myrtle": {
+   "name": "桃金娘",
+   "bytes": 3872,
+   "sha256": "6cc28461db63c3e7550d0f246836f57eea234d75349772ba5905a417fbe040e3"
+  },
+  "char_452_bstalk": {
+   "name": "豆苗",
+   "bytes": 5520,
+   "sha256": "6b5c343707056ca8712e15733da8f840d4eb1adf8a176b77cc963e4a5f2cc762"
+  },
+  "char_130_doberm": {
+   "name": "杜宾",
+   "bytes": 3622,
+   "sha256": "bef6771ad2978b203ee79d5d221ebff00c24cafe3463592766fc4b9f38e2e172"
+  },
+  "char_600_cpione": {
+   "name": "预备干员-先锋",
+   "bytes": 3346,
+   "sha256": "7c0b04c7106f6fa2ac9799ee5c8acc695e87b3c8342a6c4e336b0539812cd41c"
+  },
+  "char_4208_wintim": {
+   "name": "冬时",
+   "bytes": 5542,
+   "sha256": "eea546e07501322fb9cfd0c169376a1834f7b864ea801dae77dc514b4b705cc1"
+  },
+  "char_289_gyuki": {
+   "name": "缠丸",
+   "bytes": 5054,
+   "sha256": "36985bdee195a42a3b281d13799e08b5440f0016d8af70293435d3bc880127ab"
+  },
+  "char_159_peacok": {
+   "name": "断罪者",
+   "bytes": 6184,
+   "sha256": "0009944e333bfbbe7a68efd9342c7adff55fa9d91176f4bee6a11948c84316eb"
+  },
+  "char_193_frostl": {
+   "name": "霜叶",
+   "bytes": 3994,
+   "sha256": "362ca783f600cbd8937ce722f0f0e1d236199ff2eaa7dc59cb1bfd2f607f8cc9"
+  },
+  "char_185_frncat": {
+   "name": "慕斯",
+   "bytes": 4612,
+   "sha256": "6f4d24d9fdadee98c33ffeea33a08f41e06e998da8f0f1e93268c87337d97942"
+  },
+  "char_337_utage": {
+   "name": "宴",
+   "bytes": 4618,
+   "sha256": "ebe9b1f8c713887cea04b7e46a21e328a0223c6932cb881ed84722b72f107fe9"
+  },
+  "char_301_cutter": {
+   "name": "刻刀",
+   "bytes": 4522,
+   "sha256": "f3f1c072bee934cf8e8a609452ff6c01712dd74828ea958132486691158ad340"
+  },
+  "char_127_estell": {
+   "name": "艾丝黛尔",
+   "bytes": 6984,
+   "sha256": "4cb215c2ff0fea0d9c24d945c25adf79a7e2254208bd5838de58ecb9472042df"
+  },
+  "char_4067_lolxh": {
+   "name": "罗小黑",
+   "bytes": 5344,
+   "sha256": "b9fbc75ea454feed1caeaff22b7cf7a6fe171d75dee11e0f8ede213e0ebc5861"
+  },
+  "char_271_spikes": {
+   "name": "芳汀",
+   "bytes": 4680,
+   "sha256": "722627b631b91e1f793b85af4b7308944ddeb2e4733c249807180d2e0a1949ce"
+  },
+  "char_4063_quartz": {
+   "name": "石英",
+   "bytes": 4854,
+   "sha256": "0cee8589f9d9cced7983fd7b215055ce8dd9c4c3f31e59b0f711daed152d22d6"
+  },
+  "char_491_humus": {
+   "name": "休谟斯",
+   "bytes": 5082,
+   "sha256": "e03d91eb3ff8dd8a52d54a0f3392eae718e9da992b5b31873338b8f63945b1a3"
+  },
+  "char_237_gravel": {
+   "name": "砾",
+   "bytes": 5110,
+   "sha256": "2a9061736396b144657413755fb798540e67519af6a1f3ba9068ac9873916c52"
+  },
+  "char_601_cguard": {
+   "name": "预备干员-近卫",
+   "bytes": 4744,
+   "sha256": "ce99dd521762e703010b7394bf770d0c8153b72552b4e9c0e0c5cc97ec7cfa33"
+  },
+  "char_272_strong": {
+   "name": "孑",
+   "bytes": 3948,
+   "sha256": "0722c9fedd8ca6694044e041cd6b35a841d429d060c1e7c6ae6d1747f45ebf3d"
+  },
+  "char_445_wscoot": {
+   "name": "骋风",
+   "bytes": 5462,
+   "sha256": "279a231092fb4a41890d33d31af21fabe1489b8094c9dac9a0d6b5a29cc771d0"
+  },
+  "char_236_rope": {
+   "name": "暗索",
+   "bytes": 4150,
+   "sha256": "7c2136a07386bbc6f93a8b80d12459a051f7e5f1e695cc0c93e99eba7fd9a522"
+  },
+  "char_607_cspec": {
+   "name": "预备干员-特种",
+   "bytes": 5226,
+   "sha256": "940a11b43495c44079b0c9510c3440737949a41e26afeb7ff2dd46d917d137fe"
+  },
+  "char_117_myrrh": {
+   "name": "末药",
+   "bytes": 5858,
+   "sha256": "f34a638b3befd29e454c01e2ecf08150b8fb4c879b7a66422f7736e9c0499ff6"
+  },
+  "char_187_ccheal": {
+   "name": "嘉维尔",
+   "bytes": 5152,
+   "sha256": "3c3e71d7bb889b4e455c5aae9e1d7bca13e8cbdff571c503fbe051953edf524f"
+  },
+  "char_298_susuro": {
+   "name": "苏苏洛",
+   "bytes": 4878,
+   "sha256": "b386d9fdd7b266e8e6d1022657656312d32e5f4391beeed461c70d6cf69a29eb"
+  },
+  "char_4041_chnut": {
+   "name": "褐果",
+   "bytes": 3836,
+   "sha256": "6ae309d0d448b02bf8fcad60598d23448fbb95c560fe38e7189ee8629900f9fd"
+  },
+  "char_181_flower": {
+   "name": "调香师",
+   "bytes": 4686,
+   "sha256": "f05bc28955df9aa69a71912e0766a47dffbfa3e4ec5dd47066c6651dcdebcd7d"
+  },
+  "char_385_finlpp": {
+   "name": "清流",
+   "bytes": 5964,
+   "sha256": "f269d97b84d98e0c2a8109830eb9037699dd50ee9b5e8f0d85cbaadf053241b6"
+  },
+  "char_4170_hdbell": {
+   "name": "行铃",
+   "bytes": 5546,
+   "sha256": "ab0fe5039a1868b4374a44607ebf3a16578e9c65985d554427134d1c2dda0577"
+  },
+  "char_605_cmedic": {
+   "name": "预备干员-医疗",
+   "bytes": 3938,
+   "sha256": "956e8019e08a15c504a029082e00bbb4da8e9acc522805d3cb7f124305d82513"
+  },
+  "char_199_yak": {
+   "name": "角峰",
+   "bytes": 4928,
+   "sha256": "45b6a9063da441fbd17e05a07a9073d124ef7e83b647abca2b4825b7378792b5"
+  },
+  "char_150_snakek": {
+   "name": "蛇屠箱",
+   "bytes": 4744,
+   "sha256": "7442d1c68bd60bfa2bcf4cc9869df52e3b08aace64a9f0b5ec67e89789b8e2be"
+  },
+  "char_602_cdfend": {
+   "name": "预备干员-重装",
+   "bytes": 3820,
+   "sha256": "4797631503dc474f0cb8f5111d0666f5bfe620bc813d01bc388fcf1642d2eaf0"
+  },
+  "char_196_sunbr": {
+   "name": "古米",
+   "bytes": 5394,
+   "sha256": "58493daad7aab80a3bc9afd8ef245d5833b5fc69c196d354abe43507fa80bce0"
+  },
+  "char_381_bubble": {
+   "name": "泡泡",
+   "bytes": 4382,
+   "sha256": "2f65a447fe148678797bcff41e10c1713d352809f6a823abfc539d3ddd293f43"
+  },
+  "char_110_deepcl": {
+   "name": "深海色",
+   "bytes": 5098,
+   "sha256": "b9d7107f6f794aee9e217fff59996e0acca72d847170efaba775d11334aaf3e9"
+  },
+  "char_258_podego": {
+   "name": "波登可",
+   "bytes": 5210,
+   "sha256": "f7d434094fd046d8910ada93a75222a88d9820c989ee12c176755d7901cf8275"
+  },
+  "char_183_skgoat": {
+   "name": "地灵",
+   "bytes": 7456,
+   "sha256": "86ebb0113190487232f988004246ce4e7653596161b508196365838791e6847c"
+  },
+  "char_260_durnar": {
+   "name": "坚雷",
+   "bytes": 5412,
+   "sha256": "d4bb2e83a150e237faa1f50b99a578931757daf3d46ad403f2acb5c754d3d340"
+  },
+  "char_484_robrta": {
+   "name": "罗比菈塔",
+   "bytes": 4002,
+   "sha256": "ee0821c8ab8dff7a9efb3a1b86104296bb155c6b1f5dc09e5c107a8346274ebe"
+  },
+  "char_616_pithst": {
+   "name": "盟约·辅助干员",
+   "bytes": 4224,
+   "sha256": "11256131df733c9cb77d3d219aa9df2dff6493dc9f5c6db88e8f0e852c5454b0"
+  },
+  "char_355_ethan": {
+   "name": "伊桑",
+   "bytes": 4782,
+   "sha256": "df1ab7e5723e26fc343368efc2d67cad92d404bf5a63137122885c7c4a6a0406"
+  },
+  "char_128_plosis": {
+   "name": "白面鸮",
+   "bytes": 3932,
+   "sha256": "cd081446a6ebcc80a36ac479e9ad474532d752e63d6b84cab832af443457c0d4"
+  },
+  "char_277_sqrrel": {
+   "name": "阿消",
+   "bytes": 5350,
+   "sha256": "86bf2ab3219d1f1362983eb620d3b6eee8d4653e22f4ce716d3fd6dcf38fb049"
+  },
+  "char_4165_ctrail": {
+   "name": "云迹",
+   "bytes": 4198,
+   "sha256": "f764db57b6ad795583463ba2956734c2af27058c6cf646ae0ff4cce013693620"
+  },
+  "char_4130_luton": {
+   "name": "露托",
+   "bytes": 5126,
+   "sha256": "92c5d33c7cc12efb1f3cb15a93c4e542c66cc497249486c9617c1b217fb1320f"
+  },
+  "char_4107_vrdant": {
+   "name": "维荻",
+   "bytes": 4696,
+   "sha256": "5654b7701c30c57ab278eddd0e53550ad04502045b93e8f015b6886392e2c555"
+  },
+  "char_275_breeze": {
+   "name": "微风",
+   "bytes": 4826,
+   "sha256": "a3bb8e09618867cde15604c6ab517f72a0c218e6ddaaf5f63f309db321579489"
+  },
+  "char_606_csuppo": {
+   "name": "预备干员-辅助",
+   "bytes": 4232,
+   "sha256": "a1475a9d5ef4434d7ad9f275eecbe89c3cec4bdd9e53c4d5e47ecbb9c0e20f8a"
+  },
+  "char_4163_rosesa": {
+   "name": "瑰盐",
+   "bytes": 6298,
+   "sha256": "12b73dc29417ea2446b517b3766b29eba1e55eeb6153dc43cdd6cc928f2cf0f3"
+  },
+  "char_102_texas": {
+   "name": "德克萨斯",
+   "bytes": 4030,
+   "sha256": "c5c8419db796f8d6c7bba4dcc8394f4e7f36e5ba8dd0547eddf4accda96c5075"
+  },
+  "char_115_headbr": {
+   "name": "凛冬",
+   "bytes": 4068,
+   "sha256": "518cc256aa9064d96051c344fb36bae1935b57710fbed711172b046f6a90e435"
+  },
+  "char_349_chiave": {
+   "name": "贾维",
+   "bytes": 5468,
+   "sha256": "708644d5701b9f0e87f55c269e2502cbb58dae29c5b31180f79ed3bfd93365f9"
+  },
+  "char_513_apionr": {
+   "name": "郁金香",
+   "bytes": 4668,
+   "sha256": "8d37a7534ebc95418c0cf3aebb6a92ab7c4da6525b07d0f1e01ec430749090a1"
+  },
+  "char_488_buildr": {
+   "name": "青枳",
+   "bytes": 4884,
+   "sha256": "86075030446e23ca69cdd91042a469128f217ac4d81d2b7cbc1a95c287a30e87"
+  },
+  "char_4199_makiri": {
+   "name": "松桐",
+   "bytes": 6230,
+   "sha256": "90348c0800b9e3daa6731a0b324567826031ae4c4a1e804956f2cb5c477d16ff"
+  },
+  "char_4023_rfalcn": {
+   "name": "红隼",
+   "bytes": 3998,
+   "sha256": "1ba9ec4911825737f9639dfe35648890c3d7c4993f72c610d3b0f2b274408c6a"
+  },
+  "char_496_wildmn": {
+   "name": "野鬃",
+   "bytes": 6556,
+   "sha256": "42eb05b121211d8ee2f28ba313a1a63a4e7f4bcdb261327b51ac4e22f10dfe1e"
+  },
+  "char_261_sddrag": {
+   "name": "苇草",
+   "bytes": 5448,
+   "sha256": "860f8d019f773eac178a890f67c04efb8b95b9f1f992589c0706b28ab28cc9c5"
+  },
+  "char_1036_fang2": {
+   "name": "历阵锐枪芬",
+   "bytes": 4864,
+   "sha256": "4da9b3ca1519a2b740dcf8ff3e94983adf8f058abfd55328761bff9cd6accff4"
+  },
+  "char_401_elysm": {
+   "name": "极境",
+   "bytes": 5394,
+   "sha256": "82b5bc254b8de52acfbadd7cd0eb3afbe510cfa087ec6ec85693497239aa87ea"
+  },
+  "char_4237_jcinta": {
+   "name": "嘉辛塔",
+   "bytes": 5606,
+   "sha256": "00e9b962802d9ca1e32a14dc93020713ce8e89e2c26347ef396ea4bbfdf8f1e8"
+  },
+  "char_4119_wanqin": {
+   "name": "万顷",
+   "bytes": 5788,
+   "sha256": "fc8c4c1c0f9d41e0cf514ecd5c9a69ebb2c6b693bc2032beefe2419cf675262b"
+  },
+  "char_476_blkngt": {
+   "name": "夜半",
+   "bytes": 5198,
+   "sha256": "9af0ecb91ebb743915f168d8a5d338fa18f8ce6fbe0924b84c461fd95a905e86"
+  },
+  "char_4147_mitm": {
+   "name": "渡桥",
+   "bytes": 5860,
+   "sha256": "add603f8cfe06c05ed443b58cfd84283b8a5605dab2fbe9f904dafa5c384e33d"
+  },
+  "char_497_ctable": {
+   "name": "晓歌",
+   "bytes": 4766,
+   "sha256": "6642849cad9334999d345db4d6c7b9d4c98738af541c3c63c69512919e64f445"
+  },
+  "char_308_swire": {
+   "name": "诗怀雅",
+   "bytes": 4290,
+   "sha256": "9713beb66849ee01d43a210d5cff7dd3f46a0df56b6b875506d9a44186e4ca43"
+  },
+  "char_4144_chilc": {
+   "name": "齐尔查克",
+   "bytes": 3952,
+   "sha256": "fab6b863be091bf4cbf2ee8548cd150a8927bf0acb936ea4c500d1a8e0e030ea"
+  },
+  "char_4017_puzzle": {
+   "name": "谜图",
+   "bytes": 5578,
+   "sha256": "d6d8ddb2ce4482cbdf18aa4f5a81692193c679f3978ae1d40286db290d6ca965"
+  },
+  "char_265_sophia": {
+   "name": "鞭刃",
+   "bytes": 5084,
+   "sha256": "9cd710d729df80199f2df05934df6ea0a5357b72af1eaf789586ebc9f4ed7cc8"
+  },
+  "char_4052_surfer": {
+   "name": "寻澜",
+   "bytes": 4362,
+   "sha256": "0f0162f442cd24ecee680efab4ae4d0a25bb3de7e3617124fb10a4f8e8d87eff"
+  },
+  "char_4106_bryota": {
+   "name": "苍苔",
+   "bytes": 4790,
+   "sha256": "be1f01524a20071ef9671e82750eb24879d4ea3d9ca3a4c30f8644f8e84afa87"
+  },
+  "char_4125_rdoc": {
+   "name": "医生",
+   "bytes": 3602,
+   "sha256": "f6e4a2222f151c1fef5f9a97d6bc258ba717809349608a10438a42f79a566666"
+  },
+  "char_4245_alga": {
+   "name": "奥尔佳",
+   "bytes": 3888,
+   "sha256": "31f67c713754734699c5342a5829395ad740570d1368d90d59391d84d0049175"
+  },
+  "char_106_franka": {
+   "name": "芙兰卡",
+   "bytes": 4338,
+   "sha256": "195c69dc655bd31dc78bd5612157fbcb13e8ca4028b923f6d89a858a590ab634"
+  },
+  "char_154_morgan": {
+   "name": "摩根",
+   "bytes": 5182,
+   "sha256": "c47c0af9702970a55fb7d2a1d505bb88173ed580f328147be6d32a82cebe5564"
+  },
+  "char_131_flameb": {
+   "name": "炎客",
+   "bytes": 4040,
+   "sha256": "28ca63bfebc04588ec9e098e9c47559831b973c64bd5de69108de7ff43828663"
+  },
+  "char_4142_laios": {
+   "name": "莱欧斯",
+   "bytes": 3650,
+   "sha256": "ce5177ceea3e5042e8f73658ef0c2ca4f46ce985dd2b8630c0df92162ca6dc40"
+  },
+  "char_155_tiger": {
+   "name": "因陀罗",
+   "bytes": 4770,
+   "sha256": "d03e444a60e9ea4c36810540d13b4b4e4571c11c9e80d449c262f1a72c6106fe"
+  },
+  "char_508_aguard": {
+   "name": "Sharp",
+   "bytes": 3688,
+   "sha256": "b557ab1e945231985b178b38f1c6c5d4303d874910930dba75a217a4ab45125e"
+  },
+  "char_415_flint": {
+   "name": "燧石",
+   "bytes": 3224,
+   "sha256": "ef308f524d53ac74cd2de9806aa90c94bebe0079c6d70ee6c10622efb578f4e5"
+  },
+  "char_157_dagda": {
+   "name": "达格达",
+   "bytes": 4038,
+   "sha256": "8184961fdc230f9f3d3e9a4bcab7e7f5e5abf6439c3d5c99520a5e6bc99efa13"
+  },
+  "char_140_whitew": {
+   "name": "拉普兰德",
+   "bytes": 5094,
+   "sha256": "cc23c353d358ec8c48244701902af03937547a76485fefc356301a713e5f98d1"
+  },
+  "char_4083_chimes": {
+   "name": "铎铃",
+   "bytes": 6016,
+   "sha256": "78d76a41a483a341abc6ca6343792a6a38853b4b2d1677edbae04bf8a4e8c1da"
+  },
+  "char_294_ayer": {
+   "name": "断崖",
+   "bytes": 6724,
+   "sha256": "256ecb159fb1e89afd49bc758fb3bdc0ca205ae3efc4eb6d11ec1375ea6ddc29"
+  },
+  "char_194_leto": {
+   "name": "烈夏",
+   "bytes": 4012,
+   "sha256": "88922b20e149698a7272a1287787987ce04618c96302fbd405c80be03805a7be"
+  },
+  "char_459_tachak": {
+   "name": "战车",
+   "bytes": 3352,
+   "sha256": "7b91dd7bc48461e40c3ee3856da43bfef69125276f699b6bdeb0b5e74a949f62"
+  },
+  "char_252_bibeak": {
+   "name": "柏喙",
+   "bytes": 4740,
+   "sha256": "964b0bd966136b41cdf4923e5948d134c764d4f5e051ecd6e4099f5838c26aea"
+  },
+  "char_143_ghost": {
+   "name": "幽灵鲨",
+   "bytes": 3592,
+   "sha256": "fc436071d0cf7334997e9635d4065608b0075d921031ad4a3e7cdcb733811e3a"
+  },
+  "char_356_broca": {
+   "name": "布洛卡",
+   "bytes": 4024,
+   "sha256": "fd2a4efb43b821abd643ce8017f9b14a0f2c06ae42e5a17095de8f02a5c47675"
+  },
+  "char_4126_fuze": {
+   "name": "导火索",
+   "bytes": 3952,
+   "sha256": "f18425f7ab1af80fa64c0e7db47a6c003fb3847abd4c2136ae3993d58cbd85c8"
+  },
+  "char_333_sidero": {
+   "name": "铸铁",
+   "bytes": 5670,
+   "sha256": "041b8e15655f37c37ec4a9f7b7087baf4b10040442f98f2b4fc40983f38dcf2f"
+  },
+  "char_274_astesi": {
+   "name": "星极",
+   "bytes": 4062,
+   "sha256": "b58092013ac39faed308fe42c4592068e4372261ba3dc87c65f1a1b087fc1a45"
+  },
+  "char_4166_varkis": {
+   "name": "摆渡人",
+   "bytes": 4384,
+   "sha256": "74c888318b67b9a67b7608687ff1d7676ccb692f1ba230077233f149061d8542"
+  },
+  "char_1030_noirc2": {
+   "name": "火龙S黑角",
+   "bytes": 5058,
+   "sha256": "2170edb6b812483047903f125e1fb932224bf174da5815621d8f9b24b285f406"
+  },
+  "char_475_akafyu": {
+   "name": "赤冬",
+   "bytes": 5638,
+   "sha256": "5d5b5cb8ee3bd36f64d671b08a2a4ccdaa947339a4039908ed627f5f9f9be727"
+  },
+  "char_421_crow": {
+   "name": "羽毛笔",
+   "bytes": 4602,
+   "sha256": "c24a0f6f0832feaea4fc82e0e2ea8d7f1c3bf9f45726add2e40cf2e3eaeeb9b4"
+  },
+  "char_4066_highmo": {
+   "name": "海沫",
+   "bytes": 5118,
+   "sha256": "9648f89414bac7a5508a505ca09ee1b45ba4d45598280856478ba4d08c084398"
+  },
+  "char_486_takila": {
+   "name": "龙舌兰",
+   "bytes": 4632,
+   "sha256": "c5468f7074a9463bffd303a65aadb676c819b597f9d2a46a658e351de4788bba"
+  },
+  "char_4131_odda": {
+   "name": "奥达",
+   "bytes": 4430,
+   "sha256": "f0a0b9bff33afce98510f939b35897e76114372ff866754a5119431b4d6e9069"
+  },
+  "char_4185_amoris": {
+   "name": "祐天寺若麦",
+   "bytes": 5200,
+   "sha256": "6e42cc3a897a8be97be9cfcf9605f1e672dcf894fd7cbff0f42d141762bea0ec"
+  },
+  "char_4187_graceb": {
+   "name": "聆音",
+   "bytes": 5220,
+   "sha256": "5c31fcaa6309d406eaa2bd9c42aa2a8d9b926abcf18fcbab56a7c2ea78323525"
+  },
+  "char_1049_catap2": {
+   "name": "雷狼龙S空爆",
+   "bytes": 5064,
+   "sha256": "4e944b31c137c53618738a2dc7c7ff4289c7cf7a86a8cc3e024aec7e0729826a"
+  },
+  "char_394_hadiya": {
+   "name": "哈蒂娅",
+   "bytes": 4978,
+   "sha256": "e76ca5cc5a8d9aea4d32f1463df8bae4591fd1cca7df78f8d30acf4089432533"
+  },
+  "char_129_bluep": {
+   "name": "蓝毒",
+   "bytes": 3686,
+   "sha256": "605c27600acd8157b114913fe8622a479a2cde7113fe50edd2a0d84bdbb06087"
+  },
+  "char_204_platnm": {
+   "name": "白金",
+   "bytes": 3794,
+   "sha256": "5f86cb98201dbe3878879f0dda9b7d374ac6dbdb9d995b8169c544e87965c2b6"
+  },
+  "char_365_aprl": {
+   "name": "四月",
+   "bytes": 4118,
+   "sha256": "dab7661b1938557da87af343783f7b3d76c3ebd9a84c27c83e10f52def850f99"
+  },
+  "char_498_inside": {
+   "name": "隐现",
+   "bytes": 4218,
+   "sha256": "45d9d8b838eb8763cbce91b1defbf06e9e86f8aa1a6f99b4a11a36064f23bf95"
+  },
+  "char_1021_kroos2": {
+   "name": "寒芒克洛丝",
+   "bytes": 5574,
+   "sha256": "c7aa7c19c4753e5f74722efa39d96465ee37b5a0b5ab2ab948667bcf375193d9"
+  },
+  "char_367_swllow": {
+   "name": "灰喉",
+   "bytes": 4464,
+   "sha256": "d5e6f7ce0a585d15f1087498add12d933b494a2cead40a2a74f299eef930d095"
+  },
+  "char_379_sesa": {
+   "name": "慑砂",
+   "bytes": 5652,
+   "sha256": "ea082ec3cc1a1bbf3d6842fd8e2e4a7131baa651ad6e5ed08bc8639038548954"
+  },
+  "char_219_meteo": {
+   "name": "陨星",
+   "bytes": 4698,
+   "sha256": "b2e8ec1c7650e0a05311f13acbe5bea7fb70729cf3ae18093fe2f2bb9013d58d"
+  },
+  "char_4078_bdhkgt": {
+   "name": "截云",
+   "bytes": 5136,
+   "sha256": "d540c05f850795b775fdf9f9d3c6bcdeab19ab6ab6842df0da425a5d25a7e0c6"
+  },
+  "char_511_asnipe": {
+   "name": "Stormeye",
+   "bytes": 4128,
+   "sha256": "165c00d61d09384f19f77b3b6a1941589c162f0791544f947cf747257b8706db"
+  },
+  "char_279_excu": {
+   "name": "送葬人",
+   "bytes": 4720,
+   "sha256": "7c6f59d8de3588d97cc5b58e5cf1fda0db3c460b45a6aafe91cac13a08d1a03c"
+  },
+  "char_346_aosta": {
+   "name": "奥斯塔",
+   "bytes": 4260,
+   "sha256": "f8e11d27a8f6adfc81ee67e7da6c772f0d3179100d690544be9f2bc4924997ce"
+  },
+  "char_4218_aigis": {
+   "name": "埃癸斯",
+   "bytes": 4452,
+   "sha256": "578e1a1fcc02e118eac194e13587342d7b3561e6574a09623f7b7ebf64e5267d"
+  },
+  "char_002_amiya": {
+   "name": "阿米娅",
+   "bytes": 4952,
+   "sha256": "920d1839f32538546e659800e7bf5b88dbc75f2f5961f8ce6927c913e0299df3"
+  },
+  "char_411_tomimi": {
+   "name": "特米米",
+   "bytes": 5138,
+   "sha256": "e879a1dcccf2ce7e681e408bb16106d550fe829a044d99f1bd32805e822fc670"
+  },
+  "char_4213_skybx": {
+   "name": "天空盒",
+   "bytes": 4580,
+   "sha256": "3c35e32d29ceb65b3ad982cfbd0f9455d74e3c588e8afe335a004b003dfa9f1b"
+  },
+  "char_4203_kichi": {
+   "name": "吉星",
+   "bytes": 5516,
+   "sha256": "82f87d6e4ba564ec2b5d9e5a2b992e137569f052217e725bc148fcf43f5e0c0e"
+  },
+  "char_344_beewax": {
+   "name": "蜜蜡",
+   "bytes": 5256,
+   "sha256": "4da169782545b41b741faa2d8f2f83a5c5d35e48beb19f98c8d895b4de0ea396"
+  },
+  "char_166_skfire": {
+   "name": "天火",
+   "bytes": 3710,
+   "sha256": "5429fe37aaddcac6e3f4e7942848a291f1ba9a2e7a02baa0f46685c85334f663"
+  },
+  "char_466_qanik": {
+   "name": "雪绒",
+   "bytes": 3604,
+   "sha256": "ed3ae88f2ccde84d3866e908d194bf551e546e1574bf4fde6500e25219645e8a"
+  },
+  "char_135_halo": {
+   "name": "星源",
+   "bytes": 5436,
+   "sha256": "9c5de3183ed3ab978ae0c6902f9d24b63869fe0ab355a035ac1838eb5372df42"
+  },
+  "char_373_lionhd": {
+   "name": "莱恩哈特",
+   "bytes": 5654,
+   "sha256": "b8ed67450a50be1cc02acd517792ad7982b7c80c0fe7a9839d24cb04fe502cd5"
+  },
+  "char_306_leizi": {
+   "name": "惊蛰",
+   "bytes": 6076,
+   "sha256": "27bf35a977904854a64c822d4deace53c1d1567fb67ae813357fa356ff5b4ecf"
+  },
+  "char_509_acast": {
+   "name": "Pith",
+   "bytes": 5240,
+   "sha256": "218af9d7daabb114200221f1f0b00705f2a84d6757afcbec9e81d69a3dbacfdb"
+  },
+  "char_341_sntlla": {
+   "name": "寒檀",
+   "bytes": 4366,
+   "sha256": "124a1a1baf872c949710ca52cb7e9e0b7b6081b82944a4f301b0ce39dfbad86d"
+  },
+  "char_338_iris": {
+   "name": "爱丽丝",
+   "bytes": 5508,
+   "sha256": "60c6789c9f278a0341e5dc1077a0a610d85c096c15f2570d45e5736efa638c4c"
+  },
+  "char_4031_liesel": {
+   "name": "复奏",
+   "bytes": 4792,
+   "sha256": "85d5cade5bf7aebeb7c58f8aab77e06cb5efeebb89444092426aa8820de2e051"
+  },
+  "char_388_mint": {
+   "name": "薄绿",
+   "bytes": 4826,
+   "sha256": "ca462d859cea66e0f54e2bd56230c7982fcb38bd58f9ea67a0342bc329ff28d7"
+  },
+  "char_1011_lava2": {
+   "name": "炎狱炎熔",
+   "bytes": 3788,
+   "sha256": "ae11038b3fd001e55b1878281b3eac584c241da17a09cb167e16bd071b579200"
+  },
+  "char_297_hamoni": {
+   "name": "和弦",
+   "bytes": 4042,
+   "sha256": "8631732204a102a998cc7a77d744578a48eaedec0352725766f9f222ae9fc693"
+  },
+  "char_405_absin": {
+   "name": "苦艾",
+   "bytes": 4346,
+   "sha256": "b4879bda3b8e5faa0a4e74973c01ad122e09d6693b9c67408663e573499aebb9"
+  },
+  "char_4110_delphn": {
+   "name": "戴菲恩",
+   "bytes": 4960,
+   "sha256": "a7296d179c4f7ef1c80dc80afcae17c959934ac9b9bb46cb976abeaa36f6d4d4"
+  },
+  "char_489_serum": {
+   "name": "蚀清",
+   "bytes": 4358,
+   "sha256": "ebe583771d65c63f717e90d4b8211d6e4fa0cbd0c68f964e978630fa290a8323"
+  },
+  "char_4013_kjera": {
+   "name": "耶拉",
+   "bytes": 4324,
+   "sha256": "be1c13c9f1145e51ea1afce18288ab2f0fe204d17a39c81c63eaead75c7650b5"
+  },
+  "char_4054_malist": {
+   "name": "至简",
+   "bytes": 4480,
+   "sha256": "9dfd37d17e81a11052106ee29eabc36b9e594dead63c404f356602530ff49b1d"
+  },
+  "char_4040_rockr": {
+   "name": "洛洛",
+   "bytes": 5132,
+   "sha256": "1950ac08b8a57a4406ec18d740e59b6769bb5334215c39e18de4b3c7a42f6c73"
+  },
+  "char_4236_tmslot": {
+   "name": "时隙",
+   "bytes": 5144,
+   "sha256": "bdae6f8b3c97b4d6b68a178e5c51488637c98ae80111dc5e18f7d5cf8217ab07"
+  },
+  "char_446_aroma": {
+   "name": "阿罗玛",
+   "bytes": 4984,
+   "sha256": "aac9e921e32fdb2633327a7f79e08e43bc215c4f532989c76eb5a09ba8ef8ca0"
+  },
+  "char_499_kaitou": {
+   "name": "折光",
+   "bytes": 5276,
+   "sha256": "2cf93c4582939fa72802fab0ef68823f7520e7da09ccd62b6308a7dfd3e04fb0"
+  },
+  "char_4081_warmy": {
+   "name": "温米",
+   "bytes": 5084,
+   "sha256": "3c33be3f2b2dc314c19f854899e45a343a97a0b64e8a97a31ed8c9f91a23e279"
+  },
+  "char_4198_christ": {
+   "name": "Miss.Christine",
+   "bytes": 3560,
+   "sha256": "1552dfe961377b60c112144aa68d3119a4b5950eff5058c2fc6ac5daab7de055"
+  },
+  "char_242_otter": {
+   "name": "梅尔",
+   "bytes": 5192,
+   "sha256": "64c7c18414b226f8718106aa1ff188a6c63e34f6f59ad5eb0a4b8d8ff78fc275"
+  },
+  "char_336_folivo": {
+   "name": "稀音",
+   "bytes": 4552,
+   "sha256": "1e885ebe2df09c2df191ab5c7aed2a752091fb0847ab61b034689d812eae0d16"
+  },
+  "char_4164_tecno": {
+   "name": "特克诺",
+   "bytes": 5328,
+   "sha256": "d191473aa1792dbbdc2a8553fc63f541b6babb9d481f1af45033dbae172c4db7"
+  },
+  "char_108_silent": {
+   "name": "赫默",
+   "bytes": 6344,
+   "sha256": "e962959960b3464f487ba9e233cc79906cbd723194a57d6c547133e3af886d6a"
+  },
+  "char_171_bldsk": {
+   "name": "华法琳",
+   "bytes": 3798,
+   "sha256": "de2c23de1598c2fa7dc824c72d9dfc49ad4448ad84234104dc6a7663b2624eb4"
+  },
+  "char_345_folnic": {
+   "name": "亚叶",
+   "bytes": 3856,
+   "sha256": "f1a1fcbcae6754cd43cc8460fe30db6bc4662cfdf0f6270e1c697ee60607d5e9"
+  },
+  "char_4140_lasher": {
+   "name": "衡沙",
+   "bytes": 5452,
+   "sha256": "29d0548d5ab856d349817a1b5d4f41bf3b6c28bdcea8f87133ed11625be7d22a"
+  },
+  "char_510_amedic": {
+   "name": "Touch",
+   "bytes": 4688,
+   "sha256": "16a45caba2137cfc57967239ef66451c0a5b3821c4b92c83d0b44e0438a9a1b2"
+  },
+  "char_436_whispr": {
+   "name": "絮雨",
+   "bytes": 5060,
+   "sha256": "a87b272d83e8af6e042ecae502f37015f88095987ce5f3c385a14f219a8f85e4"
+  },
+  "char_4196_reckpr": {
+   "name": "录武官",
+   "bytes": 4380,
+   "sha256": "84b52e4329c6fe6cde4cdcfee977a6b2baa6f9ea96044a9492887afd449ee66b"
+  },
+  "char_348_ceylon": {
+   "name": "锡兰",
+   "bytes": 4484,
+   "sha256": "6a935c75bada6ba3cba8f70f353b72e18786667f9f8092898d93d1760085d91a"
+  },
+  "char_4173_nowell": {
+   "name": "诺威尔",
+   "bytes": 5286,
+   "sha256": "134835873882350b4de145181648e69993bc61947d158e8b683f26c9120a2a91"
+  },
+  "char_473_mberry": {
+   "name": "桑葚",
+   "bytes": 4192,
+   "sha256": "c07d75fcd0e838aa32d2642d4a73416bce42880a2516c0286d60d6ad30d93559"
+  },
+  "char_449_glider": {
+   "name": "蜜莓",
+   "bytes": 4638,
+   "sha256": "8a2f2815fa852602e682811acfa460f109167acf1787d6ce4aff772ccec18e71"
+  },
+  "char_402_tuye": {
+   "name": "图耶",
+   "bytes": 5114,
+   "sha256": "f6e8ffbf9cdaaa78b2c13ac8718a89082262d563f30b757dce45e63bbd64933f"
+  },
+  "char_4114_harold": {
+   "name": "哈洛德",
+   "bytes": 5242,
+   "sha256": "895f024585b3db91b2e38e665a3f544ccbb3806eaf95b20f70aead2736bca853"
+  },
+  "char_1024_hbisc2": {
+   "name": "濯尘芙蓉",
+   "bytes": 4052,
+   "sha256": "7cd872c01aeeee44d860b405409d19973253ae7ee498a8bb4cf753bfade5f220"
+  },
+  "char_4071_peper": {
+   "name": "明椒",
+   "bytes": 4542,
+   "sha256": "06c0e088b5f6ca99962b19d325c7b1a1a5702523f3a7e1c92dea5cf2e91d94bf"
+  },
+  "char_494_vendla": {
+   "name": "刺玫",
+   "bytes": 6440,
+   "sha256": "002674312c57923541611c735a144f93f46a86df1b28a4f9892e263687621000"
+  },
+  "char_4139_papyrs": {
+   "name": "莎草",
+   "bytes": 5224,
+   "sha256": "b708fc7df094a9e165201bc1596f92a0ec88b4b095f99f8cabcb746d137f9539"
+  },
+  "char_4224_turdus": {
+   "name": "乌啾",
+   "bytes": 5566,
+   "sha256": "a356085dfdcb6098b084a9b9ba36ffb1d01d3c03deb7b180406326350e57de6d"
+  },
+  "char_226_hmau": {
+   "name": "吽",
+   "bytes": 4922,
+   "sha256": "5e533dfe88482e15cc2ca4ae76b7bd17c3531866100bacb9d9ae389712d250dc"
+  },
+  "char_4222_taraxa": {
+   "name": "风絮",
+   "bytes": 5224,
+   "sha256": "941789f8f84374986e872f65fda17438902a008964f963f90189db6eb5261aba"
+  },
+  "char_148_nearl": {
+   "name": "临光",
+   "bytes": 4974,
+   "sha256": "e73ee1003d286441df9e91b550eecd9b3ac66d0ca0379c01211e75576ec4fd7c"
+  },
+  "char_4109_baslin": {
+   "name": "深律",
+   "bytes": 5312,
+   "sha256": "54b4daa82a86d898c9949290cc32710ff37e495feca9798a80d6c68b688bd1d1"
+  },
+  "char_144_red": {
+   "name": "红",
+   "bytes": 4434,
+   "sha256": "81c7c7eb7ae17875e21f832d2fbba11a3ef7c0214d8857adb67241fa773dd583"
+  },
+  "char_214_kafka": {
+   "name": "卡夫卡",
+   "bytes": 4596,
+   "sha256": "88bc876b9e1f82c6f6d7b7f46f371a48a6586a661ae7c0e590928c38f5ef5d78"
+  },
+  "char_4143_sensi": {
+   "name": "森西",
+   "bytes": 4050,
+   "sha256": "9ca7c13e5e6dbcd313eb65ee5d5cc89f95107efa380b411a615d5d72ac4b5102"
+  },
+  "char_243_waaifu": {
+   "name": "槐琥",
+   "bytes": 5474,
+   "sha256": "15636638fa2eb7dc8cd6dda924023be0d61b44c613c6859821b7d41a13ffc5dc"
+  },
+  "char_455_nothin": {
+   "name": "乌有",
+   "bytes": 5374,
+   "sha256": "b335e912e40183df274493bc36c351265483f09e4b1443f6ad72c6dfbe5d4c22"
+  },
+  "char_4155_talr": {
+   "name": "裁度",
+   "bytes": 5806,
+   "sha256": "5404938be3b36d8adf49a8f347016f8f28d114d9da7b38582b677c8979e945ab"
+  },
+  "char_107_liskam": {
+   "name": "雷蛇",
+   "bytes": 5302,
+   "sha256": "64a8e182ed370c94dbf6ea9397250580d5c1f9dc0d99f8c168679ea872bd7771"
+  },
+  "char_4137_udflow": {
+   "name": "深巡",
+   "bytes": 4624,
+   "sha256": "bd99c5afdb078bfb83ef1e2159a79b23a201c1c776ded8415fcddf8729ba9aa9"
+  },
+  "char_201_moeshd": {
+   "name": "可颂",
+   "bytes": 5480,
+   "sha256": "97ad13a5446fa3b8a5e9a6fcf7e7491bc9fa7d90cb4d7a4f0e470ee6f96bdf2e"
+  },
+  "char_163_hpsts": {
+   "name": "火神",
+   "bytes": 4498,
+   "sha256": "c823a7ff46a470a5b95f219be6f044fbf37fac1f8ea9b0868d734094f31cbefc"
+  },
+  "char_378_asbest": {
+   "name": "石棉",
+   "bytes": 3528,
+   "sha256": "e9586d6a249a20bccf5eab6e3df402494116a8d879b6d2e930cd675cfef6d630"
+  },
+  "char_325_bison": {
+   "name": "拜松",
+   "bytes": 5210,
+   "sha256": "c038e73bc497ca501616c1d301fae524eb39880f0e456d9a24011eeaa654086b"
+  },
+  "char_4207_branch": {
+   "name": "折桠",
+   "bytes": 4954,
+   "sha256": "f0edace3135e519d303f084eb846edd04d786fd0bb0ad671e4d928b38bc7120e"
+  },
+  "char_512_aprot": {
+   "name": "暮落",
+   "bytes": 3898,
+   "sha256": "b954a2afe86ca15353ba50b06128f424e96cd3496f14e18b83ae4e595897da61"
+  },
+  "char_4025_aprot2": {
+   "name": "暮落",
+   "bytes": 3898,
+   "sha256": "b954a2afe86ca15353ba50b06128f424e96cd3496f14e18b83ae4e595897da61"
+  },
+  "char_4047_pianst": {
+   "name": "车尔尼",
+   "bytes": 5568,
+   "sha256": "30beabd1c9323e64e61c19db6441de1e1634070630f992b2a2592c2052ceac59"
+  },
+  "char_457_blitz": {
+   "name": "闪击",
+   "bytes": 4378,
+   "sha256": "4a6bcee2959e58cfbf51aa4cceb0a1151917e889cca457164f8cf70bc5b8bfe3"
+  },
+  "char_304_zebra": {
+   "name": "暴雨",
+   "bytes": 3964,
+   "sha256": "83def6e4aefc41423e988a0526f49a3ea9e2b86cea6fdf369c474f434624ab3e"
+  },
+  "char_493_firwhl": {
+   "name": "火哨",
+   "bytes": 4272,
+   "sha256": "ec66374b97308345a2e902c59c4f069c718e0d84235a4313631c5e5d551f8d45"
+  },
+  "char_431_ashlok": {
+   "name": "灰毫",
+   "bytes": 5834,
+   "sha256": "61a704727a41bf2981219b914ca46a555c19bd275527af2615f42f7bc54c573b"
+  },
+  "char_422_aurora": {
+   "name": "极光",
+   "bytes": 3660,
+   "sha256": "af709aaa54d78cea524415501c0452b68bc77fae01d06da4cd10394ef6c9bace"
+  },
+  "char_464_cement": {
+   "name": "洋灰",
+   "bytes": 5226,
+   "sha256": "5213e077341ac6f0641b7e181f879e1f36129a6eb90b505a7235a6691a28d936"
+  },
+  "char_4148_philae": {
+   "name": "菲莱",
+   "bytes": 5678,
+   "sha256": "a0af5317f02c18f8352260fc30a53ce116e70a86853a7c556b9ad1efed88f6d2"
+  },
+  "char_145_prove": {
+   "name": "普罗旺斯",
+   "bytes": 4354,
+   "sha256": "198fab90f805956fc7a0639f2eb718e4805c86bef7c74af10caf44d95eb5360c"
+  },
+  "char_4225_tanya": {
+   "name": "裂响",
+   "bytes": 4992,
+   "sha256": "5cb5536070327b7781be4f721560dcf24a61806f27b9c2f4835ec343c948a031"
+  },
+  "char_4006_melnte": {
+   "name": "玫拉",
+   "bytes": 5202,
+   "sha256": "7770373b4a8be670ea5cc19c20e0ac37d87789fe82bb1ffa47b1c75693a1937b"
+  },
+  "char_158_milu": {
+   "name": "守林人",
+   "bytes": 5438,
+   "sha256": "ea9269862eb89dfc1483ffdf608af2f3315b5b887bc9618fb53f520be2879549"
+  },
+  "char_4169_caledo": {
+   "name": "镜匠",
+   "bytes": 6044,
+   "sha256": "6e1b81b4cfc47042d3ba2149215f009cb3265d9ce2ac11c8beca11841a5710a1"
+  },
+  "char_4014_lunacu": {
+   "name": "子月",
+   "bytes": 4104,
+   "sha256": "ad6de92d98c82999257210907e7681a0a0cd1b80504b7476b7024223292d1ef7"
+  },
+  "char_218_cuttle": {
+   "name": "安哲拉",
+   "bytes": 3980,
+   "sha256": "75a51a509f863d08cdbaba79a878112e246bd78dedb1817616edacad65128050"
+  },
+  "char_363_toddi": {
+   "name": "熔泉",
+   "bytes": 5640,
+   "sha256": "fedfe8956204991e4a9ef950b0ff917e47a63225df825698913c18512b49532e"
+  },
+  "char_4043_erato": {
+   "name": "埃拉托",
+   "bytes": 5448,
+   "sha256": "c8a61ef37ac71897083db9826161819bad20a8d998353fb26fd83db5a085a42f"
+  },
+  "char_1027_greyy2": {
+   "name": "承曦格雷伊",
+   "bytes": 4520,
+   "sha256": "6f402b90052d5a16890617ad635141666a4689e295f6605f8a2df007e336a94e"
+  },
+  "char_4221_ju": {
+   "name": "矩",
+   "bytes": 4234,
+   "sha256": "8d7a8824cba47ea68311415bba672bc5717596b8c030b8a664381e3621db8c21"
+  },
+  "char_4104_coldst": {
+   "name": "冰酿",
+   "bytes": 6640,
+   "sha256": "5eee4f14bc173b31de6fd193baad3f58ad0d86f8d1d12858fec7cc1206d85b77"
+  },
+  "char_4211_snhunt": {
+   "name": "雪猎",
+   "bytes": 5226,
+   "sha256": "1a96aafad15f0cb87bce6dbcb590b52c66c01bf1105cb9b5ddc1da6f067ef57b"
+  },
+  "char_4015_spuria": {
+   "name": "空构",
+   "bytes": 5432,
+   "sha256": "53608ca305ce8089c7aa843cf33263e4402e1c0f7526a2cea0683103ef29e51b"
+  },
+  "char_4177_brigid": {
+   "name": "水灯心",
+   "bytes": 4298,
+   "sha256": "7e5eee534945c8524cd148db4511c713e0c95c6bf855022e1835799accea2bf5"
+  },
+  "char_383_snsant": {
+   "name": "雪雉",
+   "bytes": 4184,
+   "sha256": "a1e608a03fe29624de38bdc2866a6fab764eddb5faf73f8fa6998f9d420a405e"
+  },
+  "char_173_slchan": {
+   "name": "崖心",
+   "bytes": 5334,
+   "sha256": "77a988e21ad5008af02decbabb732d8424c5ecd74de3abef7ddfcb1ee2742e21"
+  },
+  "char_254_vodfox": {
+   "name": "巫恋",
+   "bytes": 4866,
+   "sha256": "ba7223f84d4f8ea0106493e180864a19be3beef8b34961ee0c56cb9d6a727ea4"
+  },
+  "char_174_slbell": {
+   "name": "初雪",
+   "bytes": 4666,
+   "sha256": "1bfae118f3bef0a99977964c901137f2de14214c52fd2973d4dc82c1ebdb008e"
+  },
+  "char_4105_almond": {
+   "name": "杏仁",
+   "bytes": 5460,
+   "sha256": "cbeb34622681794bcf470cb50537454e57458df9e8f9d1271ab5ee7fccbe19c0"
+  },
+  "char_4079_haini": {
+   "name": "海霓",
+   "bytes": 4732,
+   "sha256": "5e5875fa21b16187545f870b2909bc89ff77374270babad251e72cfd644838bf"
+  },
+  "char_393_toledo": {
+   "name": "德·托莱多",
+   "bytes": 5870,
+   "sha256": "ad25b7fc67cbe9dd41264e1b2435eddd36fadcfc6832ad15bbab8ac097ddb494"
+  },
+  "char_195_glassb": {
+   "name": "真理",
+   "bytes": 3834,
+   "sha256": "93f018d87c162bf5ff5735fd7366786ad12dc308622d314dd37dbedbd78fb896"
+  },
+  "char_326_glacus": {
+   "name": "格劳克斯",
+   "bytes": 4390,
+   "sha256": "ee007d49aca701e2e3d069291b7d46cc6de2f7a5ad792d1829346a86d43dbee9"
+  },
+  "char_4032_provs": {
+   "name": "但书",
+   "bytes": 4912,
+   "sha256": "9cc68b61bce2bed16e6e3924175f1425ef3e86ea1f247a6db8bf331952646704"
+  },
+  "char_433_windft": {
+   "name": "掠风",
+   "bytes": 3032,
+   "sha256": "2abaad4c2f91c434dfaf19fe60d9ab545a540e6dc9232b5e2b7e069c370bd7d5"
+  },
+  "char_4122_grabds": {
+   "name": "小满",
+   "bytes": 6360,
+   "sha256": "9010ca490838c57c96d441dce26eb99c346749ee75f4aeeda58f11fc767babd1"
+  },
+  "char_4162_cathy": {
+   "name": "凯瑟琳",
+   "bytes": 5902,
+   "sha256": "af27e92c459d98e3c6348a9aa34aa7e89cad6e87de2bcc0d50ef06d8210b9f80"
+  },
+  "char_4178_alanna": {
+   "name": "阿兰娜",
+   "bytes": 4226,
+   "sha256": "262773254e75ca81132d8774e19b010eb522a6b86982044517fc9d80f52276e2"
+  },
+  "char_101_sora": {
+   "name": "空",
+   "bytes": 6368,
+   "sha256": "636fca14c68953d6f27b24ec7d3ba5cd8901930ba97b01c7b03586e8ee69ae22"
+  },
+  "char_343_tknogi": {
+   "name": "月禾",
+   "bytes": 5428,
+   "sha256": "68e27ef60015c949f80865541f9ab2e19bfb9a5d8c7a5658412aa6ec1642d8bd"
+  },
+  "char_4045_heidi": {
+   "name": "海蒂",
+   "bytes": 5502,
+   "sha256": "3dbdd9b33138cce36675e323a684abfbc3393e4137ca852bbc5f369f539809d0"
+  },
+  "char_4184_dolris": {
+   "name": "三角初华",
+   "bytes": 3800,
+   "sha256": "1162d5cdb64b41a140a17100c887e87a4cba282f9d10c3fc401f06481a6c7810"
+  },
+  "char_492_quercu": {
+   "name": "夏栎",
+   "bytes": 4838,
+   "sha256": "64e52d8f08f4b310f08069e4d68a5d977b9d2bd99c70e18c173ce4c25f57edd2"
+  },
+  "char_4172_xingzh": {
+   "name": "行箸",
+   "bytes": 6536,
+   "sha256": "43732bdb63da645d5bd7b5299d13970b91eb2e94b8cc4c61bf3baac744f11381"
+  },
+  "char_4019_ncdeer": {
+   "name": "九色鹿",
+   "bytes": 6904,
+   "sha256": "b3b3e46d6cf5ec39e6a18d4bc24e099c587173439eb107787bc7fc29eb890494"
+  },
+  "char_4102_threye": {
+   "name": "凛视",
+   "bytes": 4554,
+   "sha256": "2cc3ac2be5f9b92eec245cb4e674d80b5bd0c7e1f8c8f445b592c027d78943d9"
+  },
+  "char_1022_flwr2": {
+   "name": "撷英调香师",
+   "bytes": 3574,
+   "sha256": "ea1abd9c1b61a62420606051c803c30e192a9ac69355a212509a3e6a97a87bd7"
+  },
+  "char_487_bobb": {
+   "name": "波卜",
+   "bytes": 4198,
+   "sha256": "eb3b903186d9a5fc209c1a9b9317d072201ce2640464eee4490d185dcef6acdd"
+  },
+  "char_4219_yukari": {
+   "name": "岳羽由加莉",
+   "bytes": 4104,
+   "sha256": "d613bf3868cc9533128981ddce00c63437c84e9c12e895a66ae8717726d9461a"
+  },
+  "char_4223_botany": {
+   "name": "伯塔尼",
+   "bytes": 5254,
+   "sha256": "0a2b17600a3112f36b0e479dad9d8b4aa12922f13b53b62523369c6cdde66d49"
+  },
+  "char_4234_pedro": {
+   "name": "佩德洛",
+   "bytes": 5428,
+   "sha256": "9b5c1540f32b347dae1418cc72bee913ec85bb1ec9b21a12715db220dd409e39"
+  },
+  "char_215_mantic": {
+   "name": "狮蝎",
+   "bytes": 6002,
+   "sha256": "28d4ca7a12944cce82859d7fad65be84da8018d26342eb648bb2e61dd41e6428"
+  },
+  "char_4244_tocka": {
+   "name": "冻河",
+   "bytes": 4924,
+   "sha256": "8cd84372fe9000cd0b11978f2b138e07aebff98582494ab4642df7576ab21425"
+  },
+  "char_478_kirara": {
+   "name": "绮良",
+   "bytes": 5374,
+   "sha256": "a8bb2b6cb6de2bea6b9861733df50a31522c0eb24e2c23c35466634d2c221652"
+  },
+  "char_4186_tmoris": {
+   "name": "八幡海铃",
+   "bytes": 3876,
+   "sha256": "e6af734dccfa42f958a78e9da38d59392a713efe58d7f8bf31a4ac1f2670d4f6"
+  },
+  "char_241_panda": {
+   "name": "食铁兽",
+   "bytes": 4484,
+   "sha256": "0d32b63da976b82d8dc3d0b66c631c9528f7f6e129adb06b0c1d3696398d837d"
+  },
+  "char_4036_forcer": {
+   "name": "见行者",
+   "bytes": 5392,
+   "sha256": "741a947ae7b60f810e72beea174aecf0f2a1d3d823e0a26b32d9477e5d4dbf5a"
+  },
+  "char_451_robin": {
+   "name": "罗宾",
+   "bytes": 4092,
+   "sha256": "51da34177665320e81729bf5157c08fad6145e3b0c1e7291505cc3208deb81b3"
+  },
+  "char_458_rfrost": {
+   "name": "霜华",
+   "bytes": 3526,
+   "sha256": "8aed58ed65adf45a90fe9931767c4b46d5116519ff1d5231e9168ed8b8b61aad"
+  },
+  "char_369_bena": {
+   "name": "贝娜",
+   "bytes": 5418,
+   "sha256": "fb6a8ec4e436a40b04f19903a4ef352eed6686aaa6c57a7c46ff26e5d4db5da6"
+  },
+  "char_4016_kazema": {
+   "name": "风丸",
+   "bytes": 5862,
+   "sha256": "f27efa09f308c9341c98d26b667ddf4de10000955678122c69190be10a85aed5"
+  },
+  "char_4171_wulfen": {
+   "name": "钼铅",
+   "bytes": 4706,
+   "sha256": "802c907b1399dde0328b39e646de775fcfdc9374f2d0a4d6e6afd4cdfa285389"
+  },
+  "char_4124_iana": {
+   "name": "双月",
+   "bytes": 4096,
+   "sha256": "00dd22b3e046141bfd76d5669282451696ce27e0c10cd6567e9b400ce4de1170"
+  },
+  "char_4183_mortis": {
+   "name": "若叶睦",
+   "bytes": 3542,
+   "sha256": "388e0fce4a6737bd53f8c127a276d89a0d0e1a5105c05cc6e7069913406f128e"
+  },
+  "char_4232_hbound": {
+   "name": "旅骨",
+   "bytes": 5010,
+   "sha256": "059f374aeecd435b438ceb9eb41448c4e43262bd1434a535155b1715a40e5180"
+  },
+  "char_4151_tinman": {
+   "name": "锡人",
+   "bytes": 4732,
+   "sha256": "421141fca450f2a2de08d92af8b0387fe83dd9d2f5e9cebf2d07c5ba3f7f793f"
+  },
+  "char_103_angel": {
+   "name": "能天使",
+   "bytes": 6050,
+   "sha256": "9dccbd14fb52902ce3a89b73991bc70e0c6ff1ccc319321c5dc0b6ba59c3d2fd"
+  },
+  "char_332_archet": {
+   "name": "空弦",
+   "bytes": 4472,
+   "sha256": "90b0032170578317f07fde51e1aaee62a272eb5a0d18c0690214668643efacf1"
+  },
+  "char_4191_tippi": {
+   "name": "蒂比",
+   "bytes": 5514,
+   "sha256": "225b42aec088836ec7bb34665277333d6b6a50499101462cd4dd5edcbf877004"
+  },
+  "char_456_ash": {
+   "name": "灰烬",
+   "bytes": 4030,
+   "sha256": "5836d475aec7eeca357fe19f994b1ee184beb1b86ed012d2b221637ed80001e8"
+  },
+  "char_611_acnipe": {
+   "name": "Stormeye",
+   "bytes": 4128,
+   "sha256": "165c00d61d09384f19f77b3b6a1941589c162f0791544f947cf747257b8706db"
+  },
+  "char_340_shwaz": {
+   "name": "黑",
+   "bytes": 4742,
+   "sha256": "bb94af517fbc03fc6775c9227609ad8b9d8f17d9db6051d8c6b7dd041422f635"
+  },
+  "char_4055_bgsnow": {
+   "name": "鸿雪",
+   "bytes": 5072,
+   "sha256": "483111f835eab3cf4afe9836e5509d6033ed0c1af73d71e4c2600b1fbf5cbbe6"
+  },
+  "char_430_fartth": {
+   "name": "远牙",
+   "bytes": 6050,
+   "sha256": "c774a8fb5e1b1107fdfc057c805619c65641598faa6f52d4314ec27689e61fde"
+  },
+  "char_1048_orchd2": {
+   "name": "焰狐龙梓兰",
+   "bytes": 5780,
+   "sha256": "1135e61560af61e2fd40c8889aa1273fe07cc37e3c48091e8db3702729cdf75b"
+  },
+  "char_300_phenxi": {
+   "name": "菲亚梅塔",
+   "bytes": 5884,
+   "sha256": "6571130172f98d9b051d4b2504f799150a3058810b1e8cdc7847b767742239e2"
+  },
+  "char_113_cqbw": {
+   "name": "W",
+   "bytes": 5426,
+   "sha256": "50de3602b00f7c46860d9d63315945b5351300711573bacc6dd14f00b7ffe32c"
+  },
+  "char_4193_lemuen": {
+   "name": "蕾缪安",
+   "bytes": 4976,
+   "sha256": "664f3bf9d02bfdafd9efa474ad1376b355be960d070c11f59165cebd1971ad78"
+  },
+  "char_197_poca": {
+   "name": "早露",
+   "bytes": 4286,
+   "sha256": "b2f43535ceb19f789da7be256ad379cfe7b23dc1a7f3738b73f2f6b558586feb"
+  },
+  "char_2012_typhon": {
+   "name": "提丰",
+   "bytes": 5500,
+   "sha256": "6b583dd1cc3ad012a5fb0e38eef2c59c69fc6c14b2c4e2b482839fc3402f09c9"
+  },
+  "char_222_bpipe": {
+   "name": "风笛",
+   "bytes": 4548,
+   "sha256": "81eb8665fd16be5584087e468c50e54a29a07e8775df7b67574faedbd5088991"
+  },
+  "char_391_rosmon": {
+   "name": "迷迭香",
+   "bytes": 6036,
+   "sha256": "50710d9f68d57824d1f2b183fcd18c36daabb5cfebb60748bde47b705845ed1e"
+  },
+  "char_362_saga": {
+   "name": "嵯峨",
+   "bytes": 4130,
+   "sha256": "0ef45cc08111f1dae0159d9f7dc704ca81460750d7ac01b4b287d6716dcc539c"
+  },
+  "char_112_siege": {
+   "name": "推进之王",
+   "bytes": 5390,
+   "sha256": "ad30f1c1e98be85df7796d114a482a84607b7344abb5ab2ca8098d875067e5b7"
+  },
+  "char_1035_wisdel": {
+   "name": "维什戴尔",
+   "bytes": 6452,
+   "sha256": "f76798ff3df415ca609c68f2589662dbde65279036379b565a366bb008cd1ba6"
+  },
+  "char_4117_ray": {
+   "name": "莱伊",
+   "bytes": 4444,
+   "sha256": "9d38f2e12607261a9c2a9092ee57f0824be2500c1452ee9004b052d5d72ea06a"
+  },
+  "char_4138_narant": {
+   "name": "娜仁图亚",
+   "bytes": 5402,
+   "sha256": "f4a6a58de00461bd43f1047f055c5b47921bd750c90d3a3205c07e619dcec859"
+  },
+  "char_1013_chen2": {
+   "name": "假日威龙陈",
+   "bytes": 6034,
+   "sha256": "6d370fcaa3d1a940798e3cb9b57d8b49ab4be3e9a61908910784ca875b6750ea"
+  },
+  "char_479_sleach": {
+   "name": "琴柳",
+   "bytes": 4392,
+   "sha256": "69e1b50a1424b5659631db6979fee4f4998d9115cfe1e11bddaa7ffe4c5146ed"
+  },
+  "char_608_acpion": {
+   "name": "郁金香",
+   "bytes": 4668,
+   "sha256": "8d37a7534ebc95418c0cf3aebb6a92ab7c4da6525b07d0f1e01ec430749090a1"
+  },
+  "char_4026_vulpis": {
+   "name": "忍冬",
+   "bytes": 5528,
+   "sha256": "7ff834b146566cefb820772e89a656fe0cfe335cff30a8c6d36d317f0d38ed7d"
+  },
+  "char_420_flamtl": {
+   "name": "焰尾",
+   "bytes": 5994,
+   "sha256": "ddadc3dd47555e28d601fff0cf0806bde8044ceefe4bba1efc3c95d55b50be7d"
+  },
+  "char_427_vigil": {
+   "name": "伺夜",
+   "bytes": 5590,
+   "sha256": "7da2db7e6f90d82155fed03fb1ee71922a562232b698f9fa319c91432fc2eac5"
+  },
+  "char_249_mlyss": {
+   "name": "缪尔赛思",
+   "bytes": 4884,
+   "sha256": "5d1c1fa079062f4d2b70d1595b147acc6ab679826e3947d0b504bb6945bcd0cd"
+  },
+  "char_4228_closur": {
+   "name": "可露希尔",
+   "bytes": 4358,
+   "sha256": "32d41da81a66ff9355f8094af95ecc8e6891f3ed17e3a967fe56e71cc7341e56"
+  },
+  "char_1045_svash2": {
+   "name": "凛御银灰",
+   "bytes": 4636,
+   "sha256": "032a56df5e436cc878c2030f8c5dd5fd2464ad9d6fefe1dc0b4b46b1fe02868e"
+  },
+  "char_4229_aphris": {
+   "name": "谬因",
+   "bytes": 4830,
+   "sha256": "00889ac62c151e058dd5e26cd72f6e69ed78ebd6379bcb232a2acb113b7c5ab2"
+  },
+  "char_4087_ines": {
+   "name": "伊内丝",
+   "bytes": 4486,
+   "sha256": "f02684e88c4d168ee9968a4c95eb44649fe340cd3f54dea9aff8c81f659a7500"
+  },
+  "char_180_amgoat": {
+   "name": "艾雅法拉",
+   "bytes": 5290,
+   "sha256": "18070bf647c4c07a08f0785f61e01b87e3e4221c1b54b689edecd149f0563892"
+  },
+  "char_2013_cerber": {
+   "name": "刻俄柏",
+   "bytes": 4564,
+   "sha256": "a1d157e99a327ff0427068df31cb22f393c9f8d64e4b3397f1b3510fccd9e798"
+  },
+  "char_213_mostma": {
+   "name": "莫斯提马",
+   "bytes": 5534,
+   "sha256": "dbca80a7bd5623549630926453e873a515c65ce11b48d70a2d866bab36918f92"
+  },
+  "char_4027_heyak": {
+   "name": "霍尔海雅",
+   "bytes": 3994,
+   "sha256": "cf98a9ec4fc1532d5a73049a3aea9b5c6fc3cff510fa235adfb424e0f6e60181"
+  },
+  "char_134_ifrit": {
+   "name": "伊芙利特",
+   "bytes": 5878,
+   "sha256": "6174480550ce3a69f36dd4d16595739f795060f9e9c65adcffb984b428d65ccc"
+  },
+  "char_2015_dusk": {
+   "name": "夕",
+   "bytes": 5674,
+   "sha256": "62dc8357b95ded0951fe2acede1d19c2730d469cae3f110ca99a2733caa05213"
+  },
+  "char_4080_lin": {
+   "name": "林",
+   "bytes": 5144,
+   "sha256": "bed4bc0b50eefe11b171cef7da47363544bfe31caa22832234ede76bc1ed7237"
+  },
+  "char_612_accast": {
+   "name": "Pith",
+   "bytes": 5240,
+   "sha256": "218af9d7daabb114200221f1f0b00705f2a84d6757afcbec9e81d69a3dbacfdb"
+  },
+  "char_472_pasngr": {
+   "name": "异客",
+   "bytes": 4184,
+   "sha256": "1baf6e343653747499afafb7beec79229d2caa4294952adc894ee5e209f0aff7"
+  },
+  "char_426_billro": {
+   "name": "卡涅利安",
+   "bytes": 6120,
+   "sha256": "951b085427c547a2aeef7f051b9e08a9bab67abf5caa97daf144cd549b95ff42"
+  },
+  "char_4141_marcil": {
+   "name": "玛露西尔",
+   "bytes": 4484,
+   "sha256": "58714cb5ef29986e18dfe41f576a6583d36358cefa1c48ba9c7da8c353f4bb70"
+  },
+  "char_1046_sbell2": {
+   "name": "圣聆初雪",
+   "bytes": 5640,
+   "sha256": "fcba4c449b414f9377f860c7673e9405ce83b8645839435ad5f9200f6b4bc599"
+  },
+  "char_377_gdglow": {
+   "name": "澄闪",
+   "bytes": 5502,
+   "sha256": "2b871b33ea6b3a3989f9d45bf56d372a94ee2e81d202a87c2a64ef57d9e5e047"
+  },
+  "char_4046_ebnhlz": {
+   "name": "黑键",
+   "bytes": 5748,
+   "sha256": "fc6ab09c100dd1e3767c5f859538d55ab9f52ff3f92f9744b462bb91d8cbaf52"
+  },
+  "char_4133_logos": {
+   "name": "逻各斯",
+   "bytes": 5614,
+   "sha256": "9b2968823ea2df00c0e67a1d5585f011c7ed17935bc5a49b9bcc89715f6cccee"
+  },
+  "char_1038_whitw2": {
+   "name": "荒芜拉普兰德",
+   "bytes": 5112,
+   "sha256": "1b4500d9f14d115b4157d5068754ac97e0f2334ed31f1385edba5d6689d942e6"
+  },
+  "char_4226_veen": {
+   "name": "维伊",
+   "bytes": 5530,
+   "sha256": "f0013c9bf6c36ef0914efd78c69dcf6c9ba8b7caf497fa6e7f79035288f21d9d"
+  },
+  "char_4146_nymph": {
+   "name": "妮芙",
+   "bytes": 5272,
+   "sha256": "ddff7a4f47b793ff1624ab43e001893258ec0e10408f88b58cc330b19addd632"
+  },
+  "char_1040_blaze2": {
+   "name": "烛煌",
+   "bytes": 6776,
+   "sha256": "10a0edc79ebe64deb844e9b99d03d0b92d89e248831a43d524ded479447405e0"
+  },
+  "char_4204_mantra": {
+   "name": "真言",
+   "bytes": 4668,
+   "sha256": "f270e730654f5e51419bd6cfd3d57f6d389190144ef0d5d436f21e181e4e95da"
+  },
+  "char_358_lisa": {
+   "name": "铃兰",
+   "bytes": 5574,
+   "sha256": "04c8added627a74d1b0db61c6dcbede826a1809848ffb6ba03b0233d4b9a8e29"
+  },
+  "char_206_gnosis": {
+   "name": "灵知",
+   "bytes": 3978,
+   "sha256": "0faa3bc1b086569c4a93f92efb9e383041b3e25cd6c1942fab88d13a9d4f0d78"
+  },
+  "char_291_aglina": {
+   "name": "安洁莉娜",
+   "bytes": 4752,
+   "sha256": "66b2e60389beada79596138e8c4d75aed0acb150b3195ae97ef9047754949383"
+  },
+  "char_450_necras": {
+   "name": "死芒",
+   "bytes": 5418,
+   "sha256": "5d3ed3ba5114e9ec7edeb910d6a3b2845545eb94974b6a520f2d4b74fb48fc38"
+  },
+  "char_614_acsupo": {
+   "name": "Raidian",
+   "bytes": 4676,
+   "sha256": "062a86c26764dcea4696ba53c71577845615e4b5a1793ffc75d6be93332c82d0"
+  },
+  "char_248_mgllan": {
+   "name": "麦哲伦",
+   "bytes": 4450,
+   "sha256": "21154f46f5b481678aca208501c75be92bae810312da019a2dfd14a7415af926"
+  },
+  "char_1047_halo2": {
+   "name": "溯光星源",
+   "bytes": 6694,
+   "sha256": "d488786d436c89e3127e41a59303fbc305a34ce0087ec2a113328ffce07df8a6"
+  },
+  "char_4195_radian": {
+   "name": "电弧",
+   "bytes": 4296,
+   "sha256": "62127700bc414e3c333a988b073a7f2561a23a6fc5b627f3d4522e837d237a24"
+  },
+  "char_1012_skadi2": {
+   "name": "浊心斯卡蒂",
+   "bytes": 5526,
+   "sha256": "3de14a4da7b8aa2547b087381cd62696725b4bf3613b73f7d57a2ea032a56368"
+  },
+  "char_4134_cetsyr": {
+   "name": "魔王",
+   "bytes": 6042,
+   "sha256": "5ffd46991953b1ce879c584413b42c840d4a1d1dab95793616d9e8c0359ba15e"
+  },
+  "char_1031_slent2": {
+   "name": "淬羽赫默",
+   "bytes": 5624,
+   "sha256": "8040adac79ae845c12c124564e34d8c3a7130f293b960306fac410709f3e0197"
+  },
+  "char_2023_ling": {
+   "name": "令",
+   "bytes": 6276,
+   "sha256": "40735299884ce2ee1e71c23640a43c8fea4f27aaa878ac3d9b4623c53768a116"
+  },
+  "char_4202_haruka": {
+   "name": "遥",
+   "bytes": 5344,
+   "sha256": "96a313235d580870bd2df2ef21f33e7521629277fc912562ffed5191538b9500"
+  },
+  "char_4072_ironmn": {
+   "name": "白铁",
+   "bytes": 5536,
+   "sha256": "de36bf6f9cbf6fad191520b4703fb9fa557a6f4eb884bc5958695558e12adfe0"
+  },
+  "char_245_cello": {
+   "name": "塑心",
+   "bytes": 4466,
+   "sha256": "29290dc5e710149544b514f01c287142be00a662080013e648cd1f02a5a1db77"
+  },
+  "char_4212_nasti": {
+   "name": "娜斯提",
+   "bytes": 4832,
+   "sha256": "10a7123ef1cc406f51f7637bbef1277fd0618e5c376906bce8d10c63614b2960"
+  },
+  "char_250_phatom": {
+   "name": "傀影",
+   "bytes": 3518,
+   "sha256": "1bca124bad5309c05ce72f8f1138a3b7673ca8a5f66df8709f363a9a7afe6926"
+  },
+  "char_1028_texas2": {
+   "name": "缄默德克萨斯",
+   "bytes": 4238,
+   "sha256": "32e444a1f9d148834cec55909bd56de6f8910f23ecb5011daed764e02b53b2e7"
+  },
+  "char_1042_phatm2": {
+   "name": "酒神",
+   "bytes": 5018,
+   "sha256": "95d94f7c8589d0f8471f871195634d3cf3eab7c2b5d415fc89675e852116a0de"
+  },
+  "char_1029_yato2": {
+   "name": "麒麟R夜刀",
+   "bytes": 4524,
+   "sha256": "7342b98892f28c59b566d061cb89925625b7a87e70171dcb12a9b0a27efaefe3"
+  },
+  "char_1502_crosly": {
+   "name": "弑君者",
+   "bytes": 4216,
+   "sha256": "2fdb048b3e4bc54fcd6a1a896d54c57ecb44a537529be627ad36b544c0757a26"
+  },
+  "char_322_lmlee": {
+   "name": "老鲤",
+   "bytes": 5192,
+   "sha256": "957ce99869fdaaf12e2c7e43f121b2d342e78c9c59f94d4ab0dbc540e61e7a25"
+  },
+  "char_1033_swire2": {
+   "name": "琳琅诗怀雅",
+   "bytes": 3922,
+   "sha256": "52d73d99c2b4bfbdbf6aba68fedd6e5c05171019eadd74645e5abad75d4669ad"
+  },
+  "char_474_glady": {
+   "name": "歌蕾蒂娅",
+   "bytes": 4758,
+   "sha256": "ee58f4af87f3be85a6be587eebdb07d86d6ecd8ad4417e39619fee469981f93b"
+  },
+  "char_400_weedy": {
+   "name": "温蒂",
+   "bytes": 5450,
+   "sha256": "002b7105f5ea4792239cb86c82a10f5f740144dc7d773b29f6d1d2aedbd3b204"
+  },
+  "char_225_haak": {
+   "name": "阿",
+   "bytes": 4866,
+   "sha256": "b80af4012e0bfec42e91ad2e0affc932a6842f139a03d0fc63da2ee6babfdb95"
+  },
+  "char_1041_angel2": {
+   "name": "新约能天使",
+   "bytes": 6876,
+   "sha256": "1a495e3bcffdaf0129446679db55779606582f954b6ae7b4869f16047dc6a644"
+  },
+  "char_615_acspec": {
+   "name": "Misery",
+   "bytes": 4280,
+   "sha256": "512947bb0edf5caddfafd26afbe10ca7eb8ac756245660682e0be2cdb28406cf"
+  },
+  "char_437_mizuki": {
+   "name": "水月",
+   "bytes": 5454,
+   "sha256": "30c1482df02e9b68059a9518ba8c86673ba87449330ca85023c576048c4bb360"
+  },
+  "char_1023_ghost2": {
+   "name": "归溟幽灵鲨",
+   "bytes": 4464,
+   "sha256": "5a48942a186d064eb629050a85a884a21db409aab89b3836bf678544651f51d5"
+  },
+  "char_4246_dminon": {
+   "name": "国度",
+   "bytes": 3798,
+   "sha256": "8c567473f76d967e0af8fb37357fb58d3d82804aa2c5cfbac557156a6545bf05"
+  },
+  "char_4132_ascln": {
+   "name": "阿斯卡纶",
+   "bytes": 5070,
+   "sha256": "7b1dfa8331209016b7115ee30451d25f1fa8af87a600e352a639ee9b9ba12a24"
+  },
+  "char_4217_makoto": {
+   "name": "结城理",
+   "bytes": 4556,
+   "sha256": "d9dfffa2dc4847cfee3fffb98336a5f0399a3e7c38bafc76a73bcca4840fdb7c"
+  },
+  "char_4048_doroth": {
+   "name": "多萝西",
+   "bytes": 6264,
+   "sha256": "2c16800b46a36ee2824b0508ab9bc941bc4baa28a886d1e407176dd4903ca07e"
+  },
+  "char_4123_ela": {
+   "name": "艾拉",
+   "bytes": 4248,
+   "sha256": "7739ac8e227684889011631eeafd3d073eb306a4fc2377af2b8361526f3141fe"
+  },
+  "char_2027_wang": {
+   "name": "望",
+   "bytes": 6114,
+   "sha256": "1aed4687a7174fe9a9f1c408be2bd577c41f54b4521ea6cf97699ae30fcd10ab"
+  },
+  "char_613_acmedc": {
+   "name": "Touch",
+   "bytes": 4688,
+   "sha256": "16a45caba2137cfc57967239ef66451c0a5b3821c4b92c83d0b44e0438a9a1b2"
+  },
+  "char_147_shining": {
+   "name": "闪灵",
+   "bytes": 4804,
+   "sha256": "509bb686885c3c2f1754be472af3525f647bd417324c7b44ac24b98b67083281"
+  },
+  "char_1039_thorn2": {
+   "name": "引星棘刺",
+   "bytes": 4396,
+   "sha256": "507ae152d2020757e579d3f75e6ecf314165593b7bce641e0a4724bb0df4ad2f"
+  },
+  "char_179_cgbird": {
+   "name": "夜莺",
+   "bytes": 4836,
+   "sha256": "d36a2d73bb8fc012680a14744f285e2014e518423d0a09e2dcbaa34a639e8f32"
+  },
+  "char_4042_lumen": {
+   "name": "流明",
+   "bytes": 5382,
+   "sha256": "d1131fdf88a257b7b7b3b6f46fbf5e29cce9a5e15c6a7ad17cef79d3415234de"
+  },
+  "char_1016_agoat2": {
+   "name": "纯烬艾雅法拉",
+   "bytes": 5768,
+   "sha256": "cd9dfb066e93abe63b095acc9e3ce9e96cf6e4aaaba6f1ffa5f7fd832763d790"
+  },
+  "char_003_kalts": {
+   "name": "凯尔希",
+   "bytes": 5200,
+   "sha256": "0bf1dc09e6b1c8fd48fea2ced9c954407ab143c4a8090b0c57e227385da30428"
+  },
+  "char_1015_aglna2": {
+   "name": "予愿安洁莉娜",
+   "bytes": 5608,
+   "sha256": "8edb426ef9d509c7203ffc7c11f3124642875d970ddac4096bdbe0a5f282615d"
+  },
+  "char_1020_reed2": {
+   "name": "焰影苇草",
+   "bytes": 5750,
+   "sha256": "f48c7fa1ee2e2c4dea72ba76a4457e25c5df7487db2fe1d07a56d796fe805c4d"
+  },
+  "char_4056_titi": {
+   "name": "缇缇",
+   "bytes": 3650,
+   "sha256": "5d6ae363b033102b13468069b82319db823546332d1534f1791283ac9e78a49b"
+  },
+  "char_136_hsguma": {
+   "name": "星熊",
+   "bytes": 3770,
+   "sha256": "729aa2c65f2b72b1e5ccd88564b1ca0019bbb73960dd8be3865a8bdcc7db6177"
+  },
+  "char_4179_monstr": {
+   "name": "Mon3tr",
+   "bytes": 5156,
+   "sha256": "77e5d2f481c5be0f586f5c85ba2f87f86cbf6f84bfb4a6f6c2ea7368f6e1b23f"
+  },
+  "char_1052_kalts2": {
+   "name": "凯尔希·思衡托",
+   "bytes": 5252,
+   "sha256": "a9e1c3fd084dbdb75c46577b0ad6982869edf89443ff42dd51abcace0af32264"
+  },
+  "char_202_demkni": {
+   "name": "塞雷娅",
+   "bytes": 5030,
+   "sha256": "a4db4e890f82b97fb18cf1203ca665bdbf2ce5270ac5bb4f3d6ad2ed3587aa0e"
+  },
+  "char_423_blemsh": {
+   "name": "瑕光",
+   "bytes": 5034,
+   "sha256": "98d3be6a6a2733339f08b09c1661a753fe2c6ca32d7af68d9f3ad618b2af3616"
+  },
+  "char_610_acfend": {
+   "name": "Mechanist",
+   "bytes": 4652,
+   "sha256": "16b6ffd00cab1db78eab5f74498df035040ee9157129995550e591dcdfa8a06e"
+  },
+  "char_2014_nian": {
+   "name": "年",
+   "bytes": 5490,
+   "sha256": "0e972d4ffc4a894029b875c425b2dfd8b5d40befad3aea07f0b6dc494b4a08eb"
+  },
+  "char_311_mudrok": {
+   "name": "泥岩",
+   "bytes": 4286,
+   "sha256": "e83f75ccac91162561c67dfeb1795f8ace63745ba4325349307d69fafb703b64"
+  },
+  "char_416_zumama": {
+   "name": "森蚺",
+   "bytes": 4962,
+   "sha256": "fb9875c78cbaf583cfda707cd017d73ef24336529d8f1ed5134bdd7466d36fb6"
+  },
+  "char_2025_shu": {
+   "name": "黍",
+   "bytes": 5870,
+   "sha256": "8f38d1f2c9863d227bedf3eec1c6ae9840aecea69b6e1619133bb1643e90f0e4"
+  },
+  "char_4039_horn": {
+   "name": "号角",
+   "bytes": 4376,
+   "sha256": "69414e9ba25b6f3f1a75579aed3fa7f7f5058756f829653fbfeccca725169560"
+  },
+  "char_4065_judge": {
+   "name": "斥罪",
+   "bytes": 5194,
+   "sha256": "fcffd78c664ea9bfed90197644eb7452ed5996c3920d80f2be673f15c33dccb4"
+  },
+  "char_4230_mcnist": {
+   "name": "机械师",
+   "bytes": 4516,
+   "sha256": "1b817cd8ab0600ff33a5f7798bc5762dd8fd92c067e761d9ae1147bed70f7672"
+  },
+  "char_4194_rmixer": {
+   "name": "信仰搅拌机",
+   "bytes": 5384,
+   "sha256": "11364129b57c5f02c01817c4b285872d849f0efa77b7d65c4c876e323f1a4ea1"
+  },
+  "char_1034_jesca2": {
+   "name": "涤火杰西卡",
+   "bytes": 5182,
+   "sha256": "a0c81ae09db37ad952df04fb5a462903a5a25763ff019b8f20ff583f5790bfeb"
+  },
+  "char_264_f12yin": {
+   "name": "山",
+   "bytes": 3914,
+   "sha256": "b6c861505343ad5ce4d65f8b0a2a3ce01e30d2f5c9d7134b210f34047feb8d85"
+  },
+  "char_2026_yu": {
+   "name": "余",
+   "bytes": 6042,
+   "sha256": "ba788176030c624d92773f1fe72f1a46f5fe4e637df3037038925b87a3022d96"
+  },
+  "char_4235_thumpy": {
+   "name": "珊比",
+   "bytes": 4646,
+   "sha256": "ac0437cfafadc2bf5cbbefae1e488d5b83f0427b8c3b1852a0a6e56b11956278"
+  },
+  "char_2024_chyue": {
+   "name": "重岳",
+   "bytes": 4952,
+   "sha256": "a83830ee64ebdf3f2dd7e7637fdfbccdb855de6f9684c85004eec1d0d64d3092"
+  },
+  "char_1044_hsgma2": {
+   "name": "斩业星熊",
+   "bytes": 5284,
+   "sha256": "c9e75a5c92d0c00e8165ff4c16f274fae9181c2941c57bc33a1334b59ef439f8"
+  },
+  "char_172_svrash": {
+   "name": "银灰",
+   "bytes": 4462,
+   "sha256": "f15f72c648cf9f8bbd4593c11ba11910707b3c3b068c5346052f82ea5678f586"
+  },
+  "char_4082_qiubai": {
+   "name": "仇白",
+   "bytes": 5842,
+   "sha256": "effd6e212614ea33d9664085adecaea417fbb00f6367a69333e6d6b7e0153dfd"
+  },
+  "char_4037_demetr": {
+   "name": "贝洛内",
+   "bytes": 6610,
+   "sha256": "57c0cba87248b92328ef80ad181208039ffe2e287a096ac7e0b48b4c1b03fd4d"
+  },
+  "char_4182_oblvns": {
+   "name": "丰川祥子",
+   "bytes": 4306,
+   "sha256": "dddece1387d0fb279d01479e7b7cbf95c6dfb88308074ba534638340f16cf24d"
+  },
+  "char_4145_ulpia": {
+   "name": "乌尔比安",
+   "bytes": 4280,
+   "sha256": "0548f38cc7c57d7b5781a0bb064ceb4fbc3aff2eae7f5acc3e3c72d3479ea21c"
+  },
+  "char_4088_hodrer": {
+   "name": "赫德雷",
+   "bytes": 4558,
+   "sha256": "29d32aeba1f2b0dde3925241960cb2c6f3317b1b9fd4788ffb21c178eb0475cb"
+  },
+  "char_293_thorns": {
+   "name": "棘刺",
+   "bytes": 4246,
+   "sha256": "6c1cf83982a4c15751f5c66df511bde306c120811f3e1585eab283ee83fc2c92"
+  },
+  "char_617_sharp2": {
+   "name": "领主·Sharp",
+   "bytes": 3738,
+   "sha256": "7400edef39a5fddbdfcd76b95e3bcf15be569edca364b705676586718be65fee"
+  },
+  "char_4058_pepe": {
+   "name": "佩佩",
+   "bytes": 4880,
+   "sha256": "1358896f17cca70f176cf647e8c6ef6e10f34b330d9abeb3ae886c2d52613f3b"
+  },
+  "char_4009_irene": {
+   "name": "艾丽妮",
+   "bytes": 3826,
+   "sha256": "6323ae2c122989ef4318fb92967680b8d3dbba4124109b8c1d62deceb17279fc"
+  },
+  "char_017_huang": {
+   "name": "煌",
+   "bytes": 4878,
+   "sha256": "08a2b2c0b74651be5155afc1a1f09df2ad11de6589b6a0c782cd38c64206485a"
+  },
+  "char_010_chen": {
+   "name": "陈",
+   "bytes": 5420,
+   "sha256": "15d359d93f88172a4f4dcb7f6f856058e26d526aaa9a03a6f4cb268946a74464"
+  },
+  "char_1051_headb2": {
+   "name": "怒潮凛冬",
+   "bytes": 4600,
+   "sha256": "191977f3a21e89780637e7a2a84e83861f9095d3932f8aff851bd276747f91fe"
+  },
+  "char_4116_blkkgt": {
+   "name": "锏",
+   "bytes": 5284,
+   "sha256": "ad6076ca349529199f539fe6ab115d5279857cccbc8cad66e8eeacd7eaee4c28"
+  },
+  "char_350_surtr": {
+   "name": "史尔特尔",
+   "bytes": 5298,
+   "sha256": "61c006f3aea49bf3b7457120c758658c3dbdb2aabf4407f680de99cee4677c42"
+  },
+  "char_1026_gvial2": {
+   "name": "百炼嘉维尔",
+   "bytes": 4290,
+   "sha256": "10b4a2b45a052c2acc360e1aff78e6ac8532bcaf75b1ad92c9c4f350718ec3b8"
+  },
+  "char_4098_vvana": {
+   "name": "薇薇安娜",
+   "bytes": 5788,
+   "sha256": "dfdca53d721ee60ffd2432f80c050199e8594517e680324e64ceb6ab45cf4c29"
+  },
+  "char_188_helage": {
+   "name": "赫拉格",
+   "bytes": 4602,
+   "sha256": "68c4933c6c00879b4e27dc0a51117b488e27c8c763b5989650b2750605a682da"
+  },
+  "char_1050_chen3": {
+   "name": "赤刃明霄陈",
+   "bytes": 6764,
+   "sha256": "1c4bf3c4455846cd2eac71f4ab4c388ae4ef54d0c5960ff4dd57010ffeec74a4"
+  },
+  "char_485_pallas": {
+   "name": "帕拉斯",
+   "bytes": 5076,
+   "sha256": "d0a05d9362f31e1484f4733c2b10d528606ffab5185228712af49bf5657bb123"
+  },
+  "char_4121_zuole": {
+   "name": "左乐",
+   "bytes": 4472,
+   "sha256": "77112a75a18335b94cfc038d51d1b5a580892ef209741cc8f87ce6588c904a03"
+  },
+  "char_4011_lessng": {
+   "name": "止颂",
+   "bytes": 5366,
+   "sha256": "56b24319949f63f88c3ef9aff0ef9c25b4a13e0297b44bc9e97d4c9d92f387eb"
+  },
+  "char_609_acguad": {
+   "name": "Sharp",
+   "bytes": 3688,
+   "sha256": "b557ab1e945231985b178b38f1c6c5d4303d874910930dba75a217a4ab45125e"
+  },
+  "char_1019_siege2": {
+   "name": "维娜·维多利亚",
+   "bytes": 5074,
+   "sha256": "a4c028a35323766c6d0425af39156578ef368eff871e2a018c16837a09322391"
+  },
+  "char_4064_mlynar": {
+   "name": "玛恩纳",
+   "bytes": 4438,
+   "sha256": "8f238e780d784e41b4ed080a4c7a53d2e1bbd3b76c232505837c003b4f115eec"
+  },
+  "char_1032_excu2": {
+   "name": "圣约送葬人",
+   "bytes": 5302,
+   "sha256": "e162dac3ca0c39355f177f7a5b8e0e39ee94c1c3022c14502d5b4b86415c5d01"
+  },
+  "char_4010_etlchi": {
+   "name": "隐德来希",
+   "bytes": 4524,
+   "sha256": "5255ac74a4e3f473273177b5a2627444dbfe2026910e4dabfd6a22c1a776bf5d"
+  },
+  "char_4247_oxi": {
+   "name": "塔露拉",
+   "bytes": 6428,
+   "sha256": "0d778ee44c59b51b380804d3ff91ccf69091a5aa5e9ace1bb00223a50bf19d84"
+  },
+  "char_1014_nearl2": {
+   "name": "耀骑士临光",
+   "bytes": 5112,
+   "sha256": "3ecb001f2d253d8047468937694db84f1dfcf0e1553d244685805d0f717c82c7"
+  },
+  "char_1043_leizi2": {
+   "name": "司霆惊蛰",
+   "bytes": 6594,
+   "sha256": "5d9bd4978f8cf85365d82fd6cc1d93dc594ebb341dc4a60225bd4d8cf230cd23"
+  },
+  "char_4231_clemnt": {
+   "name": "克莱门莎",
+   "bytes": 6032,
+   "sha256": "7e5e043516dcdc437d00fd2a5f16c15be4070e96dc35d02d55578d216b3d2783"
+  },
+  "char_282_catap": {
+   "name": "空爆",
+   "bytes": 4198,
+   "sha256": "e8c6c16caa353c6a726242fd2fce68525b11f1d446328d870db8a9c0236e3cf7"
+  },
+  "char_4214_cairn": {
+   "name": "响石",
+   "bytes": 5414,
+   "sha256": "2f344b081652b2131f4fbd84da50b5b40fe54f2a3aeaa96c9b17bd9f42019067"
+  },
+  "char_283_midn": {
+   "name": "月见夜",
+   "bytes": 5264,
+   "sha256": "4d72d62ec4e3c7156e15d923cd2636029b2b9bbaef56879fd8519259eaa96ae2"
+  },
+  "char_230_savage": {
+   "name": "暴行",
+   "bytes": 5442,
+   "sha256": "eaec34bce7d9d1a1f17a561446cb39d3885be4c1425aeaf8d15e41a881dc94b6"
+  },
+  "char_137_brownb": {
+   "name": "猎蜂",
+   "bytes": 5060,
+   "sha256": "1041833f5a5e732b83ae6c98d2ce0e7fd54929fda0033d1c12a38c7ebd7609aa"
+  },
+  "char_347_jaksel": {
+   "name": "杰克",
+   "bytes": 4936,
+   "sha256": "0f900e67f6f60c848f128b5b145836fdd67b9ee315ac8e7da3d5738d6e95c1a8"
+  },
+  "char_164_nightm": {
+   "name": "夜魔",
+   "bytes": 4840,
+   "sha256": "438ae2089d8613e6ba49c786959f52b5ef964ccaaa5933a1769c3b6784c217b1"
+  },
+  "char_220_grani": {
+   "name": "格拉尼",
+   "bytes": 5152,
+   "sha256": "f10405de6a224edf986b7884a46fef1efcc753e0597ae69e7fdabd065c4d7f7c"
+  },
+  "char_1001_amiya2": {
+   "name": "阿米娅",
+   "bytes": 4952,
+   "sha256": "920d1839f32538546e659800e7bf5b88dbc75f2f5961f8ce6927c913e0299df3"
+  },
+  "char_1037_amiya3": {
+   "name": "阿米娅",
+   "bytes": 4952,
+   "sha256": "920d1839f32538546e659800e7bf5b88dbc75f2f5961f8ce6927c913e0299df3"
+  },
+  "char_263_skadi": {
+   "name": "斯卡蒂",
+   "bytes": 4570,
+   "sha256": "9be51ce27b581d7ec2b41849af61e0f484e0340c387030d1dcc63a105fb1621f"
+  }
+ }
+}
