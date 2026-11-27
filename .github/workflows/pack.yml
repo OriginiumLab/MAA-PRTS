@@ -11,6 +11,9 @@
 #   4. 条数只增不减才放行（arknights 各字段 + 悖论条数）
 #   5. 产物推到独立的 pack-data 分支（不碰 main）
 #
+# 这个流程只负责 resources/ 下那三个 JSON；pack-data 上还有 themes/（主题包）
+# 和 resources/avatars/（头像），发布前会把上一版整条分支继承过来，不会冲掉。
+#
 # 为什么不推 main：main 挂着规则集（强制走 PR、需审批、只允许 squash），
 # GitHub Actions 的 bot 不在绕过名单里，直推必被拒。数据也不该和代码抢同一条分支。
 # pack-data 是纯数据分支，没有保护，客户端按固定分支名拼 raw / jsDelivr 地址。
@@ -33,7 +36,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: pack-sync
+  # 与 avatars.yml 共用一把锁：两个流程都写 pack-data，同时跑必然互相覆盖
+  group: pack-data-write
   cancel-in-progress: false
 
 env:
@@ -133,6 +137,11 @@ jobs:
 
       # 推数据分支。每次都是独立的单提交（orphan）+ 强推：
       # 数据不保留历史，仓库体积不会越滚越大；manifest 里的 ?v=指纹 保证客户端不吃旧缓存。
+      #
+      # 但「强推」只允许冲掉本工作流自己生成的东西。pack-data 上还住着
+      # themes/（主题包，人工发布）和 resources/avatars/（头像，avatars.yml 生成），
+      # 所以先把上一版整条分支继承下来，再盖这三个 JSON——否则每天两次同步
+      # 都会把用户已经下载过的主题包和头像冲成 404。
       - name: Publish to pack-data
         shell: bash
         env:
@@ -155,33 +164,53 @@ jobs:
           fi
 
           D="$RUNNER_TEMP/pack-data"
-          rm -rf "$D"; mkdir -p "$D/resources"
-          cp resources/arknights.json resources/paradox.json resources/pack-manifest.json "$D/resources/"
-
-          cat > "$D/README.md" <<'EOF'
-          # pack-data
-
-          MAA-PRTS 的游戏资源数据分支，由 `.github/workflows/pack.yml` 自动生成，
-          **请勿手工编辑**。
-
-          | 文件 | 说明 |
-          | --- | --- |
-          | `resources/arknights.json` | 干员 / 技能 / 模组 / 关卡 / 区域 / 活动 |
-          | `resources/paradox.json` | 悖论模拟清单与解锁条件 |
-          | `resources/pack-manifest.json` | 版本、指纹、sha256、下载地址（客户端读它） |
-
-          只保留最新一份快照，每次同步都是单提交强制覆盖，不累积历史。
-          原始出处：`yuanyan3060/ArknightsGameResource`，源提交记在 manifest 的 `source.commit`。
-          EOF
-
+          rm -rf "$D"; mkdir -p "$D"
           cd "$D"
+
           git init -q -b "$MAA_PRTS_PACK_BRANCH"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # 继承上一版（含 themes/ 与 resources/avatars/）。首次生成时 fetch 会失败，
+          # 此时就是一份干净的孤儿提交。
+          if git fetch -q --depth=1 origin "$MAA_PRTS_PACK_BRANCH" 2>/dev/null; then
+            git archive --format=tar FETCH_HEAD | tar -xf - -C .
+            echo "继承上一版：$(ls -d themes resources/avatars 2>/dev/null | tr '\n' ' ')"
+          fi
+
+          # 只覆盖本工作流负责的三个文件
+          mkdir -p resources
+          cp "$GITHUB_WORKSPACE/resources/arknights.json" \
+             "$GITHUB_WORKSPACE/resources/paradox.json" \
+             "$GITHUB_WORKSPACE/resources/pack-manifest.json" resources/
+
+          cat > README.md <<'EOF'
+          # pack-data
+
+          MAA-PRTS 的公共资源数据分支，**请勿手工编辑**。
+
+          | 目录 / 文件 | 说明 | 谁在维护 |
+          | --- | --- | --- |
+          | `resources/arknights.json` | 干员 / 技能 / 模组 / 关卡 / 区域 / 活动 | `pack.yml`（每天 12:00 / 16:00） |
+          | `resources/paradox.json` | 悖论模拟清单与解锁条件 | `pack.yml` |
+          | `resources/pack-manifest.json` | 版本、指纹、sha256、下载地址（客户端读它） | `pack.yml` |
+          | `resources/avatars/` | 干员头像 96px WebP + `avatar-index.json` | `avatars.yml`（每周一） |
+          | `themes/` | 第三方主题包 + `manifest.json` | 人工发布 |
+
+          每次同步都是单提交强制覆盖，不累积历史；但只会覆盖自己那一块，
+          其余目录原样继承。原始出处：`yuanyan3060/ArknightsGameResource`，
+          源提交记在 manifest 的 `source.commit`。
+          EOF
+
           git add -A
+          if git diff --cached --quiet; then
+            echo "内容没有变化，本次不推送"
+            exit 0
+          fi
+
           git commit -q -m "chore(pack): 同步游戏资源 ${VERSION}" \
                          -m "上游提交 ${SHA:0:12}" -m "指纹 ${FP}"
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push -q -f origin "HEAD:refs/heads/${MAA_PRTS_PACK_BRANCH}"
 
           echo "### 资源已更新到 ${VERSION}" >> "$GITHUB_STEP_SUMMARY"

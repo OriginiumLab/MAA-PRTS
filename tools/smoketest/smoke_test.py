@@ -8956,6 +8956,12 @@ def main():
                 lambda: check_daily_longgrass(tmp))
         r.check('B82 程序图标（美术源 → 七档 ICO / 美术源缺失退回占位图）',
                 lambda: check_app_icon(tmp))
+        r.check('B83 换完 exe 刷图标缓存（不刷重启也不管用 / 装失败不白刷）',
+                lambda: check_icon_cache_refresh(tmp))
+        r.check('B84 干员头像按需下载（缓存优先 / 索引决定走镜像 / 兜底 / 负缓存）',
+                lambda: check_avatar_cache(tmp))
+        r.check('B85 账号头像走看板娘（无 secretary 退回首字 / 资源统一 pack-data）',
+                lambda: check_account_avatar(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9696,6 +9702,213 @@ def check_app_icon(tmp):
     doc = open(os.path.join(REPO, 'docs', 'resources.md'),
                encoding='utf-8').read()
     assert 'assets/icon.png' in doc, 'docs/resources.md 没写美术源在哪'
+
+
+def check_icon_cache_refresh(tmp):
+    """B83 换完 exe 主动刷图标缓存（不刷的话重启电脑也不管用）
+
+    2026-11-28 现场：v2.8.7 装好了，桌面快捷方式还是 v2.8.6 的旧图。
+    `install.ps1` 换完文件直接 Start-Process，全程没通知 shell；本机
+    `iconcache_*.db` 时间戳停在 11-25 02:49，而系统 11-26 12:23 重启过
+    —— 说明**重启不会重建缓存**，只能主动发 SHCNE_ASSOCCHANGED。
+
+    这里不去碰真实缓存目录（也碰不到）：on_start 打桩到临时 update 目录，
+    验的是「替换成功补一次、没装成功不白刷」，最后真调一次函数本身。
+    """
+    from core import appupdate
+
+    keep = (appupdate.update_dir, appupdate._current, appupdate._state,
+            appupdate._save_state, appupdate.refresh_icon_cache)
+    try:
+        upd = os.path.join(tmp, 'update-icon')
+        os.makedirs(upd, exist_ok=True)
+        appupdate.update_dir = lambda: upd
+        appupdate._current = lambda: '2.8.8'
+        appupdate._state = lambda: {}
+        appupdate._save_state = lambda st: None
+
+        hits = []
+        appupdate.refresh_icon_cache = lambda: (hits.append(1), True)[1]
+
+        # 1) 替换成功（pending.to == 当前版本）→ 必须补一次刷新
+        appupdate._write_json(os.path.join(upd, 'pending.json'),
+                              {'from': '2.8.7', 'to': '2.8.8', 'tag': 'v2.8.8'})
+        st = appupdate.on_start()
+        assert st.get('ok') is True, st
+        assert len(hits) == 1, '替换成功后没刷新图标缓存，用户会一直看旧图标'
+
+        # 2) 没装成功（还是旧版本号）→ 不许白刷，还要带出失败原因
+        appupdate._current = lambda: '2.8.7'
+        appupdate._write_json(os.path.join(upd, 'pending.json'),
+                              {'from': '2.8.7', 'to': '2.8.8', 'tag': 'v2.8.8'})
+        with io.open(os.path.join(upd, 'install-error.txt'), 'w', encoding='utf-8') as f:
+            f.write('替换 _internal 失败 rc=9')
+        st = appupdate.on_start()
+        assert st.get('ok') is False and 'rc=9' in (st.get('error') or ''), st
+        assert len(hits) == 1, '没装成功却去刷了图标缓存'
+
+        # 3) 函数本身：Windows 上必须能调通（无副作用，只让 shell 重扫）
+        appupdate.refresh_icon_cache = keep[4]
+        if os.name == 'nt':
+            assert appupdate.refresh_icon_cache() is True, 'SHChangeNotify 调用失败'
+    finally:
+        (appupdate.update_dir, appupdate._current, appupdate._state,
+         appupdate._save_state, appupdate.refresh_icon_cache) = keep
+
+
+def check_avatar_cache(tmp):
+    """B84 干员头像按需下载：安装包不带图，用到哪张下哪张
+
+    2026-11-28 加。三条线被钉死：
+
+    - **安装包不许变大**：350+ 张 96px WebP 约 2MB，只能落 ``config/cache/avatar``；
+    - **索引决定要不要走镜像**：数据分支没这张时还去挨个试三个镜像，等于每张
+      白等 5 秒（实测首张 5.7s → 0.7s）；
+    - **拿不到就 404，前端回落首字母**：负缓存 5 分钟，别让列表页每次刷新
+      都把失败请求重打一遍。
+
+    全程打桩，不联网、不写真 config（``settings.CONFIG_DIR`` 指到临时目录）。
+    """
+    from core import avatarcache, settings
+
+    keep = (settings.CONFIG_DIR, avatarcache.avatar_index,
+            avatarcache._from_mirrors, avatarcache._from_prts,
+            dict(avatarcache._neg))
+    try:
+        settings.CONFIG_DIR = os.path.join(tmp, 'cfg-avatar')
+        avatarcache._neg.clear()
+
+        webp = b'RIFF' + b'\x00' * 4 + b'WEBP' + b'\x00' * 2000
+        png = b'\x89PNG\r\n\x1a\n' + b'\x00' * 2000
+
+        # 1) id 只认 [A-Za-z0-9_]，路径穿越必须当场拒绝
+        for bad in ['../x', 'a/b', '', 'x' * 80, 'char_002.amiya', '..']:
+            try:
+                avatarcache.fetch(bad)
+                raise AssertionError('id 没校验住：%r' % (bad,))
+            except KeyError:
+                pass
+
+        # 2) 索引里有 → 走镜像；落盘后第二次不再下载
+        avatarcache.avatar_index = lambda: {'char_002_amiya': {}}
+        calls = []
+        avatarcache._from_mirrors = lambda cid: (calls.append('m'), (webp, 'webp'))[1]
+        avatarcache._from_prts = lambda cid: (calls.append('p'), None)[1]
+        data, ext = avatarcache.fetch('char_002_amiya')
+        assert ext == 'webp' and data[:4] == b'RIFF', (ext, data[:8])
+        assert calls == ['m'], calls
+        assert os.path.isfile(os.path.join(avatarcache.cache_dir(),
+                                           'char_002_amiya.webp'))
+        avatarcache.fetch('char_002_amiya')
+        assert calls == ['m'], '命中缓存后又去下载了：%r' % (calls,)
+
+        # 3) 索引里没有 → 不许空跑三个镜像，直接兜底 PRTS
+        calls.clear()
+        avatarcache.avatar_index = lambda: {}
+        avatarcache._from_prts = lambda cid: (calls.append('p'), (png, 'png'))[1]
+        data, ext = avatarcache.fetch('char_1001_amiya2')
+        assert ext == 'png' and calls == ['p'], (ext, calls)
+
+        # 4) 两条路都挂 → KeyError；5 分钟内不再重试（负缓存）
+        calls.clear()
+        avatarcache.avatar_index = lambda: {'char_999_none': {}}
+        avatarcache._from_mirrors = lambda cid: (calls.append('m'), None)[1]
+        avatarcache._from_prts = lambda cid: (calls.append('p'), None)[1]
+        for _ in range(2):
+            try:
+                avatarcache.fetch('char_999_none')
+                raise AssertionError('拿不到却返回了')
+            except KeyError:
+                pass
+        assert calls == ['m', 'p'], '负缓存没生效，重复打了网络：%r' % (calls,)
+
+        # 5) 不是图片的字节（CDN 回一段 HTML / 空包）一律不认
+        assert avatarcache._ok(b'<html>404 not found</html>' * 100) == ''
+        assert avatarcache._ok(b'') == ''
+        assert avatarcache._ok(b'RIFF' + b'\x00' * 4000) == '', '假的 RIFF 也认了'
+
+        # 6) 占用统计与清理
+        st = avatarcache.stats()
+        assert st['files'] >= 2, st
+        avatarcache.clear()
+        assert avatarcache.stats()['files'] == 0, '清缓存没清干净'
+    finally:
+        (settings.CONFIG_DIR, avatarcache.avatar_index,
+         avatarcache._from_mirrors, avatarcache._from_prts) = keep[:4]
+        avatarcache._neg.clear()
+        avatarcache._neg.update(keep[4])
+
+
+def check_account_avatar(tmp):
+    """B85 账号头像改成看板娘 + 资源统一到 pack-data
+
+    2026-11-28 加。用户提的三件事，各钉一条：
+
+    - **账号头像不许再是首字**：森空岛同步时已经存了 ``account.secretary``
+      （charId / 皮肤），列表页要拿它去 ``/api/avatar/<charId>`` 取图；
+      没有 secretary 的账号（MAA 导入的、终末地的）才退回昵称首字；
+    - **头像资源只走 pack-data**：之前单独开了 ``avatar-data`` 分支，是因为
+      pack.yml 强推会冲掉它。现在 pack.yml 改成「继承整条分支再覆盖自己那
+      三个文件」，头像和主题都住 pack-data，客户端不该再认别的分支名；
+    - **图片要有尺寸约束**：``object-fit: cover`` 缺失时 96px 的正方形会按
+      原尺寸撑破 36px 的圆角块。
+    """
+    import json
+    from core import accounts, packrepo, settings
+
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(repo, 'frontend', 'style.css'), encoding='utf-8').read()
+
+    # 1) 后端把 secretary 带出来（列表页直接用，不用再请求详情）
+    keep_dir = settings.ACCOUNTS_DIR
+    d = os.path.join(tmp, 'cfg-acct')
+    os.makedirs(d, exist_ok=True)
+    snap = {
+        'account': {'uid': '1', 'nickName': '测试#1234', 'channelName': '官服',
+                    'secretary': {'charId': 'char_4080_lin', 'name': '林',
+                                  'skinId': 'char_4080_lin@summer#19'}},
+        'stats': {'charCount': 100, 'charTotal': 440},
+    }
+    with open(os.path.join(d, '测试#1234 官服.json'), 'w', encoding='utf-8') as f:
+        json.dump(snap, f, ensure_ascii=False)
+    # 没有 secretary 的（MAA 导入的账号长这样）
+    with open(os.path.join(d, '纯导入.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '2', 'nickName': '纯导入'},
+                   'stats': {}}, f, ensure_ascii=False)
+    try:
+        settings.ACCOUNTS_DIR = d
+        rows = {r['file']: r for r in accounts.list_accounts()}
+        assert rows['测试#1234 官服.json']['secretary']['charId'] == 'char_4080_lin', \
+            rows['测试#1234 官服.json'].get('secretary')
+        assert rows['纯导入.json']['secretary'] == {}, rows['纯导入.json']['secretary']
+    finally:
+        settings.ACCOUNTS_DIR = keep_dir
+
+    # 2) 前端三处头像都走同一个 helper，不许再各自拼首字
+    assert 'function acctAvatar(' in js, 'app.js 没有 acctAvatar'
+    assert "a.secretary && a.secretary.charId" in js, '没读 secretary'
+    assert "`<img src=\"/api/avatar/${encodeURIComponent(id)}\" alt=\"\" loading=\"lazy\" onerror=\"this.remove()\">`" in js, \
+        'acctAvatar 里的 img 不完整（要么缺 lazy，要么缺 onerror 自删）'
+    assert js.count('${acctAvatar(a, cls)}') == 2, \
+        '侧栏/设置页应该都用 acctAvatar，实际 %d 处' % js.count('${acctAvatar(a, cls)}')
+    assert "hBox.classList.toggle('has-pic', !!hSec)" in js, '顶部头像没用看板娘'
+    assert "classList.remove('ef', 'has-pic')" in js, '删光账号后头像状态没清干净'
+
+    # 3) 样式：图片铺满 + 裁边
+    assert '.avatar img, .hero-avatar img' in css, 'style.css 缺头像图片规则'
+    assert 'object-fit: cover' in css, '头像没写 object-fit，会拉伸变形'
+    assert '.avatar {' in css and 'position: relative' in css, '.avatar 缺定位（img 绝对定位要靠它）'
+
+    # 4) 头像资源统一走 pack-data（不再有 AVATAR_BRANCH 这条岔路）
+    assert not hasattr(packrepo, 'AVATAR_BRANCH'), 'packrepo 还留着 AVATAR_BRANCH'
+    assert not hasattr(packrepo, 'avatar_urls'), 'packrepo 还留着 avatar_urls'
+    for u in packrepo.mirror_urls('resources/avatars/char_002_amiya.webp'):
+        assert '/' + packrepo.PACK_BRANCH + '/' in u or '@' + packrepo.PACK_BRANCH + '/' in u, \
+            '头像地址没指向 pack-data：%s' % u
+    from core import avatarcache
+    src = open(avatarcache.__file__, encoding='utf-8').read()
+    assert 'avatar_urls' not in src, 'avatarcache 还在用 avatar_urls'
 
 
 if __name__ == '__main__':

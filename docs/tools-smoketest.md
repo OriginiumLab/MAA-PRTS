@@ -885,3 +885,36 @@ MAA 牛杂里那两个常驻商店接进助手。和前三项（活动里的小�
   点名这两个工具，前端第一条引导是「帮我使用推荐设置一键长草刷左侧所有账号」。
 
 全程打桩（假 candidates / 假 `_load_cfg` / 假 `run_core`），不连模拟器、不读真配置。
+
+### B83 换完 exe 刷图标缓存（2026-11-28）
+
+v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直接起新进程，全程
+没通知 shell；本机 `iconcache_*.db` 时间戳停在 11-25 02:49，而系统 11-26 12:23
+重启过——**重启电脑不会重建图标缓存**，只能主动发 `SHCNE_ASSOCCHANGED`。
+
+- **时机**：`on_start()` 里「`pending.to` 等于当前版本」那条分支，`refresh_icon_cache()`
+  紧跟着清理备份执行；版本对不上（没装成功）一律不刷，免得白扫一遍缓存目录。
+- **实现**：`ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)`，
+  失败只吞掉异常返回 False，不许连累启动结算。
+- **不在安装脚本里做**：`install.ps1` 无窗口跑，`Add-Type` 编译 C# 还可能被安全
+  软件拦；放进新版本启动路径更稳，而且这时候 exe 已经是新的，扫出来就是新图。
+
+打桩 `update_dir/_current/_state/_save_state`，只在临时目录写 `pending.json`，
+不碰真实 `update/` 和 `config/appupdate.json`；最后真调一次函数验 API 可用。
+
+### B84 干员头像按需下载（2026-11-28）
+
+抽卡界面要显示干员头像，但 469 张 96px WebP 约 2MB，不能进安装包。做法是
+「用到哪张下哪张」，B84 钉的是这条链路的边界：
+
+- **id 校验**：只认 `[A-Za-z0-9_]`，`../x`、`a/b`、超长串一律当场 `KeyError`，
+  别指望后面的路径拼接兜住穿越；
+- **缓存优先**：命中 `config/cache/avatar/<id>.webp` 就直接返回，不再发请求；
+- **索引决定要不要走镜像**：`pack-data` 上 `resources/avatars/avatar-index.json` 里有这张才去试
+  三个镜像，没有就直接走 PRTS 兜底——否则每张都要白等三次 404/超时（实测首张 5.7s→0.7s）；
+- **兜底**：镜像全挂时从 `torappu.prts.wiki/assets/char_avatar/<id>.png` 取原图，
+  服务端转 96px WebP；转不了就存原 PNG，宁可大一点也别丢功能；
+- **负缓存**：两条路都挂记 5 分钟，第二次请求不再打网络（列表页一屏十几张，不能每刷一次重打一遍）；
+- **不认假图**：空包、HTML 错误页、只有 `RIFF` 头的假 WebP 都不许落盘。
+
+打桩 `settings.CONFIG_DIR`、`avatar_index`、`_from_mirrors`、`_from_prts`，不联网、不写真缓存。

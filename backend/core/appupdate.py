@@ -1108,6 +1108,25 @@ def _request_quit(reason='安装更新'):
     threading.Thread(target=run, daemon=True, name='install-quit').start()
 
 
+# ---------------------------------------------------------------- 图标缓存
+def refresh_icon_cache() -> bool:
+    """通知资源管理器重建图标缓存（SHCNE_ASSOCCHANGED）
+
+    换了 exe 以后 shell 不会自己失效：2026-11-28 实测 iconcache_*.db 的
+    时间戳停在 11-25 02:49，中间 11-26 12:23 重启过电脑也没重建，桌面快捷
+    方式一直显示旧图标，只能手动清缓存。安装脚本收尾时顾不上（无窗口、
+    Add-Type 还可能被拦），所以新版本第一次启动、确认替换成功时补一次。
+    """
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------- 启动自检
 def on_start() -> dict:
     """启动时结算上一次安装：替换成功就把 pending 清掉，失败则留痕
@@ -1147,6 +1166,9 @@ def on_start() -> dict:
             os.remove(os.path.join(update_dir(), 'install-ok.txt'))
         except Exception:
             pass
+        # exe 换了新图，但 shell 手里还是旧缓存：重启电脑也不重建，
+        # 不主动发一次通知，用户的桌面图标会一直停在上一版的图案上
+        refresh_icon_cache()
     return info
 
 

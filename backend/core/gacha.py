@@ -578,6 +578,7 @@ def _pools_of(rs: list) -> list:
             p['six'] += 1
             p['sixItems'].append({
                 'charName': r.get('charName') or '?',
+                'charId': r.get('charId') or '',
                 'at': at,
                 'pity': counters[pid],
                 'isNew': bool(r.get('isNew')),
@@ -596,9 +597,12 @@ def _slice_summary(rs: list) -> dict:
     """一个口径的完整汇总：卡片数字 + 星级分布 + 六星时间线 + 按卡池 + 最近记录"""
     t = _tally(rs)
     recent = []
-    for r in reversed(rs[-200:]):
+    # 2000 条上限：够翻 100 页（前端 20 条/页），又不至于让极老玩家的一次响应
+    # 塞进几 MB——官方接口本身也只留最近一段窗口
+    for r in reversed(rs[-2000:]):
         recent.append({
             'charName': r.get('charName') or '?',
+            'charId': r.get('charId') or '',
             'rarity': int(r.get('rarity') or 0),
             'kind': r.get('kind') or 'char',
             'poolName': r.get('poolName') or '未知寻访',

@@ -19,6 +19,8 @@ const S = {
   gachaOf: {},       // file → 已加载过的抽卡视图：切账号/切菜单回来直接复用，不再转圈
   lastOfGame: { arknights: '', endfield: '' },  // 每栏上次看的是哪个号（切回这一栏时还原）
   gachaTab: 'char',  // 抽卡统计里看哪个池：char 角色寻访 / weapon 武器申领（终末地专用）
+  gachaView: 'pool', // 抽卡统计当前视图：pool 按卡池 / rarity 星级分布 / records 抽卡记录
+  gachaPage: 1,      // 抽卡记录分页（一页 20 条），切号 / 切口径时回第 1 页
   sideGame: 'arknights',   // 左侧账号列表当前看哪一栏：arknights / endfield
   gachaByGame: false,      // 抽卡统计是因为选中终末地账号才打开的（切回方舟时自动回作业获取）
 };
@@ -325,6 +327,18 @@ function setSideGame(g) {
   renderAccounts();
 }
 
+/* 账号头像：有看板娘就用看板娘（snap.account.secretary.charId），没有就退回
+   昵称首字。img 绝对定位盖在首字上，onerror 自删——加载失败/接口 404 都会
+   自然露出首字，前端不用记状态。MAA 导入的账号没有 secretary，永远走首字。 */
+function acctAvatar(a, cls) {
+  const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
+  const id = (a.secretary && a.secretary.charId) || '';
+  const pic = id
+    ? `<img src="/api/avatar/${encodeURIComponent(id)}" alt="" loading="lazy" onerror="this.remove()">`
+    : '';
+  return `<span class="avatar ${cls || ''}${id ? ' has-pic' : ''}">${pic}${esc(ch)}</span>`;
+}
+
 function renderAccounts() {
   const box = $('#account-list');
   renderGameSwitch();
@@ -343,7 +357,6 @@ function renderAccounts() {
     const st = a.stats || {};
     const ef = a.game === 'endfield';                 // 终末地：没有练度数据，副标题换口径
     const cls = ef ? 'ef' : (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
-    const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
     // 渠道名单独上色：B 站服粉、官服亮白，其它渠道不动（同 style.css .acct-ch）
     const chName = a.channelName || '官服';
     const chCls = /bilibili/i.test(chName) ? ' bili' : (/^官服/.test(chName) ? ' official' : '');
@@ -354,7 +367,7 @@ function renderAccounts() {
     return `
       <button class="acct ${a.file === S.current ? 'active' : ''}" data-file="${esc(a.file)}"
         draggable="true" title="点击选中，拖动可排序${ef ? '（终末地账号，不含作业获取）' : ''}">
-        <span class="avatar ${cls}">${esc(ch)}</span>
+        ${acctAvatar(a, cls)}
         <span class="acct-main">
           <span class="acct-name">${esc(a.nickName)}${ef ? '<i class="acct-tag">终末地</i>' : ''}</span>
           <span class="acct-sub">${sub}</span>
@@ -504,6 +517,7 @@ async function selectAccount(file, silent) {
     // 只是别再闪一次「读取中」），没看过才交给 renderGacha 去读
     S.gacha = S.gachaOf[file] || null;
     S.gachaTab = 'char';                                    // 换号回角色池，别停在武器池
+    S.gachaPage = 1;                                        // 分页也回第 1 页
     renderHero();
     updateParadoxChip();
     applyModuleAvailability();        // 终末地账号隐藏作业获取，并自动切到抽卡统计
@@ -544,15 +558,22 @@ function renderHero() {
     $('#hero-name').textContent = '未选择账号';
     $('#hero-sub').textContent = '用森空岛 token 添加一个账号开始';
     $('#hero-avatar').textContent = '?';
-    $('#hero-avatar').classList.remove('ef');
+    $('#hero-avatar').classList.remove('ef', 'has-pic');
     $('#hero-stats').innerHTML = '';
     return;
   }
   const a = d.account || {}, st = d.stats || {};
   const name = a.nickName || '未知账号';
   $('#hero-name').textContent = name;
-  $('#hero-avatar').textContent = name.replace(/[#＃].*$/, '').slice(0, 1);
-  $('#hero-avatar').classList.toggle('ef', ef);   // 终末地：头像配色跟着换
+  // 顶部头像同账号卡：看板娘优先，取不到就留首字
+  const hInit = name.replace(/[#＃].*$/, '').slice(0, 1);
+  const hSec = (a.secretary && a.secretary.charId) || '';
+  const hBox = $('#hero-avatar');
+  hBox.innerHTML = (hSec
+    ? `<img src="/api/avatar/${encodeURIComponent(hSec)}" alt="" onerror="this.remove()">`
+    : '') + esc(hInit);
+  hBox.classList.toggle('has-pic', !!hSec);
+  hBox.classList.toggle('ef', ef);   // 终末地：头像配色跟着换
 
   if (ef) {
     // 终末地：没有干员图鉴，只展示身份 + 抽卡概况
@@ -2978,14 +2999,13 @@ function openSettings() {
   const acctRows = game => (S.accounts || []).filter(a => gameOf(a) === game).map(a => {
     const st = a.stats || {};
     const ef = (a.game || 'arknights') === 'endfield';
-    const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
     const cls = st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : '');
     const chName = a.channelName || '官服';
     const chCls = /bilibili/i.test(chName) ? ' bili' : (/^官服/.test(chName) ? ' official' : '');
     return `
     <div class="set-card set-acct" data-file="${esc(a.file)}">
       <div class="set-acct-top">
-        <span class="avatar ${cls}">${esc(ch)}</span>
+        ${acctAvatar(a, cls)}
         <div class="set-acct-id">
           <div class="set-acct-name">${esc(a.nickName)}
             <span class="acct-ch${chCls}">${esc(chName)}</span>
@@ -3102,16 +3122,15 @@ function openSettings() {
           <div class="set-pane active" data-pane="general">
             <div class="set-head">
               <h3>常规设置</h3>
-              <p>界面主题和开机启动。主题只影响外观：<b>深色 / 白色</b>随程序自带；
-                <b>卫戍协议</b>这类第三方主题要在这里点一次「下载」，从我们的资源分支
-                拉到本机（<code>config/themes</code>），不塞进程序包里——这样 exe 不会
-                越做越大，不想要的主题也能随时删掉。</p>
+              <p>界面主题和开机启动。深色和白色主题随程序自带；像<b>卫戍协议</b>这样的第三方主题
+                不打包进程序，第一次使用要先点一次「下载」，文件存到本机 <code>config/themes</code>
+                目录，不再需要时可以删掉。</p>
             </div>
 
             <div class="set-sub-title">界面主题</div>
             <div class="theme-grid" id="theme-grid">${themeCards()}</div>
-            <div class="set-tip" id="theme-tip">第三方主题第一次用要先下载（含配色、字体和桌宠动画），
-              下载完点「使用」立即切换；不适配的主题随时可以删掉。</div>
+            <div class="set-tip" id="theme-tip">第三方主题包含配色、字体和桌宠动画，首次使用需先下载，
+              下载完成后点「使用」即可切换。</div>
             <label class="check-row" style="margin-top:4px">
               <input type="checkbox" id="set-theme-pet" ${petEnabled() ? 'checked' : ''}>
               <span>显示主题桌宠（右下角小人；只有带桌宠的主题才有，挡视线就关掉）</span>
@@ -3124,9 +3143,8 @@ function openSettings() {
                 <span>开机时自动启动 MAA-PRTS</span>
               </label>
               <div class="onb-hint" id="set-launch-state">正在读状态…</div>
-              <div class="set-tip">默认<b>关闭</b>。只有你在这里勾上，才会往当前用户的
-                启动项里写一条（任务管理器 → 启动 里能看见「MAA-PRTS」，随时可关）；
-                取消勾选就立刻删掉。</div>
+              <div class="set-tip">默认<b>关闭</b>。勾选后会在当前用户的启动项里登记一条，
+                任务管理器的「启动」页可以看到「MAA-PRTS」，随时可以关闭；取消勾选会立即移除。</div>
             </div>
           </div>
 
@@ -3149,13 +3167,13 @@ function openSettings() {
           <div class="set-pane" data-pane="maa">
             <div class="set-head">
               <h3>MAA 路径</h3>
-              <p>每个账号可以绑自己的 MAA（包含 <code>MAA.exe</code> 的目录），没绑就用下面的默认目录。
-                第二行选一个 <b>配置文件</b>（MAA 里那份档案，如 <code>Default</code> / <code>moren</code>），
-                程序会从它的「开始唤醒」里读出<b>切号名</b>——官服是手机号（后 4 位
-                <code>5505</code>，或前 3 位 + 后 4 位 <code>157****3635</code>，
-                <em class="bili-word">bilibili服</em>是游戏内用户名），读出来还能手改。
-                <b>只读不写</b>：MAA 里那份档案我们一个字段都不动。填错的代价是 MAA
-                在账号列表里死找、4 分钟超时后整轮挂机作废。</p>
+              <p>每个账号可以绑定独立的 MAA 目录（包含 <code>MAA.exe</code> 的文件夹），
+                未绑定时使用下方的默认目录。在 <b>配置文件</b> 中选择 MAA 里的档案
+                （如 <code>Default</code> / <code>moren</code>），程序会从该档案的「开始唤醒」任务里
+                读取<b>切号名</b>：官服填手机号后 4 位（如 <code>5505</code>），或「前 3 位 + 后 4 位」
+                的脱敏形式（如 <code>157****3635</code>）；<em class="bili-word">bilibili服</em>
+                填游戏内用户名。读取后仍可手动修改。该档案只读，程序不会改动 MAA 中的任何字段。
+                切号名填错时，MAA 会在账号列表中反复查找，4 分钟超时后本轮任务作废。</p>
             </div>
             ${gameTabs()}
             <div class="gamepane active" data-gamepane="arknights">
@@ -3243,8 +3261,9 @@ function openSettings() {
           <div class="set-pane" data-pane="update">
             <div class="set-head">
               <h3>版本更新</h3>
-              <p>两条链各自独立：<b>游戏资源</b>是关卡 / 干员 / 活动数据（几百 KB，随程序发版更新），
-                <b>程序本体</b>是 MAA-PRTS 自己（国内源 / 海外源都能取，有新版本只提醒，装不装你说了算）。</p>
+              <p><b>游戏资源</b>和<b>程序本体</b>分开更新。游戏资源包含关卡、干员和活动数据，
+                体积只有几百 KB，随程序发版同步；程序本体是 MAA-PRTS，国内源和海外源都可以获取。
+                检测到新版本时只做提示，是否安装由你决定。</p>
             </div>
             <div class="set-card">
               <div class="set-ver">
@@ -3299,8 +3318,8 @@ function openSettings() {
 
             <div class="set-sub-title">网络代理</div>
             <div class="set-card">
-              <div class="set-tip" style="margin-bottom:10px">只在连不上 GitHub 时才需要。仅用于上面两条检查 / 下载链路；
-                端口留空 = 直连。改完点「保存并测试」，不可用也会保存（更新时会自动直连回退）。</div>
+              <div class="set-tip" style="margin-bottom:10px">仅在无法连接 GitHub 时需要。该代理只作用于上面两条检查与下载链路，
+                端口留空表示直连。填写后点「保存并测试」；代理不可用时配置仍会保存，更新时会自动退回直连。</div>
               <div class="path-row">
                 <input type="text" id="set-proxy-host" value="${esc(proxyHost)}" placeholder="http://127.0.0.1">
                 <input type="text" id="set-proxy-port" value="${esc(proxyPort)}" placeholder="7890"
@@ -5734,38 +5753,44 @@ function paintGacha(d) {
   paintGachaBody();
 }
 
-function paintGachaBody() {
-  const d = S.gacha;
-  const body = $('#gacha-body');
-  if (!d || !body) return;
-  const s = d.summary || {};
-  const ef = d.game === 'endfield';
-  const tab = ef ? S.gachaTab : 'char';
-  // 终末地每个 tab 只在 S.gacha.summary.char / .weapon 里取；方舟就是顶层那份
-  const cur = ef ? ((tab === 'weapon' ? s.weapon : s.char) || GACHA_BLANK) : s;
+/* 干员头像：后端按需下载（/api/avatar/<charId>），拿不到就让 img 自己消失，
+   ::before 里的首字母露出来——不在前端判断加载状态，也不阻塞首屏。 */
+function opAv(id, name, rar, cls) {
+  const ch = String(name || '?').replace(/[#＃].*$/, '').slice(0, 1) || '?';
+  const img = id
+    ? `<img src="/api/avatar/${encodeURIComponent(id)}" alt="" loading="lazy" onerror="this.remove()">`
+    : '';
+  return `<span class="op-av r${Number(rar) || 0}${cls ? ' ' + cls : ''}" data-ch="${esc(ch)}">${img}</span>`;
+}
 
-  const rarOrder = [6, 5, 4, 3, 2, 1];
-  const byRarity = cur.byRarity || GACHA_BLANK.byRarity;
-  const rarMax = Math.max(1, ...rarOrder.map(r => byRarity[String(r)] || 0));
-  const bars = rarOrder.map(r => {
-    const n = byRarity[String(r)] || 0;
-    const pct = (n / rarMax) * 100;
-    return `<div class="rar-bar">
-      <i class="r${r}">${r}★</i>
-      <div class="rar-track"><div class="rar-fill r${r}" style="width:${pct.toFixed(1)}%"></div></div>
-      <b>${n} 次<small>${cur.total ? ((n / cur.total) * 100).toFixed(1) : '0.0'}%</small></b>
-    </div>`;
-  }).join('');
+const GACHA_VIEWS = [['pool', '按卡池'], ['rarity', '星级分布'], ['records', '抽卡记录']];
+const GACHA_PER = 20;      // 记录分页：一页 20 条，一屏能扫完，又不至于翻到手软
 
-  // 一个池子一张卡片，池子下面直接挂这个池出的六星（抽卡记录 App 的常见排版）。
-  // 明日方舟和终末地同一套版式：方舟的「标准寻访」会合并好几期，一个池里可能
-  // 出 7、8 个六星，所以先列最近 8 个，再多就只给一句「还有 N 个」。
-  const poolCards = (cur.pools || []).slice(0, 12).map(p => {
+/* 页码：7 页以内全列，多了就 1 … 当前±1 … 末页 */
+function pageWindow(page, pages) {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const out = [1];
+  if (page > 3) out.push('…');
+  for (let i = Math.max(2, page - 1); i <= Math.min(pages - 1, page + 1); i++) out.push(i);
+  if (page < pages - 2) out.push('…');
+  out.push(pages);
+  return out;
+}
+
+/* 这一页里有没有首抽（用于页码上的小红点） */
+function pageHasNew(recs, p) {
+  const a = (p - 1) * GACHA_PER;
+  return recs.slice(a, a + GACHA_PER).some(r => r.isNew);
+}
+
+function gachaPoolSec(cur) {
+  const pools = cur.pools || [];
+  const poolCards = pools.slice(0, 12).map(p => {
     const items = p.sixItems || [];
     const shown = items.slice(0, 8);
     const rows = shown.map(x => `
       <div class="six-row">
-        <span class="six-star">★★★★★★</span>
+        ${opAv(x.charId, x.charName, 6)}
         <span class="six-name">${esc(x.charName)}${x.isNew ? '<i class="six-new">new</i>' : ''}</span>
         <span class="six-pity">第 <b>${x.pity}</b> 抽</span>
         <span class="six-at">${esc(x.at)}</span>
@@ -5782,21 +5807,136 @@ function paintGachaBody() {
       ${rows}${more}${none}
     </div>`;
   }).join('');
+  return `<div class="gacha-sec">
+    <div class="gacha-sec-head"><b>按卡池</b><span>按最近抽卡时间排序${pools.length > 12
+      ? `，只列最近 12 个（共 ${pools.length} 个）` : ''}</span></div>
+    <div class="pool-list">${poolCards || '<div class="pool-none">还没有抽卡记录</div>'}</div>
+  </div>`;
+}
 
-  const recRows = (cur.records || []).slice(0, 60).map(r => `
-    <tr>
+function gachaRaritySec(cur, ef) {
+  const total = cur.total || 0;
+  const byRarity = cur.byRarity || GACHA_BLANK.byRarity;
+  const order = [6, 5, 4, 3, 2, 1];
+  const max = Math.max(1, ...order.map(r => byRarity[String(r)] || 0));
+  const bars = order.map(r => {
+    const n = byRarity[String(r)] || 0;
+    return `<div class="rar-bar">
+      <i class="r${r}">${r}★</i>
+      <div class="rar-track"><div class="rar-fill r${r}" style="width:${((n / max) * 100).toFixed(1)}%"></div></div>
+      <b>${n} 次<small>${total ? ((n / total) * 100).toFixed(1) : '0.0'}%</small></b>
+    </div>`;
+  }).join('');
+
+  // 官方公示的单抽概率（明日方舟标准寻访）。终末地没有同口径的公开表，不摆对照
+  const THEO = { '6': 0.02, '5': 0.08, '4': 0.50, '3': 0.40 };
+  const vs = ef ? '' : [6, 5, 4, 3].map(r => {
+    const n = byRarity[String(r)] || 0;
+    const act = total ? n / total : 0;
+    const t = THEO[String(r)];
+    const dd = (act - t) * 100;
+    const cls = Math.abs(dd) < 0.05 ? 'flat' : (dd > 0 ? 'up' : 'down');
+    return `<div class="vs-row">
+      <i class="r${r}">${r}★</i>
+      <b>${(act * 100).toFixed(2)}%</b>
+      <span>公示 ${(t * 100).toFixed(0)}%</span>
+      <em class="${cls}">${dd >= 0 ? '+' : ''}${dd.toFixed(2)}</em>
+    </div>`;
+  }).join('');
+
+  // 六星出在「第几抽」：1-10 / 11-20 … / 60+
+  const six = cur.sixStars || [];
+  const buckets = [[1, 10, '1-10'], [11, 20, '11-20'], [21, 30, '21-30'],
+                   [31, 40, '31-40'], [41, 50, '41-50'], [51, 60, '51-60'], [61, 999, '60+']];
+  const hist = buckets.map(([a, b, label]) => ({
+    label,
+    n: six.filter(x => { const p = Number(x.pity) || 0; return p >= a && p <= b; }).length,
+  }));
+  const hmax = Math.max(1, ...hist.map(h => h.n));
+  const histHtml = hist.map(h => `<div class="hist-col" title="${h.label} 抽：${h.n} 个">
+      <b>${h.n || ''}</b>
+      <div class="hist-track"><div class="hist-bar" style="height:${Math.round((h.n / hmax) * 100)}%"></div></div>
+      <span>${h.label}</span>
+    </div>`).join('');
+
+  const wall = six.slice(0, 30).map(x => `
+    <div class="wall-item" title="${esc(x.charName)} · 第 ${x.pity} 抽">
+      ${opAv(x.charId, x.charName, 6)}
+      <span>${esc(x.charName)}</span>
+      ${x.isNew ? '<i class="six-new">new</i>' : ''}
+    </div>`).join('');
+
+  return `<div class="gacha-sec">
+    <div class="gacha-sec-head"><b>星级分布</b><span>${esc(cur.firstAt)} — ${esc(cur.lastAt)}</span></div>
+    <div class="rar-bars">${bars}</div>
+    <div class="rar-extra">
+      <div class="rar-panel">
+        <h4>实际出率 vs 公示<small>单抽概率，不含保底提升</small></h4>
+        ${vs || '<div class="panel-none">这个口径没有公开的概率表</div>'}
+      </div>
+      <div class="rar-panel">
+        <h4>六星出在第几抽<small>按出六星时的垫抽数分桶</small></h4>
+        <div class="hist">${histHtml}</div>
+      </div>
+    </div>
+    <div class="wall-wrap">
+      <h4>六星干员<small>${six.length > 30 ? `最近 30 个（共 ${six.length} 个）` : `共 ${six.length} 个`}</small></h4>
+      <div class="six-wall">${wall || '<div class="panel-none">还没出过六星</div>'}</div>
+    </div>
+  </div>`;
+}
+
+function gachaRecSec(cur, ef, tab) {
+  const recs = cur.records || [];
+  const pages = Math.max(1, Math.ceil(recs.length / GACHA_PER));
+  const page = Math.min(Math.max(1, Number(S.gachaPage) || 1), pages);
+  S.gachaPage = page;
+  const start = (page - 1) * GACHA_PER;
+  const slice = recs.slice(start, start + GACHA_PER);
+  const newTotal = recs.filter(r => r.isNew).length;
+  const newHere = slice.filter(r => r.isNew).length;
+
+  const rows = slice.map(r => `
+    <tr class="${r.isNew ? 'is-new' : ''}">
+      <td class="c-av">${opAv(r.charId, r.charName, r.rarity)}</td>
       <td class="c-name r${r.rarity}">${esc(r.charName)}${r.isNew ? ' <span class="six-new">new</span>' : ''}</td>
       <td class="c-dim">${'★'.repeat(Math.max(1, Math.min(6, r.rarity || 1)))}</td>
       <td class="c-dim">${esc(r.poolName)}</td>
       <td>${esc(r.at)}</td>
     </tr>`).join('');
 
-  const tabs = ef ? `<div class="gacha-tabs">
-      ${[['char', '角色寻访', (s.char || {}).total || 0],
-         ['weapon', '武器申领', (s.weapon || {}).total || 0]]
-        .map(([k, label, n]) => `<button class="gacha-tab${tab === k ? ' active' : ''}"
-          data-gtab="${k}" aria-selected="${tab === k}">${label}<i>${n}</i></button>`).join('')}
-    </div>` : '';
+  const nums = pageWindow(page, pages).map(p => (p === '…'
+    ? '<span class="pg-gap">…</span>'
+    : `<button class="pg-btn${p === page ? ' active' : ''}" data-page="${p}"
+         title="${pageHasNew(recs, p) ? '这一页有 new' : ''}">${p}${pageHasNew(recs, p) ? '<u></u>' : ''}</button>`)).join('');
+
+  return `<div class="gacha-sec">
+    <div class="gacha-sec-head"><b>抽卡记录</b><span>最新在前 · 共 ${recs.length} 条${newTotal
+      ? ` · <i class="six-new">${newTotal} new</i>` : ''}</span></div>
+    <table class="rec-table">
+      <thead><tr><th class="c-av"></th><th>${ef ? (tab === 'weapon' ? '武器' : '角色') : '干员'}</th>
+        <th>星级</th><th>卡池</th><th>时间</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5" class="c-dim">没有记录</td></tr>'}</tbody>
+    </table>
+    <div class="rec-pager">
+      <button class="pg-step" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+      <div class="pg-nums">${nums}</div>
+      <button class="pg-step" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>下一页</button>
+      <span class="pg-info">第 <b>${page}</b> / ${pages} 页${newHere ? ` · 本页 ${newHere} 个 new` : ''}</span>
+    </div>
+  </div>`;
+}
+
+function paintGachaBody() {
+  const d = S.gacha;
+  const body = $('#gacha-body');
+  if (!d || !body) return;
+  const s = d.summary || {};
+  const ef = d.game === 'endfield';
+  const tab = ef ? S.gachaTab : 'char';
+  // 终末地每个 tab 只在 summary.char / .weapon 里取；方舟就是顶层那份
+  const cur = ef ? ((tab === 'weapon' ? s.weapon : s.char) || GACHA_BLANK) : s;
+  const view = GACHA_VIEWS.some(v => v[0] === S.gachaView) ? S.gachaView : 'pool';
 
   const cards = `
     <div class="gacha-card"><b>${cur.total}</b><span>${ef
@@ -5807,39 +5947,29 @@ function paintGachaBody() {
     <div class="gacha-card"><b>${cur.avgPity || '—'}</b><span>平均出六星（抽）</span></div>
     <div class="gacha-card"><b>${cur.lastSixGap}</b><span>距上次六星（抽）</span></div>`;
 
-  const poolSec = (cur.pools || []).length ? `
-    <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>按卡池</b><span>按最近抽卡时间排序${(cur.pools.length > 12)
-        ? `，只列最近 12 个（共 ${cur.pools.length} 个）` : ''}</span></div>
-      <div class="pool-list">${poolCards}</div>
-    </div>` : '';
+  const views = `<div class="gacha-views" role="tablist">
+    ${GACHA_VIEWS.map(([k, label]) => {
+      const n = k === 'pool' ? (cur.pools || []).length : (k === 'records' ? (cur.total || 0) : '');
+      return `<button class="gacha-view${view === k ? ' active' : ''}" data-gview="${k}"
+        role="tab" aria-selected="${view === k}">${label}${n === '' ? '' : `<i>${n}</i>`}</button>`;
+    }).join('')}
+  </div>`;
 
-  const rarSec = `
-    <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>星级分布</b><span>${esc(cur.firstAt)} — ${esc(cur.lastAt)}</span></div>
-      <div class="rar-bars">${bars}</div>
-    </div>`;
+  if (d.game === 'endfield' && S.gachaTab !== 'weapon') S.gachaTab = 'char';
+  const scope = ef ? `<div class="gacha-scope">
+    ${[['char', '角色'], ['weapon', '武器']].map(([k, label]) =>
+      `<button class="gacha-scope-btn${tab === k ? ' active' : ''}" data-gtab="${k}">${label}</button>`).join('')}
+  </div>` : '';
 
-  const recSec = `
-    <div class="gacha-sec">
-      <div class="gacha-sec-head"><b>最近记录</b><span>最新在前${cur.total > 60 ? `，只列最近 60 条（共 ${cur.total} 条）` : ''}</span></div>
-      <table class="rec-table">
-        <thead><tr><th>${ef ? (tab === 'weapon' ? '武器' : '角色') : '干员'}</th><th>星级</th><th>卡池</th><th>时间</th></tr></thead>
-        <tbody>${recRows}</tbody>
-      </table>
-    </div>`;
-
-  // 两个游戏同一套版式：按卡池（六星挂在池下）→ 星级分布 → 最近记录
-  const secs = [poolSec, rarSec, recSec];
+  const content = view === 'pool' ? gachaPoolSec(cur)
+    : (view === 'rarity' ? gachaRaritySec(cur, ef) : gachaRecSec(cur, ef, tab));
 
   body.innerHTML = `
-    ${tabs}
     <div class="gacha-cards">${cards}</div>
+    <div class="gacha-bar">${views}${scope}</div>
     ${ef ? `<div class="gacha-window">官方记录接口只保留最近一段：角色 ${(s.char || {}).total || 0} 抽 · 武器 ${(s.weapon || {}).total || 0} 抽。
       更早的记录接口不返回，所以这里比实际总抽数少（不是统计漏了）。</div>` : ''}
-
-    ${secs.join('')}
-
+    ${content}
     <div class="gacha-note">
       ! 保底按卡池连续计数（同池每抽 +1，出六星清零）；抽卡记录只保留最近一段窗口，
       最早几次六星的「第几抽」只是窗口内的下限，不是真实垫抽数。
@@ -5847,12 +5977,26 @@ function paintGachaBody() {
     </div>
   `;
 
-  $$('.gacha-tab', body).forEach(b => b.addEventListener('click', () => {
+  const backTop = () => { const sc = $('.gacha-scroll'); if (sc) sc.scrollTop = 0; };
+  $$('[data-gview]', body).forEach(b => b.addEventListener('click', () => {
+    if (S.gachaView === b.dataset.gview) return;
+    S.gachaView = b.dataset.gview;
+    paintGachaBody();
+    backTop();
+  }));
+  $$('[data-gtab]', body).forEach(b => b.addEventListener('click', () => {
     if (S.gachaTab === b.dataset.gtab) return;
     S.gachaTab = b.dataset.gtab;
+    S.gachaPage = 1;
     paintGachaBody();
-    const sc = $('.gacha-scroll');
-    if (sc) sc.scrollTop = 0;
+    backTop();
+  }));
+  $$('[data-page]', body).forEach(b => b.addEventListener('click', () => {
+    const p = Number(b.dataset.page);
+    if (!p || p === S.gachaPage) return;
+    S.gachaPage = p;
+    paintGachaBody();
+    backTop();
   }));
 }
 

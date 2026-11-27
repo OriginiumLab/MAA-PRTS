@@ -1,0 +1,146 @@
+# 干员头像同步：从 PRTS Wiki 抓「头像_*.png」，压成 96px WebP 推到 pack-data
+#
+# 触发：每周一 14:00（北京时间，UTC 06:00）+ 手动。头像只在出新干员时变，
+# 没必要跟 pack.yml 一样一天两次——那样每次都要多传 2MB 的对象。
+#
+# 做的事（tools/sync_avatars.py）：
+#   1. 先把 pack-data 上现有的头像取到 build/avatars，增量模式下只补缺的
+#   2. 拉 PRTS Wiki 的 MediaWiki 列表（list=allimages&aiprefix=头像）
+#   3. 按干员表匹配、转 96px WebP q80，写 avatar-index.json（sha256 + 字节数）
+#   4. 推到 pack-data 的 resources/avatars/：继承整条分支，只替换这一块
+#
+# 为什么和 pack.yml 共用 concurrency：两个流程都强推同一条分支，
+# 同时跑必然有一个被覆盖掉（后推的赢，前一个白干）。
+name: Avatar Sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # 周一 14:00（UTC+8）
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '已有的头像也重新下载'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pack-data-write
+  cancel-in-progress: false
+
+env:
+  MAA_PRTS_PACK_BRANCH: pack-data
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  sync:
+    name: 同步干员头像
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Pillow
+        run: python -m pip install --quiet --disable-pip-version-check pillow
+
+      # 增量基础：pack-data 上已有的图先落到 build/avatars，sync_avatars 默认
+      # 跳过已存在的文件，所以常态下一次只下几张新干员的图。
+      # 同时用数据分支的干员表覆盖 main 里那份——main 只在发版时更新，
+      # 新干员还没进表的话会被当成「没匹配到头像」直接跳过。
+      - name: Seed previous avatars
+        shell: bash
+        run: |
+          mkdir -p build/avatars
+          if ! git fetch --depth=1 origin "$MAA_PRTS_PACK_BRANCH" 2>/dev/null; then
+            echo "pack-data 还不存在，本次按全量处理"
+            exit 0
+          fi
+          if git show "FETCH_HEAD:resources/arknights.json" > resources/arknights.json.tmp 2>/dev/null; then
+            mv -f resources/arknights.json.tmp resources/arknights.json
+          fi
+          rm -f resources/arknights.json.tmp
+          if git cat-file -e "FETCH_HEAD:resources/avatars/avatar-index.json" 2>/dev/null; then
+            rm -rf "$RUNNER_TEMP/av"; mkdir -p "$RUNNER_TEMP/av"
+            git archive --format=tar FETCH_HEAD resources/avatars | tar -xf - -C "$RUNNER_TEMP/av"
+            cp -a "$RUNNER_TEMP/av/resources/avatars/." build/avatars/
+            echo "已有 $(find build/avatars -name '*.webp' | wc -l) 张，本次只补缺的"
+          fi
+
+      - name: Sync avatars from PRTS Wiki
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            python -u tools/sync_avatars.py --out build/avatars --force
+          else
+            python -u tools/sync_avatars.py --out build/avatars
+          fi
+
+      - name: Validate
+        run: |
+          python - <<'PY'
+          import json, os
+          d = json.load(open('build/avatars/avatar-index.json', encoding='utf-8'))
+          n = d.get('count') or 0
+          assert n > 300, '头像只有 %d 张，PRTS 接口多半挂了（别把残缺的索引推上去）' % n
+          files = set(f for f in os.listdir('build/avatars') if f.endswith('.webp'))
+          assert len(files) >= n * 0.98, '文件数 %d 与索引 %d 对不上' % (len(files), n)
+          print('索引 %d 条 ｜ 文件 %d 个 ｜ 合计 %.2f MB'
+                % (n, len(files), (d.get('bytes') or 0) / 1048576.0))
+          PY
+
+      - name: Publish to pack-data
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          # 只比 webp 文件集合（索引里的 generatedAt 每次都变，拿它比永远「有变化」）
+          hash_av() {
+            find "$1" -name '*.webp' -type f 2>/dev/null | sort | xargs -r sha256sum \
+              | sha256sum | cut -d' ' -f1
+          }
+
+          D="$RUNNER_TEMP/pack-data"
+          rm -rf "$D"; mkdir -p "$D"
+          cd "$D"
+          git init -q -b "$MAA_PRTS_PACK_BRANCH"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # 继承上一版（含 themes/ 与三个资源 JSON），只替换 resources/avatars/
+          if git fetch -q --depth=1 origin "$MAA_PRTS_PACK_BRANCH" 2>/dev/null; then
+            git archive --format=tar FETCH_HEAD | tar -xf - -C .
+          fi
+
+          OLD=$(hash_av resources/avatars)
+          rm -rf resources/avatars
+          mkdir -p resources
+          cp -a "$GITHUB_WORKSPACE/build/avatars" resources/avatars
+          NEW=$(hash_av resources/avatars)
+
+          if [ -n "$OLD" ] && [ "$OLD" = "$NEW" ]; then
+            echo "头像没有变化，本次不推送"
+            echo "### 头像无变化" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          COUNT=$(python -c "import json;print(json.load(open('resources/avatars/avatar-index.json',encoding='utf-8'))['count'])")
+          MB=$(python -c "import json;d=json.load(open('resources/avatars/avatar-index.json',encoding='utf-8'));print(round((d.get('bytes') or 0)/1048576.0,2))")
+          git add -A
+          git commit -q -m "chore(avatar): 同步干员头像 ${COUNT} 张"
+          git push -q -f origin "HEAD:refs/heads/${MAA_PRTS_PACK_BRANCH}"
+
+          echo "### 头像已更新：${COUNT} 张 / ${MB} MB" >> "$GITHUB_STEP_SUMMARY"
