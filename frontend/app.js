@@ -3102,16 +3102,15 @@ function openSettings() {
           <div class="set-pane active" data-pane="general">
             <div class="set-head">
               <h3>常规设置</h3>
-              <p>界面主题和开机启动。主题只影响外观：<b>深色 / 白色</b>随程序自带；
-                <b>卫戍协议</b>这类第三方主题要在这里点一次「下载」，从我们的资源分支
-                拉到本机（<code>config/themes</code>），不塞进程序包里——这样 exe 不会
-                越做越大，不想要的主题也能随时删掉。</p>
+              <p>界面主题和开机启动。深色和白色主题随程序自带；像<b>卫戍协议</b>这样的第三方主题
+                不打包进程序，第一次使用要先点一次「下载」，文件存到本机 <code>config/themes</code>
+                目录，不再需要时可以删掉。</p>
             </div>
 
             <div class="set-sub-title">界面主题</div>
             <div class="theme-grid" id="theme-grid">${themeCards()}</div>
-            <div class="set-tip" id="theme-tip">第三方主题第一次用要先下载（含配色、字体和桌宠动画），
-              下载完点「使用」立即切换；不适配的主题随时可以删掉。</div>
+            <div class="set-tip" id="theme-tip">第三方主题包含配色、字体和桌宠动画，首次使用需先下载，
+              下载完成后点「使用」即可切换。</div>
             <label class="check-row" style="margin-top:4px">
               <input type="checkbox" id="set-theme-pet" ${petEnabled() ? 'checked' : ''}>
               <span>显示主题桌宠（右下角小人；只有带桌宠的主题才有，挡视线就关掉）</span>
@@ -3124,9 +3123,8 @@ function openSettings() {
                 <span>开机时自动启动 MAA-PRTS</span>
               </label>
               <div class="onb-hint" id="set-launch-state">正在读状态…</div>
-              <div class="set-tip">默认<b>关闭</b>。只有你在这里勾上，才会往当前用户的
-                启动项里写一条（任务管理器 → 启动 里能看见「MAA-PRTS」，随时可关）；
-                取消勾选就立刻删掉。</div>
+              <div class="set-tip">默认<b>关闭</b>。勾选后会在当前用户的启动项里登记一条，
+                任务管理器的「启动」页可以看到「MAA-PRTS」，随时可以关闭；取消勾选会立即移除。</div>
             </div>
           </div>
 
@@ -3149,13 +3147,13 @@ function openSettings() {
           <div class="set-pane" data-pane="maa">
             <div class="set-head">
               <h3>MAA 路径</h3>
-              <p>每个账号可以绑自己的 MAA（包含 <code>MAA.exe</code> 的目录），没绑就用下面的默认目录。
-                第二行选一个 <b>配置文件</b>（MAA 里那份档案，如 <code>Default</code> / <code>moren</code>），
-                程序会从它的「开始唤醒」里读出<b>切号名</b>——官服是手机号（后 4 位
-                <code>5505</code>，或前 3 位 + 后 4 位 <code>157****3635</code>，
-                <em class="bili-word">bilibili服</em>是游戏内用户名），读出来还能手改。
-                <b>只读不写</b>：MAA 里那份档案我们一个字段都不动。填错的代价是 MAA
-                在账号列表里死找、4 分钟超时后整轮挂机作废。</p>
+              <p>每个账号可以绑定独立的 MAA 目录（包含 <code>MAA.exe</code> 的文件夹），
+                未绑定时使用下方的默认目录。在 <b>配置文件</b> 中选择 MAA 里的档案
+                （如 <code>Default</code> / <code>moren</code>），程序会从该档案的「开始唤醒」任务里
+                读取<b>切号名</b>：官服填手机号后 4 位（如 <code>5505</code>），或「前 3 位 + 后 4 位」
+                的脱敏形式（如 <code>157****3635</code>）；<em class="bili-word">bilibili服</em>
+                填游戏内用户名。读取后仍可手动修改。该档案只读，程序不会改动 MAA 中的任何字段。
+                切号名填错时，MAA 会在账号列表中反复查找，4 分钟超时后本轮任务作废。</p>
             </div>
             ${gameTabs()}
             <div class="gamepane active" data-gamepane="arknights">
@@ -3243,8 +3241,9 @@ function openSettings() {
           <div class="set-pane" data-pane="update">
             <div class="set-head">
               <h3>版本更新</h3>
-              <p>两条链各自独立：<b>游戏资源</b>是关卡 / 干员 / 活动数据（几百 KB，随程序发版更新），
-                <b>程序本体</b>是 MAA-PRTS 自己（国内源 / 海外源都能取，有新版本只提醒，装不装你说了算）。</p>
+              <p><b>游戏资源</b>和<b>程序本体</b>分开更新。游戏资源包含关卡、干员和活动数据，
+                体积只有几百 KB，随程序发版同步；程序本体是 MAA-PRTS，国内源和海外源都可以获取。
+                检测到新版本时只做提示，是否安装由你决定。</p>
             </div>
             <div class="set-card">
               <div class="set-ver">
@@ -3299,8 +3298,8 @@ function openSettings() {
 
             <div class="set-sub-title">网络代理</div>
             <div class="set-card">
-              <div class="set-tip" style="margin-bottom:10px">只在连不上 GitHub 时才需要。仅用于上面两条检查 / 下载链路；
-                端口留空 = 直连。改完点「保存并测试」，不可用也会保存（更新时会自动直连回退）。</div>
+              <div class="set-tip" style="margin-bottom:10px">仅在无法连接 GitHub 时需要。该代理只作用于上面两条检查与下载链路，
+                端口留空表示直连。填写后点「保存并测试」；代理不可用时配置仍会保存，更新时会自动退回直连。</div>
               <div class="path-row">
                 <input type="text" id="set-proxy-host" value="${esc(proxyHost)}" placeholder="http://127.0.0.1">
                 <input type="text" id="set-proxy-port" value="${esc(proxyPort)}" placeholder="7890"
