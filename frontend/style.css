@@ -702,6 +702,98 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .rec-table td:last-child { text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .rec-more { padding: 10px 4px 0; font-size: 11.5px; color: var(--text-3); text-align: center; }
 
+/* ---- 抽卡统计：视图 tab（按卡池 / 星级分布 / 抽卡记录）+ 终末地口径 ---- */
+.gacha-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.gacha-views { display: inline-flex; gap: 2px; padding: 3px; border-radius: 11px;
+  border: 1px solid var(--line); background: rgba(var(--tint), 0.035); }
+.gacha-view { appearance: none; border: 0; background: transparent; font: inherit;
+  display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 14px;
+  border-radius: 9px; font-size: 12.5px; font-weight: 600; letter-spacing: .2px;
+  color: var(--text-3); cursor: pointer; transition: .15s ease; }
+.gacha-view i { font-style: normal; min-width: 16px; padding: 0 4px; border-radius: 5px;
+  font-size: 10.5px; line-height: 15px; text-align: center; color: var(--text-3);
+  background: rgba(var(--tint), 0.08); font-variant-numeric: tabular-nums; }
+.gacha-view:hover { color: var(--text-2); background: rgba(var(--tint), 0.05); }
+.gacha-view.active { color: #071410; background: linear-gradient(140deg, var(--mint), #4fd7c8); }
+.gacha-view.active i { color: #071410; background: rgba(0, 0, 0, 0.16); }
+.gacha-scope { display: inline-flex; gap: 2px; padding: 3px; border-radius: 11px;
+  border: 1px solid var(--line); background: rgba(var(--tint), 0.035); margin-left: auto; }
+.gacha-scope-btn { appearance: none; border: 0; background: transparent; font: inherit;
+  height: 26px; padding: 0 12px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  color: var(--text-3); cursor: pointer; }
+.gacha-scope-btn:hover { color: var(--text-2); background: rgba(var(--tint), 0.05); }
+.gacha-scope-btn.active { color: var(--text); background: rgba(var(--tint), 0.10); }
+
+/* ---- 干员头像：后端按需下载；加载失败 img 自己被移除，露出首字母 ---- */
+.op-av { position: relative; flex: 0 0 auto; width: 30px; height: 30px; border-radius: 7px;
+  overflow: hidden; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 650; color: var(--text-2);
+  background: rgba(var(--tint), 0.08); }
+.op-av::before { content: attr(data-ch); }
+.op-av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.op-av.r6 { background: linear-gradient(150deg, #ffd479, #ff9a5c); color: #1a1305; }
+.op-av.r5 { background: linear-gradient(150deg, #e9d5a1, #c9a86a); color: #1a1305; }
+.op-av.r4 { background: linear-gradient(150deg, #c084fc, #9333ea); color: #0b1020; }
+.op-av.r3 { background: linear-gradient(150deg, #7dd3fc, #0ea5e9); color: #0b1020; }
+.op-av.r2 { background: linear-gradient(150deg, #6ee7a8, #34d399); color: #062117; }
+
+/* ---- 星级分布补充：实际 vs 公示 / 六星落在第几抽 / 六星墙 ---- */
+.rar-extra { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 12px; margin-top: 16px; }
+@media (max-width: 900px) { .rar-extra { grid-template-columns: minmax(0, 1fr); } }
+.rar-panel { padding: 12px 14px 14px; border-radius: 14px; border: 1px solid var(--line);
+  background: rgba(var(--tint), 0.022); }
+.rar-panel h4, .wall-wrap h4 { display: flex; align-items: baseline; gap: 8px;
+  font-size: 12px; font-weight: 650; color: var(--text-2); margin: 0 0 10px; }
+.rar-panel h4 small, .wall-wrap h4 small { font-size: 10.5px; font-weight: 400; color: var(--text-3); }
+.vs-row { display: flex; align-items: center; gap: 10px; font-size: 11.5px; padding: 4px 0; }
+.vs-row > i { flex: 0 0 30px; font-style: normal; font-weight: 600; }
+.vs-row > i.r6 { color: var(--star); }
+.vs-row > i.r5 { color: #e9d07a; }
+.vs-row > i.r4 { color: #c084fc; }
+.vs-row > i.r3 { color: #7dd3fc; }
+.vs-row > b { flex: 0 0 62px; font-variant-numeric: tabular-nums; color: var(--text); }
+.vs-row > span { flex: 1 1 auto; color: var(--text-3); }
+.vs-row > em { font-style: normal; font-variant-numeric: tabular-nums; font-weight: 600; }
+.vs-row > em.up { color: var(--mint); }
+.vs-row > em.down { color: var(--rose); }
+.vs-row > em.flat { color: var(--text-3); }
+
+.hist { display: flex; align-items: flex-end; gap: 6px; height: 96px; padding-top: 12px; }
+.hist-col { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; }
+.hist-col > b { font-size: 10px; font-weight: 600; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.hist-track { flex: 1 1 auto; width: 100%; display: flex; align-items: flex-end; }
+.hist-bar { width: 100%; min-height: 2px; border-radius: 5px 5px 3px 3px;
+  background: linear-gradient(180deg, var(--star), rgba(255, 154, 92, 0.55)); }
+.hist-col > span { font-size: 9.5px; color: var(--text-3); white-space: nowrap; }
+
+.wall-wrap { margin-top: 16px; }
+.six-wall { display: flex; flex-wrap: wrap; gap: 8px; }
+.wall-item { display: flex; align-items: center; gap: 7px; padding: 5px 9px 5px 5px;
+  border-radius: 10px; border: 1px solid var(--line); background: rgba(var(--tint), 0.022);
+  font-size: 11.5px; color: var(--text-2); max-width: 158px; }
+.wall-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wall-item .op-av { width: 26px; height: 26px; border-radius: 6px; font-size: 11px; }
+
+/* ---- 抽卡记录分页 ---- */
+.rec-table .c-av { width: 40px; padding-right: 0; }
+.rec-table tr.is-new td { background: rgba(94, 234, 212, 0.035); }
+.rec-pager { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.pg-step, .pg-btn { appearance: none; font: inherit; cursor: pointer;
+  border: 1px solid var(--line); background: rgba(var(--tint), 0.03); color: var(--text-2);
+  border-radius: 8px; height: 28px; padding: 0 10px; font-size: 11.5px; }
+.pg-step:hover:not(:disabled), .pg-btn:hover { background: rgba(var(--tint), 0.07); color: var(--text); }
+.pg-step:disabled { opacity: .38; cursor: default; }
+.pg-nums { display: flex; align-items: center; gap: 4px; }
+.pg-btn { position: relative; min-width: 28px; padding: 0 6px; font-variant-numeric: tabular-nums; }
+.pg-btn.active { border-color: transparent; color: #071410; background: var(--mint); font-weight: 650; }
+.pg-btn u { position: absolute; top: 3px; right: 3px; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--rose); text-decoration: none; }
+.pg-btn.active u { background: #071410; }
+.pg-gap { color: var(--text-3); font-size: 11.5px; padding: 0 2px; }
+.pg-info { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
+.pg-info b { color: var(--text-2); }
+
 .gacha-empty {
   padding: 60px 20px;
   text-align: center;

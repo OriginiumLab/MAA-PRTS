@@ -108,11 +108,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def _send(self, code, body: bytes, ctype='application/json; charset=utf-8'):
+    def _send(self, code, body: bytes, ctype='application/json; charset=utf-8',
+              cache='no-store'):
         self.send_response(code)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Cache-Control', cache)
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -201,6 +202,23 @@ class Handler(BaseHTTPRequestHandler):
         ext = os.path.splitext(full)[1].lower()
         self._send(200, data, api.MIME.get(ext, 'application/octet-stream'))
 
+    def _avatar(self, path):
+        """干员头像：/api/avatar/<charId>
+
+        拿不到就 404（前端 img onerror 回落首字母块），不要冒泡成 500——
+        列表页一屏十几张，一张失败刷一条红字会把日志淹掉。
+        命中后长缓存：头像跟 charId 绑定，一个版本内不会变。
+        """
+        from core import avatarcache
+        cid = path[len('/api/avatar/'):].strip('/')
+        try:
+            data, ext = avatarcache.fetch(cid)
+        except Exception:
+            self._send(404, b'not found', 'text/plain; charset=utf-8')
+            return
+        self._send(200, data, api.MIME.get('.' + ext, 'application/octet-stream'),
+                   cache='public, max-age=604800')
+
     def do_GET(self):
         if not trusted_request(self.headers, self.server.server_address):
             self._reject()
@@ -208,6 +226,9 @@ class Handler(BaseHTTPRequestHandler):
         q, path = self._query()
         if path.startswith('/themes/'):
             self._theme(path)
+            return
+        if path.startswith('/api/avatar/'):
+            self._avatar(path)
             return
         if path.startswith('/api/'):
             if path == '/api/ping':

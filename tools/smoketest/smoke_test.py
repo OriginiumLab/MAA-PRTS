@@ -8958,6 +8958,8 @@ def main():
                 lambda: check_app_icon(tmp))
         r.check('B83 换完 exe 刷图标缓存（不刷重启也不管用 / 装失败不白刷）',
                 lambda: check_icon_cache_refresh(tmp))
+        r.check('B84 干员头像按需下载（缓存优先 / 索引决定走镜像 / 兜底 / 负缓存）',
+                lambda: check_avatar_cache(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9750,6 +9752,89 @@ def check_icon_cache_refresh(tmp):
     finally:
         (appupdate.update_dir, appupdate._current, appupdate._state,
          appupdate._save_state, appupdate.refresh_icon_cache) = keep
+
+
+def check_avatar_cache(tmp):
+    """B84 干员头像按需下载：安装包不带图，用到哪张下哪张
+
+    2026-11-28 加。三条线被钉死：
+
+    - **安装包不许变大**：350+ 张 96px WebP 约 2MB，只能落 ``config/cache/avatar``；
+    - **索引决定要不要走镜像**：数据分支没这张时还去挨个试三个镜像，等于每张
+      白等 5 秒（实测首张 5.7s → 0.7s）；
+    - **拿不到就 404，前端回落首字母**：负缓存 5 分钟，别让列表页每次刷新
+      都把失败请求重打一遍。
+
+    全程打桩，不联网、不写真 config（``settings.CONFIG_DIR`` 指到临时目录）。
+    """
+    from core import avatarcache, settings
+
+    keep = (settings.CONFIG_DIR, avatarcache.avatar_index,
+            avatarcache._from_mirrors, avatarcache._from_prts,
+            dict(avatarcache._neg))
+    try:
+        settings.CONFIG_DIR = os.path.join(tmp, 'cfg-avatar')
+        avatarcache._neg.clear()
+
+        webp = b'RIFF' + b'\x00' * 4 + b'WEBP' + b'\x00' * 2000
+        png = b'\x89PNG\r\n\x1a\n' + b'\x00' * 2000
+
+        # 1) id 只认 [A-Za-z0-9_]，路径穿越必须当场拒绝
+        for bad in ['../x', 'a/b', '', 'x' * 80, 'char_002.amiya', '..']:
+            try:
+                avatarcache.fetch(bad)
+                raise AssertionError('id 没校验住：%r' % (bad,))
+            except KeyError:
+                pass
+
+        # 2) 索引里有 → 走镜像；落盘后第二次不再下载
+        avatarcache.avatar_index = lambda: {'char_002_amiya': {}}
+        calls = []
+        avatarcache._from_mirrors = lambda cid: (calls.append('m'), (webp, 'webp'))[1]
+        avatarcache._from_prts = lambda cid: (calls.append('p'), None)[1]
+        data, ext = avatarcache.fetch('char_002_amiya')
+        assert ext == 'webp' and data[:4] == b'RIFF', (ext, data[:8])
+        assert calls == ['m'], calls
+        assert os.path.isfile(os.path.join(avatarcache.cache_dir(),
+                                           'char_002_amiya.webp'))
+        avatarcache.fetch('char_002_amiya')
+        assert calls == ['m'], '命中缓存后又去下载了：%r' % (calls,)
+
+        # 3) 索引里没有 → 不许空跑三个镜像，直接兜底 PRTS
+        calls.clear()
+        avatarcache.avatar_index = lambda: {}
+        avatarcache._from_prts = lambda cid: (calls.append('p'), (png, 'png'))[1]
+        data, ext = avatarcache.fetch('char_1001_amiya2')
+        assert ext == 'png' and calls == ['p'], (ext, calls)
+
+        # 4) 两条路都挂 → KeyError；5 分钟内不再重试（负缓存）
+        calls.clear()
+        avatarcache.avatar_index = lambda: {'char_999_none': {}}
+        avatarcache._from_mirrors = lambda cid: (calls.append('m'), None)[1]
+        avatarcache._from_prts = lambda cid: (calls.append('p'), None)[1]
+        for _ in range(2):
+            try:
+                avatarcache.fetch('char_999_none')
+                raise AssertionError('拿不到却返回了')
+            except KeyError:
+                pass
+        assert calls == ['m', 'p'], '负缓存没生效，重复打了网络：%r' % (calls,)
+
+        # 5) 不是图片的字节（CDN 回一段 HTML / 空包）一律不认
+        assert avatarcache._ok(b'<html>404 not found</html>' * 100) == ''
+        assert avatarcache._ok(b'') == ''
+        assert avatarcache._ok(b'RIFF' + b'\x00' * 4000) == '', '假的 RIFF 也认了'
+
+        # 6) 占用统计与清理
+        st = avatarcache.stats()
+        assert st['files'] >= 2, st
+        avatarcache.clear()
+        assert avatarcache.stats()['files'] == 0, '清缓存没清干净'
+    finally:
+        (settings.CONFIG_DIR, avatarcache.avatar_index,
+         avatarcache._from_mirrors, avatarcache._from_prts) = keep[:4]
+        avatarcache._neg.clear()
+        avatarcache._neg.update(keep[4])
 
 
 if __name__ == '__main__':

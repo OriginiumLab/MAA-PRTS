@@ -27,6 +27,7 @@
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引（战斗关默认视图 / `include_story=True` 全量）、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
 | `core/packsync.py` | 资源包自动更新：读远端 manifest → 校验 sha256/条数 → 原子替换 |
+| `core/avatarcache.py` | 干员头像按需下载：本地 `config/cache/avatar/` → `avatar-data` 分支（三镜像，先看索引里有没有这张）→ PRTS 镜像兜底并转 96px WebP。**安装包不带图**，拿不到抛 `KeyError` 让前端回落首字母；同 id 并发合并、失败记 5 分钟负缓存 |
 | `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.ps1 替换 |
 | `core/maa.py` | MAA 进程控制、`gui.new.json` 读写、作业文件下载 |
 | `core/envcheck.py` | 开跑前的环境闸：模拟器开着没有、adb 通不通。路径优先从 MAA 的 `gui.new.json` 抄（`Config` 类型 / `AdbPath` / `Extras.<类型>.EmulatorPath` / `InstanceIndex`），再退到 `settings.emulatorPath` 和 adb 反推。没启动就替用户启动（`settings.emulatorAutoStart`，默认开），起来才放行。**不进 `SKILLS`**，所以 `/api/skill/list` 和助手工具表里都看不到它——它是每个任务的前置闸，`skills.run_skill` 起任务时自动调一次，正常时零日志 |
@@ -107,6 +108,7 @@ main()
 | POST | `/api/app/download` | 下载安装包并校验，**不替换**，等用户点「重启并安装」 |
 | POST | `/api/app/install` | 解压 + 拉起 install.ps1 + 退出程序（源码模式直接拒绝） |
 | POST | `/api/app/open` | 用系统浏览器打开 Release 页 |
+| GET | `/api/avatar/<charId>` | 干员头像。**不走 `ROUTES`**：`main.py` 按前缀分发（`/api/avatar/`），命中缓存直接回（`Cache-Control: public, max-age=604800`），拿不到回 404 让 `img onerror` 自己消失 |
 | GET | `/api/op?id=` | 作业详情（干员与要求、动作数、`maa://` 代码） |
 | GET | `/api/maa/status` | MAA 是否运行、配置列表、当前配置 |
 | GET | `/api/maa/probe?dir=` | 检测目录是不是 MAA 根目录（引导/设置用）；附干员识别数据 `operbox/operboxCount/operboxSyncTime` |

@@ -19,6 +19,9 @@ import os
 
 PACK_REPO = os.environ.get('MAA_PRTS_PACK_REPO') or 'OriginiumLab/MAA-PRTS'
 PACK_BRANCH = os.environ.get('MAA_PRTS_PACK_BRANCH') or 'pack-data'
+# 头像单独一个数据分支：pack.yml 每次都是全新 git init + 强推，只放三个数据
+# 文件，头像要是混在 pack-data 里会被下一次资源同步整个冲掉
+AVATAR_BRANCH = os.environ.get('MAA_PRTS_AVATAR_BRANCH') or 'avatar-data'
 
 PACK_MIRRORS = (
     'https://raw.githubusercontent.com/{repo}/{branch}/',
@@ -30,4 +33,10 @@ PACK_MIRRORS = (
 def mirror_urls(rel_path: str, suffix: str = '') -> list:
     """某文件在数据分支各镜像上的地址（顺序即回退顺序）"""
     return [m.format(repo=PACK_REPO, branch=PACK_BRANCH) + rel_path + suffix
+            for m in PACK_MIRRORS]
+
+
+def avatar_urls(rel_path: str) -> list:
+    """某文件在头像数据分支各镜像上的地址（顺序即回退顺序）"""
+    return [m.format(repo=PACK_REPO, branch=AVATAR_BRANCH) + rel_path
             for m in PACK_MIRRORS]
