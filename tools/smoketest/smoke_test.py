@@ -8954,6 +8954,8 @@ def main():
                 lambda: check_keyword_search(tmp))
         r.check('B81 多账号一键长草（读每号配置的理智作战关卡 / 白本兜底 / 不自己导航）',
                 lambda: check_daily_longgrass(tmp))
+        r.check('B82 程序图标（美术源 → 七档 ICO / 美术源缺失退回占位图）',
+                lambda: check_app_icon(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9642,6 +9644,58 @@ def check_daily_longgrass(tmp):
     assert '帮我使用推荐设置一键长草刷左侧所有账号' in js, '引导卡片没加上'
     # 提示词里必须点名这条路，否则模型还会拿 build_run(mode=daily) 顶替
     assert 'daily_check' in agent.SYSTEM and 'daily_run' in agent.SYSTEM
+
+
+def check_app_icon(tmp):
+    """B82 程序图标：吃美术源出多尺寸 ICO，美术源坏了也不许让打包挂掉
+
+    图标是用户唯一看得到、却最容易被「打包漏文件」坑掉的东西：
+
+    - ICO 里只有 256 一档时，任务栏 / 开始菜单会硬缩，糊成一团 → 七档必须齐；
+    - ``resources/assets/icon.png`` 没进包（或路径写错），exe 会静悄悄落回
+      PyInstaller 的默认图标，构建日志一个字都不报，装完才发现变成别人的壳；
+    - 美术源读坏了（真有人传了个 CMYK JPEG 改后缀）不能连累打包 → 必须能退回
+      现画的占位图。
+
+    全程只读仓库资源，产物写临时目录，不碰 ``build/``。
+    """
+    import importlib.util
+
+    from PIL import Image
+
+    src = os.path.join(REPO, 'resources', 'assets', 'icon.png')
+    assert os.path.isfile(src), '图标美术源丢了：%s' % src
+    im = Image.open(src)
+    assert im.width == im.height, '美术源必须是正方形，现在是 %s' % (im.size,)
+    assert im.width >= 256, '美术源太小（%d），放到 256 会糊' % im.width
+    assert im.mode == 'RGBA', '美术源要转成 RGBA（%s 没法带透明）' % im.mode
+    assert im.getchannel('A').getextrema()[0] == 0, \
+        '美术源四周不透明，装到任务栏上就是个白方块'
+
+    spec = importlib.util.spec_from_file_location(
+        'build_under_test', os.path.join(REPO, 'tools', 'build.py'))
+    bld = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bld)
+    bld.ICON = os.path.join(tmp, 'icon.ico')
+
+    out = bld.make_icon()
+    assert out and os.path.isfile(out), '生成不出 ico：%s' % out
+    got = sorted(Image.open(out).info.get('sizes') or [], reverse=True)
+    assert got[:1] == [(256, 256)], got          # 大图标视图那一档
+    assert (16, 16) in got, '缺 16px 档：%s' % (got,)
+    assert len(got) >= 5, '尺寸档太少（任务栏会硬缩）：%s' % (got,)
+
+    keep = bld.ICON_SRC
+    bld.ICON_SRC = os.path.join(tmp, 'nope.png')
+    try:
+        out2 = bld.make_icon()
+        assert out2 and os.path.isfile(out2), '美术源缺失时必须退回占位图标'
+    finally:
+        bld.ICON_SRC = keep
+
+    doc = open(os.path.join(REPO, 'docs', 'resources.md'),
+               encoding='utf-8').read()
+    assert 'assets/icon.png' in doc, 'docs/resources.md 没写美术源在哪'
 
 
 if __name__ == '__main__':
