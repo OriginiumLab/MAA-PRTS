@@ -327,6 +327,18 @@ function setSideGame(g) {
   renderAccounts();
 }
 
+/* 账号头像：有看板娘就用看板娘（snap.account.secretary.charId），没有就退回
+   昵称首字。img 绝对定位盖在首字上，onerror 自删——加载失败/接口 404 都会
+   自然露出首字，前端不用记状态。MAA 导入的账号没有 secretary，永远走首字。 */
+function acctAvatar(a, cls) {
+  const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
+  const id = (a.secretary && a.secretary.charId) || '';
+  const pic = id
+    ? `<img src="/api/avatar/${encodeURIComponent(id)}" alt="" loading="lazy" onerror="this.remove()">`
+    : '';
+  return `<span class="avatar ${cls || ''}${id ? ' has-pic' : ''}">${pic}${esc(ch)}</span>`;
+}
+
 function renderAccounts() {
   const box = $('#account-list');
   renderGameSwitch();
@@ -345,7 +357,6 @@ function renderAccounts() {
     const st = a.stats || {};
     const ef = a.game === 'endfield';                 // 终末地：没有练度数据，副标题换口径
     const cls = ef ? 'ef' : (st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : ''));
-    const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
     // 渠道名单独上色：B 站服粉、官服亮白，其它渠道不动（同 style.css .acct-ch）
     const chName = a.channelName || '官服';
     const chCls = /bilibili/i.test(chName) ? ' bili' : (/^官服/.test(chName) ? ' official' : '');
@@ -356,7 +367,7 @@ function renderAccounts() {
     return `
       <button class="acct ${a.file === S.current ? 'active' : ''}" data-file="${esc(a.file)}"
         draggable="true" title="点击选中，拖动可排序${ef ? '（终末地账号，不含作业获取）' : ''}">
-        <span class="avatar ${cls}">${esc(ch)}</span>
+        ${acctAvatar(a, cls)}
         <span class="acct-main">
           <span class="acct-name">${esc(a.nickName)}${ef ? '<i class="acct-tag">终末地</i>' : ''}</span>
           <span class="acct-sub">${sub}</span>
@@ -547,15 +558,22 @@ function renderHero() {
     $('#hero-name').textContent = '未选择账号';
     $('#hero-sub').textContent = '用森空岛 token 添加一个账号开始';
     $('#hero-avatar').textContent = '?';
-    $('#hero-avatar').classList.remove('ef');
+    $('#hero-avatar').classList.remove('ef', 'has-pic');
     $('#hero-stats').innerHTML = '';
     return;
   }
   const a = d.account || {}, st = d.stats || {};
   const name = a.nickName || '未知账号';
   $('#hero-name').textContent = name;
-  $('#hero-avatar').textContent = name.replace(/[#＃].*$/, '').slice(0, 1);
-  $('#hero-avatar').classList.toggle('ef', ef);   // 终末地：头像配色跟着换
+  // 顶部头像同账号卡：看板娘优先，取不到就留首字
+  const hInit = name.replace(/[#＃].*$/, '').slice(0, 1);
+  const hSec = (a.secretary && a.secretary.charId) || '';
+  const hBox = $('#hero-avatar');
+  hBox.innerHTML = (hSec
+    ? `<img src="/api/avatar/${encodeURIComponent(hSec)}" alt="" onerror="this.remove()">`
+    : '') + esc(hInit);
+  hBox.classList.toggle('has-pic', !!hSec);
+  hBox.classList.toggle('ef', ef);   // 终末地：头像配色跟着换
 
   if (ef) {
     // 终末地：没有干员图鉴，只展示身份 + 抽卡概况
@@ -2981,14 +2999,13 @@ function openSettings() {
   const acctRows = game => (S.accounts || []).filter(a => gameOf(a) === game).map(a => {
     const st = a.stats || {};
     const ef = (a.game || 'arknights') === 'endfield';
-    const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
     const cls = st.sixStarCount >= 120 ? 'r6' : (st.sixStarCount >= 60 ? 'r5' : '');
     const chName = a.channelName || '官服';
     const chCls = /bilibili/i.test(chName) ? ' bili' : (/^官服/.test(chName) ? ' official' : '');
     return `
     <div class="set-card set-acct" data-file="${esc(a.file)}">
       <div class="set-acct-top">
-        <span class="avatar ${cls}">${esc(ch)}</span>
+        ${acctAvatar(a, cls)}
         <div class="set-acct-id">
           <div class="set-acct-name">${esc(a.nickName)}
             <span class="acct-ch${chCls}">${esc(chName)}</span>

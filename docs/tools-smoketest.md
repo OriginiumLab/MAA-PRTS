@@ -910,7 +910,7 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
 - **id 校验**：只认 `[A-Za-z0-9_]`，`../x`、`a/b`、超长串一律当场 `KeyError`，
   别指望后面的路径拼接兜住穿越；
 - **缓存优先**：命中 `config/cache/avatar/<id>.webp` 就直接返回，不再发请求；
-- **索引决定要不要走镜像**：`avatar-data` 分支的 `avatar-index.json` 里有这张才去试
+- **索引决定要不要走镜像**：`pack-data` 上 `resources/avatars/avatar-index.json` 里有这张才去试
   三个镜像，没有就直接走 PRTS 兜底——否则每张都要白等三次 404/超时（实测首张 5.7s→0.7s）；
 - **兜底**：镜像全挂时从 `torappu.prts.wiki/assets/char_avatar/<id>.png` 取原图，
   服务端转 96px WebP；转不了就存原 PNG，宁可大一点也别丢功能；

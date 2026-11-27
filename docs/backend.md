@@ -27,7 +27,7 @@
 | `core/resources.py` | 读 `resources/arknights.json`：关卡索引（战斗关默认视图 / `include_story=True` 全量）、干员表、技能/模组名、活动正式名与代号前缀 |
 | `core/version.py` | 版本管理：程序版本、内置资源包版本、资源更新检测与提示 |
 | `core/packsync.py` | 资源包自动更新：读远端 manifest → 校验 sha256/条数 → 原子替换 |
-| `core/avatarcache.py` | 干员头像按需下载：本地 `config/cache/avatar/` → `avatar-data` 分支（三镜像，先看索引里有没有这张）→ PRTS 镜像兜底并转 96px WebP。**安装包不带图**，拿不到抛 `KeyError` 让前端回落首字母；同 id 并发合并、失败记 5 分钟负缓存 |
+| `core/avatarcache.py` | 干员头像按需下载：本地 `config/cache/avatar/` → `pack-data` 的 `resources/avatars/`（三镜像，先看索引里有没有这张）→ PRTS 镜像兜底并转 96px WebP。**安装包不带图**，拿不到抛 `KeyError` 让前端回落首字母；同 id 并发合并、失败记 5 分钟负缓存 |
 | `core/appupdate.py` | 程序本体自动更新（GitHub Releases）：查版本 → 下载校验 → 退出后由 install.ps1 替换 |
 | `core/maa.py` | MAA 进程控制、`gui.new.json` 读写、作业文件下载 |
 | `core/envcheck.py` | 开跑前的环境闸：模拟器开着没有、adb 通不通。路径优先从 MAA 的 `gui.new.json` 抄（`Config` 类型 / `AdbPath` / `Extras.<类型>.EmulatorPath` / `InstanceIndex`），再退到 `settings.emulatorPath` 和 adb 反推。没启动就替用户启动（`settings.emulatorAutoStart`，默认开），起来才放行。**不进 `SKILLS`**，所以 `/api/skill/list` 和助手工具表里都看不到它——它是每个任务的前置闸，`skills.run_skill` 起任务时自动调一次，正常时零日志 |
@@ -186,6 +186,22 @@ pywebview 窗口与浏览器直开都是同源，不受影响。
 取上游 commit sha → 和包里的 `sourceCommit` 比 → 变了才按 sha 下载 9 个 json →
 重新生成 → 条数校验 → 推到 `pack-data` 分支（单提交强推）。
 **不推 `main`**：`main` 的规则集强制 PR + 审批，bot 不在绕过名单里。
+
+`pack-data` 是一条**公共数据分支**，住着三户人家：
+
+| 目录 | 内容 | 谁写 |
+|---|---|---|
+| `resources/arknights.json`、`paradox.json`、`pack-manifest.json` | 游戏数据 | `pack.yml`，每天两次 |
+| `resources/avatars/` | 干员头像 96px WebP + `avatar-index.json` | `avatars.yml`，每周一 |
+| `themes/` | 第三方主题包 + `manifest.json` | 人工发布 |
+
+所以「单提交强推」不能真的把头砍掉：每个写分支的流程都是
+**先 `git fetch --depth=1` + `git archive FETCH_HEAD \| tar -x` 把上一版整条
+分支继承下来，再只覆盖自己负责的那几个路径**，然后提交、`push -f`。历史仍然
+只有一条（旧提交变 unreachable，GitHub 会 gc），用户下过的主题包和头像不会被
+每天两次的资源同步冲成 404。
+
+两个流程共用 `concurrency: pack-data-write`：同时跑必然互相覆盖，后推的赢。
 
 ### 程序本体自动更新（`appupdate.py`）
 

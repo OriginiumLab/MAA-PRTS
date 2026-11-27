@@ -9,7 +9,7 @@
 来源顺序（前一个失败才走下一个）：
 
   1. 本机缓存      ``config/cache/avatar/<id>.webp|png``，命中直接返回
-  2. 数据分支      ``resources/avatars/<id>.webp``（raw → gh-proxy → jsDelivr）
+  2. 数据分支      pack-data 的 ``resources/avatars/<id>.webp``（raw → gh-proxy → jsDelivr）
   3. PRTS 镜像     ``torappu.prts.wiki/assets/char_avatar/<id>.png``，现场转 WebP
 
 第 2 条是主路（我们自己的包，可校验），第 3 条只兜「数据分支还没同步到这张」。
@@ -115,7 +115,7 @@ def _save(cid: str, data: bytes, ext: str) -> None:
 
 
 def avatar_index() -> dict:
-    """数据分支上的头像索引：{charId: {sha256, bytes, name}}
+    """pack-data 上的头像索引：{charId: {sha256, bytes, name}}
 
     拿它只为判断「这张到底有没有成品」：有才去试三个镜像，没有就直接走
     PRTS 兜底，省掉三次必然 404 / 超时的往返（实测能省 5 秒）。拉不到就
@@ -124,7 +124,7 @@ def avatar_index() -> dict:
     if _index['map'] is not None and time.time() - _index['at'] < INDEX_TTL:
         return _index['map']
     got = {}
-    for url in packrepo.avatar_urls('resources/avatars/avatar-index.json'):
+    for url in packrepo.mirror_urls('resources/avatars/avatar-index.json'):
         try:
             d = json.loads(_get(url, TIMEOUT_MIRROR).decode('utf-8'))
             got = d.get('chars') or {}
@@ -139,7 +139,7 @@ def avatar_index() -> dict:
 def _from_mirrors(cid: str):
     """第 2 条：数据分支上的成品 WebP"""
     rel = 'resources/avatars/%s.webp' % cid
-    for url in packrepo.avatar_urls(rel):
+    for url in packrepo.mirror_urls(rel):
         try:
             data = _get(url, TIMEOUT_MIRROR)
             if _ok(data) == 'webp':

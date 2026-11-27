@@ -8960,6 +8960,8 @@ def main():
                 lambda: check_icon_cache_refresh(tmp))
         r.check('B84 干员头像按需下载（缓存优先 / 索引决定走镜像 / 兜底 / 负缓存）',
                 lambda: check_avatar_cache(tmp))
+        r.check('B85 账号头像走看板娘（无 secretary 退回首字 / 资源统一 pack-data）',
+                lambda: check_account_avatar(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9835,6 +9837,78 @@ def check_avatar_cache(tmp):
          avatarcache._from_mirrors, avatarcache._from_prts) = keep[:4]
         avatarcache._neg.clear()
         avatarcache._neg.update(keep[4])
+
+
+def check_account_avatar(tmp):
+    """B85 账号头像改成看板娘 + 资源统一到 pack-data
+
+    2026-11-28 加。用户提的三件事，各钉一条：
+
+    - **账号头像不许再是首字**：森空岛同步时已经存了 ``account.secretary``
+      （charId / 皮肤），列表页要拿它去 ``/api/avatar/<charId>`` 取图；
+      没有 secretary 的账号（MAA 导入的、终末地的）才退回昵称首字；
+    - **头像资源只走 pack-data**：之前单独开了 ``avatar-data`` 分支，是因为
+      pack.yml 强推会冲掉它。现在 pack.yml 改成「继承整条分支再覆盖自己那
+      三个文件」，头像和主题都住 pack-data，客户端不该再认别的分支名；
+    - **图片要有尺寸约束**：``object-fit: cover`` 缺失时 96px 的正方形会按
+      原尺寸撑破 36px 的圆角块。
+    """
+    import json
+    from core import accounts, packrepo, settings
+
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(repo, 'frontend', 'style.css'), encoding='utf-8').read()
+
+    # 1) 后端把 secretary 带出来（列表页直接用，不用再请求详情）
+    keep_dir = settings.ACCOUNTS_DIR
+    d = os.path.join(tmp, 'cfg-acct')
+    os.makedirs(d, exist_ok=True)
+    snap = {
+        'account': {'uid': '1', 'nickName': '测试#1234', 'channelName': '官服',
+                    'secretary': {'charId': 'char_4080_lin', 'name': '林',
+                                  'skinId': 'char_4080_lin@summer#19'}},
+        'stats': {'charCount': 100, 'charTotal': 440},
+    }
+    with open(os.path.join(d, '测试#1234 官服.json'), 'w', encoding='utf-8') as f:
+        json.dump(snap, f, ensure_ascii=False)
+    # 没有 secretary 的（MAA 导入的账号长这样）
+    with open(os.path.join(d, '纯导入.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '2', 'nickName': '纯导入'},
+                   'stats': {}}, f, ensure_ascii=False)
+    try:
+        settings.ACCOUNTS_DIR = d
+        rows = {r['file']: r for r in accounts.list_accounts()}
+        assert rows['测试#1234 官服.json']['secretary']['charId'] == 'char_4080_lin', \
+            rows['测试#1234 官服.json'].get('secretary')
+        assert rows['纯导入.json']['secretary'] == {}, rows['纯导入.json']['secretary']
+    finally:
+        settings.ACCOUNTS_DIR = keep_dir
+
+    # 2) 前端三处头像都走同一个 helper，不许再各自拼首字
+    assert 'function acctAvatar(' in js, 'app.js 没有 acctAvatar'
+    assert "a.secretary && a.secretary.charId" in js, '没读 secretary'
+    assert "`<img src=\"/api/avatar/${encodeURIComponent(id)}\" alt=\"\" loading=\"lazy\" onerror=\"this.remove()\">`" in js, \
+        'acctAvatar 里的 img 不完整（要么缺 lazy，要么缺 onerror 自删）'
+    assert js.count('${acctAvatar(a, cls)}') == 2, \
+        '侧栏/设置页应该都用 acctAvatar，实际 %d 处' % js.count('${acctAvatar(a, cls)}')
+    assert "hBox.classList.toggle('has-pic', !!hSec)" in js, '顶部头像没用看板娘'
+    assert "classList.remove('ef', 'has-pic')" in js, '删光账号后头像状态没清干净'
+
+    # 3) 样式：图片铺满 + 裁边
+    assert '.avatar img, .hero-avatar img' in css, 'style.css 缺头像图片规则'
+    assert 'object-fit: cover' in css, '头像没写 object-fit，会拉伸变形'
+    assert '.avatar {' in css and 'position: relative' in css, '.avatar 缺定位（img 绝对定位要靠它）'
+
+    # 4) 头像资源统一走 pack-data（不再有 AVATAR_BRANCH 这条岔路）
+    assert not hasattr(packrepo, 'AVATAR_BRANCH'), 'packrepo 还留着 AVATAR_BRANCH'
+    assert not hasattr(packrepo, 'avatar_urls'), 'packrepo 还留着 avatar_urls'
+    for u in packrepo.mirror_urls('resources/avatars/char_002_amiya.webp'):
+        assert '/' + packrepo.PACK_BRANCH + '/' in u or '@' + packrepo.PACK_BRANCH + '/' in u, \
+            '头像地址没指向 pack-data：%s' % u
+    from core import avatarcache
+    src = open(avatarcache.__file__, encoding='utf-8').read()
+    assert 'avatar_urls' not in src, 'avatarcache 还在用 avatar_urls'
 
 
 if __name__ == '__main__':

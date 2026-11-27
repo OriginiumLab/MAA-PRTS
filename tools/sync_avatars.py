@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""把干员头像从 PRTS Wiki 抓下来，压成 96px WebP，供数据分支分发
+"""把干员头像从 PRTS Wiki 抓下来，压成 96px WebP，推到 pack-data 分发
 
 为什么走 PRTS Wiki 而不是官方 CDN：
   - 官方资源没有稳定的公开索引，名字和 bundle 路径一一对应还要自己解包；
   - PRTS Wiki 的 ``头像_<干员名>.png`` 是社区维护的现成索引，带 MediaWiki
     API（``list=allimages&aiprefix=头像``），能分页拿全，不用爬 HTML；
-  - 产物只有几 KB 一张，350 个干员全量约 1.8MB——放我们的数据分支，
+  - 产物只有几 KB 一张，350 个干员全量约 2.2MB——放 pack-data 的 resources/avatars/，
     客户端用到哪张下哪张，安装包一个字节都不加。
 
 用法：
