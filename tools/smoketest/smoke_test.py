@@ -8956,6 +8956,8 @@ def main():
                 lambda: check_daily_longgrass(tmp))
         r.check('B82 程序图标（美术源 → 七档 ICO / 美术源缺失退回占位图）',
                 lambda: check_app_icon(tmp))
+        r.check('B83 换完 exe 刷图标缓存（不刷重启也不管用 / 装失败不白刷）',
+                lambda: check_icon_cache_refresh(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9696,6 +9698,58 @@ def check_app_icon(tmp):
     doc = open(os.path.join(REPO, 'docs', 'resources.md'),
                encoding='utf-8').read()
     assert 'assets/icon.png' in doc, 'docs/resources.md 没写美术源在哪'
+
+
+def check_icon_cache_refresh(tmp):
+    """B83 换完 exe 主动刷图标缓存（不刷的话重启电脑也不管用）
+
+    2026-11-28 现场：v2.8.7 装好了，桌面快捷方式还是 v2.8.6 的旧图。
+    `install.ps1` 换完文件直接 Start-Process，全程没通知 shell；本机
+    `iconcache_*.db` 时间戳停在 11-25 02:49，而系统 11-26 12:23 重启过
+    —— 说明**重启不会重建缓存**，只能主动发 SHCNE_ASSOCCHANGED。
+
+    这里不去碰真实缓存目录（也碰不到）：on_start 打桩到临时 update 目录，
+    验的是「替换成功补一次、没装成功不白刷」，最后真调一次函数本身。
+    """
+    from core import appupdate
+
+    keep = (appupdate.update_dir, appupdate._current, appupdate._state,
+            appupdate._save_state, appupdate.refresh_icon_cache)
+    try:
+        upd = os.path.join(tmp, 'update-icon')
+        os.makedirs(upd, exist_ok=True)
+        appupdate.update_dir = lambda: upd
+        appupdate._current = lambda: '2.8.8'
+        appupdate._state = lambda: {}
+        appupdate._save_state = lambda st: None
+
+        hits = []
+        appupdate.refresh_icon_cache = lambda: (hits.append(1), True)[1]
+
+        # 1) 替换成功（pending.to == 当前版本）→ 必须补一次刷新
+        appupdate._write_json(os.path.join(upd, 'pending.json'),
+                              {'from': '2.8.7', 'to': '2.8.8', 'tag': 'v2.8.8'})
+        st = appupdate.on_start()
+        assert st.get('ok') is True, st
+        assert len(hits) == 1, '替换成功后没刷新图标缓存，用户会一直看旧图标'
+
+        # 2) 没装成功（还是旧版本号）→ 不许白刷，还要带出失败原因
+        appupdate._current = lambda: '2.8.7'
+        appupdate._write_json(os.path.join(upd, 'pending.json'),
+                              {'from': '2.8.7', 'to': '2.8.8', 'tag': 'v2.8.8'})
+        with io.open(os.path.join(upd, 'install-error.txt'), 'w', encoding='utf-8') as f:
+            f.write('替换 _internal 失败 rc=9')
+        st = appupdate.on_start()
+        assert st.get('ok') is False and 'rc=9' in (st.get('error') or ''), st
+        assert len(hits) == 1, '没装成功却去刷了图标缓存'
+
+        # 3) 函数本身：Windows 上必须能调通（无副作用，只让 shell 重扫）
+        appupdate.refresh_icon_cache = keep[4]
+        if os.name == 'nt':
+            assert appupdate.refresh_icon_cache() is True, 'SHChangeNotify 调用失败'
+    finally:
+        (appupdate.update_dir, appupdate._current, appupdate._state,
+         appupdate._save_state, appupdate.refresh_icon_cache) = keep
 
 
 if __name__ == '__main__':
