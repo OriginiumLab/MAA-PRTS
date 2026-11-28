@@ -109,7 +109,7 @@ main()
 | POST | `/api/app/install` | 解压 + 拉起 install.ps1 + 退出程序（源码模式直接拒绝） |
 | POST | `/api/app/open` | 用系统浏览器打开 Release 页 |
 | GET | `/api/avatar/<charId>` | 干员头像。**不走 `ROUTES`**：`main.py` 按前缀分发（`/api/avatar/`），命中缓存直接回（`Cache-Control: public, max-age=604800`），拿不到回 404 让 `img onerror` 自己消失 |
-| GET | `/api/op?id=` | 作业详情（干员与要求、动作数、`maa://` 代码） |
+| GET | `/api/op?id=` | 作业详情（作业简介 `desc`、干员与要求含 `charId`/`stars`、动作数、`maa://` 代码） |
 | GET | `/api/maa/status` | MAA 是否运行、配置列表、当前配置 |
 | GET | `/api/maa/probe?dir=` | 检测目录是不是 MAA 根目录（引导/设置用）；附干员识别数据 `operbox/operboxCount/operboxSyncTime` |
 | POST | `/api/maa/close` | 关闭正在运行的 MAA 进程。**预留，无界面入口**（`/api/maa/apply` 流程内部复用同函数） |

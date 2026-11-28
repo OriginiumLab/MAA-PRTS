@@ -563,6 +563,9 @@ def api_op(q, _body):
         'content': content,
         'maaCode': 'maa://%s' % cid,
         'title': (content.get('doc') or {}).get('title'),
+        # 作业简介：作者写在 doc.details 里的自由文本（常夹群号/推广）。
+        # 原样交给前端，太长怎么折叠由前端按实际高度决定，这里不截断
+        'desc': ((content.get('doc') or {}).get('details') or '').strip(),
         'opers': copilot.detail_opers(content, owned),
         # 没选账号 / 账号没练度数据时 owned 是 None，前端就不标「缺谁」，
         # 否则整份作业都会被算成缺卡

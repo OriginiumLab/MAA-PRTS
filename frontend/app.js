@@ -1771,6 +1771,7 @@ async function showOpDetail(op, variant) {
       <button class="btn-plain" id="ban-op"${opBanned ? ' disabled title="已在黑名单里，可在设置 → 作业黑名单移除"' : ''}>${opBanned ? '已拉黑作业' : '拉黑作业'}</button>
       ${op.uploaderId ? `<button class="btn-plain" id="ban-author"${banned ? ' disabled title="已在黑名单里，可在设置 → 作者黑名单移除"' : ''}>${banned ? '已拉黑作者' : '拉黑作者'}</button>` : ''}
     </div>
+    <div id="op-desc" hidden></div>
     <label class="field"><span>干员与要求</span></label>
     <div id="op-detail-body" style="font-size:12px;color:var(--text-2);line-height:1.9">
       <div class="loading-row"><span class="spinner"></span>拉取作业详情…</div>
@@ -1813,6 +1814,27 @@ async function showOpDetail(op, variant) {
       api(opUrl).then(d => {
         const body = d.content || {};
         const shown = visOpers(d.opers);
+        /* 作业简介：doc.details 是作者手写的自由文本，常有群号、推广链接。
+           不筛行（怕误删关键说明），超过 7 行折叠，点「展开全文」看全。
+           折叠判定必须等布局落地——弹窗刚插入时 clientHeight 还是 0 */
+        const desc = String(d.desc || '').trim();
+        if (desc) {
+          const box = $('#op-desc', el);
+          box.hidden = false;
+          box.innerHTML = `<label class="field"><span>作业简介</span></label>
+            <div class="op-desc-text" id="op-desc-text">${esc(desc)}</div>
+            <button class="op-desc-more" id="op-desc-more" hidden>展开全文</button>`;
+          const tx = $('#op-desc-text', box);
+          requestAnimationFrame(() => {
+            if (tx.scrollHeight - tx.clientHeight < 6) return;
+            const more = $('#op-desc-more', box);
+            more.hidden = false;
+            more.addEventListener('click', () => {
+              const open = tx.classList.toggle('open');
+              more.textContent = open ? '收起' : '展开全文';
+            });
+          });
+        }
         /* 缺谁：owned=false 是没这个人，owned && !ok 是练度不到。
            只有「差一人可借」这一档才说得出具体的借人对象（助战位只能带一个），
            其余情况分开列：没的人和练度不够的人不是一回事。
@@ -1838,9 +1860,9 @@ async function showOpDetail(op, variant) {
           const tail = isBorrow ? '<em>借</em>'
             : (isSub ? `<em>由${esc(o.sub.name)}${o.sub.skill || ''}替换</em>`
               : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : '')));
-          return `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed rgba(255,255,255,.06);padding:5px 0">
-            <span class="op-name${cls}">${esc(o.name)}${tail}</span>
-            <span style="color:var(--text-3);font-size:11.5px">${esc(bits.join(' · ') || '无特殊要求')}</span>
+          return `<div class="op-row">
+            <span class="op-who">${opAv(o.charId, o.name, o.stars)}<span class="op-name${cls}">${esc(o.name)}${tail}</span></span>
+            <span class="op-req">${esc(bits.join(' · ') || '无特殊要求')}</span>
           </div>`;
         }).join('');
         const flags =

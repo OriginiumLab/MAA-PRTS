@@ -918,3 +918,24 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
 - **不认假图**：空包、HTML 错误页、只有 `RIFF` 头的假 WebP 都不许落盘。
 
 打桩 `settings.CONFIG_DIR`、`avatar_index`、`_from_mirrors`、`_from_prts`，不联网、不写真缓存。
+
+### B85 账号头像走看板娘（2026-11-28）
+
+森空岛同步时本来就存了 `account.secretary.charId`，列表页不再拼昵称首字。
+B85 钉三条：后端 `list_accounts` 把 `secretary` 带出来（没有的账号给空对象，
+不是缺键）；前端侧栏 / 设置页 / 顶部三处统一走 `acctAvatar()`，图片规则必须
+带 `loading="lazy"` 与 `onerror="this.remove()"`（拿不到图就露出首字，不裂图）；
+头像只认 `pack-data`，`packrepo` 不许再留 `AVATAR_BRANCH` / `avatar_urls` 这条岔路。
+
+### B86 作业详情带简介与干员头像（2026-11-28）
+
+弹窗原来只有「干员与要求」。B86 钉的是「字段有没有从头传到尾」：
+
+- **简介**：`/api/op` 把 `doc.details` 原样放进 `desc`，换行不许被吃掉（前端靠
+  `white-space: pre-wrap` 排版），也不截断——太长由前端按实际高度折叠；
+- **charId**：`detail_opers` 从资源包索引里补 `charId` / `stars`，名字认不出
+  （改名、异格没进包）时 charId 留空串，前端 `opAv` 自然退回首字底块，绝不瞎编；
+- **前端**：简介块 `#op-desc` 默认 hidden，没简介就不占位；干员行改 `.op-row`
+  + `.op-av`，边框用 `rgba(var(--tint), a)`，不许再写死白色（浅色主题会露黑线）。
+
+打桩 `copilot.operation_detail` 返回假 content，不联网。

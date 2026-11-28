@@ -8962,6 +8962,8 @@ def main():
                 lambda: check_avatar_cache(tmp))
         r.check('B85 账号头像走看板娘（无 secretary 退回首字 / 资源统一 pack-data）',
                 lambda: check_account_avatar(tmp))
+        r.check('B86 作业详情带简介与干员头像（简介原样下传 / charId 来自资源包）',
+                lambda: check_op_detail_desc(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9909,6 +9911,69 @@ def check_account_avatar(tmp):
     from core import avatarcache
     src = open(avatarcache.__file__, encoding='utf-8').read()
     assert 'avatar_urls' not in src, 'avatarcache 还在用 avatar_urls'
+
+
+def check_op_detail_desc(tmp):
+    """B86 作业详情弹窗：作业简介 + 干员头像
+
+    2026-11-28 加。用户截图里那份弹窗只有「干员与要求」，两个诉求各钉一条：
+
+    - **作业简介**：作者写在 ``doc.details`` 里的自由文本，之前只有搜索列表
+      截 400 字给 ``briefOf`` 用，详情弹窗拿不到全文。改成 ``/api/op`` 原样
+      下传，前端超 7 行折叠——不筛行，怕把「这个位置要手动下干员」这类关
+      键说明当推广删掉；
+    - **干员头像**：``detail_opers`` 从资源包索引里补 ``charId`` / ``stars``，
+      前端复用抽卡那套 ``opAv()``。名字对不上资源包（改名、异格）时 charId
+      为空，img 不渲染，退回首字底块，不会裂图。
+
+    这两条都是「字段有没有从头传到尾」，桩掉网络请求直接查返回值最稳。
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(repo, 'frontend', 'style.css'), encoding='utf-8').read()
+
+    from core import api, copilot
+
+    content = {
+        'stage_name': 'act46side_01',
+        'doc': {'title': 'OS-1 - 呼号声中',
+                'details': '原作者：萧然Q\n作业交流群 123456\n站位见图'},
+        'opers': [{'name': '艾雅法拉'}, {'name': '这个人不存在'}],
+        'actions': [{'type': 'Deploy'}, {'type': 'Skill'}],
+    }
+    keep = copilot.operation_detail
+    try:
+        copilot.operation_detail = lambda cid: {'meta': {'id': cid}, 'content': content}
+        d = api.api_op({'id': '73176'}, None)
+    finally:
+        copilot.operation_detail = keep
+
+    # 1) 简介原样下传（含换行，不截断）
+    assert d['desc'] == content['doc']['details'], repr(d.get('desc'))
+    assert d['desc'].count('\n') == 2, '简介的换行丢了（前端靠 pre-wrap 排版）'
+
+    # 2) 干员带上 charId / 星级；认不出的名字留空（前端退回首字）
+    o1, o2 = d['opers']
+    assert o1['charId'].startswith('char_'), o1.get('charId')
+    assert o1['stars'] == 6, o1.get('stars')
+    assert o2['charId'] == '', '认不出的干员不该瞎编 charId：%r' % o2.get('charId')
+    # 详情_opers 的展示字段没被这轮改动挤掉
+    assert 'req' in o1, 'req 丢了'
+
+    # 3) 前端：简介块 + 折叠 + 头像行
+    assert '<div id="op-desc" hidden></div>' in js, '弹窗里没有简介占位'
+    assert '作业简介' in js, '没有「作业简介」标题'
+    assert 'String(d.desc || \'\')' in js, '没读 /api/op 的 desc'
+    assert "classList.toggle('open')" in js, '「展开全文」没有展开态'
+    assert '<div class="op-row">' in js, '干员行没用 op-row'
+    assert '${opAv(o.charId, o.name, o.stars)}' in js, '干员行没接头像'
+    assert 'rgba(255,255,255' not in js.split('function check_op_detail_desc')[0][-4000:], \
+        '干员行还在写死白色边框'
+
+    # 4) 样式：折叠高度 + 头像尺寸
+    assert '.op-desc-text.open { max-height: none; }' in css, '展开后没解除高度限制'
+    assert '.op-row .op-av {' in css, '弹窗里的头像没单独定尺寸'
+    assert 'white-space: pre-wrap' in css, '简介不保留换行会挤成一坨'
 
 
 if __name__ == '__main__':

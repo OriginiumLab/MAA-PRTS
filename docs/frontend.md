@@ -64,7 +64,7 @@ api('/api/xxx', body)   // 统一包成 {ok, data|error}
 | `renderQuick()` | 快捷活动胶囊：活动名 + 关卡代号字母 + NEW 角标 |
 | `toggleBasket()` | 窄屏抽屉开关（≤1180px），控制 `.basket.show`、遮罩与浮动按钮 |
 | `renderResult()` | 单关卡卡片 / 活动关卡列表两套版式 |
-| `showOpDetail(op, variant)` | 作业详情弹窗：干员与要求（MAA 识别建的号不判技能/专精/模组），顶部按比对结果给提示条——**需要借谁**（紫，仅「差一人可借」说得准）、**缺谁练度**（橙），干员名同色并带「借 / 没有 / 练度不足」小标签。数据来自 `/api/op` 的 `opers[].owned/ok`；`compared=false`（没选账号）时一律不标 |
+| `showOpDetail(op, variant)` | 作业详情弹窗：**作业简介**（`/api/op` 的 `desc`，作者自由文本原样保留换行，超 7 行折叠成「展开全文」，不筛掉群号/推广怕误删关键说明）；**干员行带头像**（`opAv(o.charId, o.name, o.stars)`，名字对不上资源包时 charId 为空、img 不渲染退回首字底色）；干员与要求（MAA 识别建的号不判技能/专精/模组），顶部按比对结果给提示条——**需要借谁**（紫，仅「差一人可借」说得准）、**缺谁练度**（橙），干员名同色并带「借 / 没有 / 练度不足」小标签。数据来自 `/api/op` 的 `opers[].owned/ok`；`compared=false`（没选账号）时一律不标 |
 | `renderBasket()` | 右侧作业集（含拖动排序） |
 | `openAccountWizard(mode)` | 账号向导共用组件（首次引导 `onboard` / 添加账号 `add`）：第 1 页选 MAA 根目录，第 2 页二选一——森空岛 token（一行一个批量导入）或「直接从选定的 MAA 导入」（不用 token，调 `POST /api/account/create-from-maa` 建本地账号）。token 那条路**只在「只加了一个号且它同步后没有练度」时**才用 MAA 识别结果兜底：`OperBoxData.json` 每个 MAA 目录只有一份（当时登录的那个号），批量加号挨个导入会把所有账号写成同一个练度，而 token 同步来的练度含技能/专精/模组，被本地识别顶掉是纯降级 |
 | `openOnboarding()` / `openAddAccount()` | 上面的薄包装（引导多一个「稍后设置」，成功后把目录存为全局默认） |

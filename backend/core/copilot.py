@@ -1126,7 +1126,11 @@ def detail_opers(content, owned_map=None):
                  if isinstance(o, dict)]
     for op in content.get('opers') or []:
         o = dict(op)
-        stars = (idx.get(o.get('name') or '') or (6,))[0]
+        hit = idx.get(o.get('name') or '') or ()
+        stars = hit[0] if hit else 6
+        # 详情弹窗要显示头像：资源包里的 charId 本身就是 /api/avatar/<id> 的键
+        o['charId'] = hit[1] if len(hit) > 1 else ''
+        o['stars'] = stars
         owned = (owned_map or {}).get(norm(o.get('name')))
         known = bool(owned.get('skillKnown', True)) if owned else True
         sub = sub_rule_for(op, owned_map, top_names) if owned_map else None
