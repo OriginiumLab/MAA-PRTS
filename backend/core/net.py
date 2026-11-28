@@ -119,12 +119,12 @@ def _build_opener(redirect=True, proxy=None, addr=None):
     )
 
 
-def open(req, timeout=None, redirect=True):
+def open(req, timeout=None, redirect=True, *, retry_direct=True):
     """urllib.request.urlopen 的带代理版（redirect=False 不跟随跳转）
 
     配了代理但连不上（拒绝 / 超时 / 不可达 / 隧道被拒）时自动回退直连
     重试一次。拿到 HTTP 应答（哪怕 4xx/5xx）不算「连不上」，照常抛给
-    上层按业务处理——这里的请求全是 GET/HEAD，重试无副作用。
+    上层按业务处理。有副作用的请求可设置 retry_direct=False，避免重复发送。
     """
     p = str(settings.load().get('proxy') or '').strip()
     addr = _proxy_addr(p) if p else None
@@ -136,7 +136,7 @@ def open(req, timeout=None, redirect=True):
     except urllib.error.URLError as e:
         # HTTPError（有状态码的应答）的 reason 是字符串，只有网络层错误
         # 才回退——别把「代理明确拒绝了这个请求」也偷偷绕过去
-        if isinstance(getattr(e, 'reason', None), OSError):
+        if retry_direct and isinstance(getattr(e, 'reason', None), OSError):
             return direct.open(req, timeout=timeout)
         raise
 

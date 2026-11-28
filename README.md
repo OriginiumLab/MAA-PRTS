@@ -95,12 +95,14 @@ MAA-PRTS\
 
 ```bat
 py -3 -m venv .venv
-.venv\Scripts\pip install pywebview pythonnet pyinstaller pillow
+.venv\Scripts\pip install pywebview pythonnet pyinstaller pillow "PyJWT[crypto]"
 ```
 
 ---
 
 ## 首次启动会做什么
+
+本地 ChatGPT 套餐版的授权、配置迁移和更新方式见 [使用 ChatGPT 套餐](docs/chatgpt.md)。
 
 第一次打开会弹一个两步引导：
 

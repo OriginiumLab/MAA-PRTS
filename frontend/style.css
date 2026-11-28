@@ -2297,6 +2297,36 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
   font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+#chat-plan {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.chatgpt-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.chatgpt-actions .chatgpt-signin {
+  background: #000;
+  color: #fff;
+}
+
+#set-ag-chatgpt > p:first-child, #set-ag-api > p:first-child {
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+#set-ag-api[hidden], #set-ag-chatgpt[hidden],
+#set-ag-chatgpt [hidden], #chat-plan[hidden] {
+  display: none;
+}
 .chat-tools { display: flex; gap: 2px; }
 .chat-ico {
   width: 27px; height: 27px; border-radius: 8px;

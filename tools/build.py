@@ -239,6 +239,9 @@ def build():
         '--hidden-import', 'clr',
         '--hidden-import', 'clr_loader',
         '--hidden-import', 'pythonnet',
+        # ChatGPT 登录在冻结包内用 PyJWT 和 cryptography 的 RSA 扩展验签。
+        '--hidden-import', 'jwt',
+        '--hidden-import', 'cryptography.hazmat.primitives.asymmetric.rsa',
         # CLI 入口是 main() 里的分支（`MAA-PRTS.exe --cli ...`），显式声明
         # 免得哪天挪成动态导入后被漏掉
         '--hidden-import', 'cli',
@@ -269,9 +272,23 @@ def build():
         print('\nbuild failed, exit code %d (intermediates kept in build\\work for inspection)' % rc)
         return rc
 
+    fresh = os.path.join(dist_dir, 'MAA-PRTS')
+    try:
+        crypto_check = subprocess.run(
+            [os.path.join(fresh, 'MAA-PRTS.exe'), '--verify-chatgpt-crypto'],
+            cwd=fresh, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f'ChatGPT RSA 验签自检无法完成（{exc}）。保留临时打包目录：{fresh}')
+        return 1
+    if crypto_check.returncode:
+        print(f'ChatGPT RSA 验签自检失败（退出码 {crypto_check.returncode}）。'
+              f'保留临时打包目录：{fresh}')
+        return 1
+    print('ChatGPT RSA 验签自检通过（打包版 EXE）')
+
     # 全新产物合并覆盖进发布包：同名文件覆盖，config/、debug/ 等一律不动。
     # exe 正在运行时 Windows 文件锁会让覆盖失败，保留现场让用户处理。
-    fresh = os.path.join(dist_dir, 'MAA-PRTS')
     try:
         merge_overwrite(fresh, pkg_dir)
     except PermissionError:

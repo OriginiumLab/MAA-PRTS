@@ -32,8 +32,9 @@ import traceback
 import urllib.request
 import uuid
 
-from . import (accounts, acctbind, asstlog, copilot, maa, multiacct, progress,
-               resources, settings, skills, tasks, vault, watch)
+from . import (accounts, acctbind, asstlog, chatgpt_auth, chatgpt_responses,
+               copilot, maa, multiacct, progress, resources, settings, skills,
+               tasks, vault, watch)
 
 MAX_TURNS = 12
 KEEP_MESSAGES = 24
@@ -68,6 +69,7 @@ def config():
     """前端要的配置视图：有 key 只说有没有，绝不回传明文"""
     st = settings.load().get('agent') or {}
     return {
+        'provider': st.get('provider', 'api_key'),
         'baseUrl': st.get('baseUrl') or '',
         'model': st.get('model') or '',
         'autoApply': bool(st.get('autoApply')),
@@ -77,7 +79,7 @@ def config():
 
 def save_config(patch):
     cur = dict(settings.load().get('agent') or {})
-    for k in ('baseUrl', 'model', 'autoApply'):
+    for k in ('baseUrl', 'model', 'autoApply', 'provider'):
         if k in (patch or {}):
             cur[k] = patch[k]
     settings.save({'agent': cur})
@@ -89,6 +91,22 @@ def save_config(patch):
 # ---------------------------------------------------------------- LLM
 class LLMError(RuntimeError):
     pass
+
+
+def _chatgpt_connection():
+    if (settings.load().get('agent') or {}).get('provider') != 'chatgpt':
+        return None
+    profile = chatgpt_auth.status()
+    return profile.get('active', ''), profile.get('connection', ''), profile.get('model', '')
+
+
+def _chatgpt_stream(connection, messages, tools, on_delta=None):
+    if not connection[2]:
+        raise LLMError('请在助手设置登录 ChatGPT、授权套餐并选择模型。')
+    try:
+        return chatgpt_responses.stream(connection, _sanitize(messages), tools, on_delta)
+    except chatgpt_auth.ChatGPTError as exc:
+        raise LLMError(str(exc)) from None
 
 
 def _sanitize(messages):
@@ -2223,7 +2241,11 @@ def try_skill(text, skill=None, run=False):
         raise ValueError('没有这个工具：%s' % name)
     msgs = [{'role': 'system', 'content': PROBE_SYSTEM},
             {'role': 'user', 'content': text}]
-    said, calls, fin = _plain(msgs, tools)
+    connection = _chatgpt_connection()
+    if connection is None:
+        said, calls, fin = _plain(msgs, tools)
+    else:
+        said, calls, fin, _ = _chatgpt_stream(connection, msgs, tools)
     out = {'text': text, 'said': said, 'picked': '', 'args': {},
            'matched': None, 'taskId': '', 'note': ''}
     if not calls:
@@ -2734,6 +2756,7 @@ class Session:
     def __init__(self, sid=None):
         self.id = sid or uuid.uuid4().hex[:12]
         self.messages = []
+        self.chatgpt_connection = None
         self.events = []
         self.pending = None
         self.pending_call = None
@@ -2816,6 +2839,10 @@ def chat(sid, text):
     text = str(text or '').strip()
     if not text:
         return {'ok': False, 'error': '空消息'}
+    connection = _chatgpt_connection()
+    if s.messages and s.chatgpt_connection != connection:
+        s = session()
+    s.chatgpt_connection = connection
     s.error = ''
     s.push('user', text=text)
     s.messages.append({'role': 'user', 'content': text})
@@ -2836,6 +2863,8 @@ def confirm(sid):
         return {'ok': False, 'error': '还在处理中'}
     if not s.pending:
         return {'ok': False, 'error': '没有待确认的操作'}
+    if s.chatgpt_connection != _chatgpt_connection():
+        return {'ok': False, 'error': '模型连接已变更，请开启新对话后重新提交。'}
     s.running = True
     s.thread = threading.Thread(target=_run_pending, args=(s,), daemon=True,
                                 name='agent-confirm')
@@ -2892,20 +2921,28 @@ def _say_stream(s):
     return on_delta, close
 
 
+def _reply(s, messages, on_delta):
+    if s.chatgpt_connection is not None:
+        return _chatgpt_stream(s.chatgpt_connection, messages, TOOLS, on_delta)
+    try:
+        content, calls, finish = _stream(messages, TOOLS, on_delta)
+    except LLMError:
+        raise
+    except Exception:
+        # 兼容不能同时使用 stream 和 tools 的服务。
+        content, calls, finish = _plain(messages, TOOLS)
+        if content:
+            s.push('say', text=content)
+    return content, calls, finish, None
+
+
 def _loop(s):
     try:
         for _turn in range(MAX_TURNS):
             msgs = [{'role': 'system', 'content': SYSTEM}] + s.messages
             on_delta, close = _say_stream(s)
             try:
-                content, calls, fin = _stream(msgs, TOOLS, on_delta)
-            except LLMError:
-                raise
-            except Exception:
-                # stream+tools 不被支持时退回非流式
-                content, calls, fin = _plain(msgs, TOOLS)
-                if content:
-                    s.push('say', text=content)
+                content, calls, fin, output = _reply(s, msgs, on_delta)
             finally:
                 close()
             # 撞 token 上限：模型没说完，得让用户知道并接着要（否则就是
@@ -2913,11 +2950,14 @@ def _loop(s):
             if fin == 'length':
                 s.push('say', text='（这条回复撞到模型输出上限，被截断了。'
                                    '说「继续」我接着讲）')
+            reply = {'role': 'assistant', 'content': content or ''}
+            if output is not None:
+                reply['_chatgpt_output'] = output
+            if calls:
+                reply['tool_calls'] = calls
+            s.messages.append(reply)
             if not calls:
-                s.messages.append({'role': 'assistant', 'content': content or ''})
                 break
-            s.messages.append({'role': 'assistant', 'content': content or '',
-                               'tool_calls': calls})
             stop = False
             for i, call in enumerate(calls):
                 stop = _do_call(s, call) or stop
@@ -3018,5 +3058,11 @@ def _run_pending(s):
 def status():
     """设置页/面板判断能不能用"""
     cfg = config()
-    return {'configured': bool(cfg['hasKey'] and cfg['model'] and cfg['baseUrl']),
-            **cfg, 'sessions': len(_sessions)}
+    chatgpt = chatgpt_auth.status()
+    use_plan = cfg['provider'] == 'chatgpt'
+    api_ready = bool(cfg['hasKey'] and cfg['model'] and cfg['baseUrl'])
+    return {
+        **cfg, 'apiReady': api_ready, 'chatgpt': chatgpt, 'sessions': len(_sessions),
+        'configured': bool(chatgpt.get('permission') and chatgpt.get('model')) if use_plan else api_ready,
+        'displayModel': chatgpt.get('model', '') if use_plan else cfg['model'],
+    }
