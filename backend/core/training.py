@@ -12,20 +12,30 @@
     技能      char_skill/{skillId}.png      （skcom_atk_up[2] 里的方括号要转义）
     模组      uniequip/{moduleId}.png
 
+**技能 id 得用资源包里的那份，不能直接用快照的**：森空岛 player/info 把公共技能
+的等级后缀剥掉了（只给 skcom_heal_up），官方 CDN 上只有 skcom_heal_up[1]/[2]/[3].png，
+拿裸 id 拼地址必 404，整格空着。资源包 chars[].skills 是 character_table 的原样 id，
+用它补正（顺带把技能正式名补上——快照里这类技能的名字就是 id 本身）。
+
 「证章」（uniequip_001_*，精英化后人人都有、恒 1 级）不进来：CDN 上没有
 它的图，摆在模组列里既没信息也全是灰块——模组列只放真模组。
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 
-from . import accounts
+from . import accounts, resources
 
 CDN = 'https://web.hycdn.cn/arknights/game/assets/'
 # 职业筛选的固定顺序（游戏里从左到右），不按接口返回顺序
 PROFESSIONS = ('先锋', '近卫', '重装', '狙击', '术师', '医疗', '辅助', '特种')
 # 稀有度筛选：>=4 单独一档，3 星及以下并一档（三星以上才值得单独看）
 RARITIES = ((6, '六星'), (5, '五星'), (4, '四星'), (0, '三星及以下'))
+
+# 技能 id 的等级后缀：公共技能在官方资源里是 skcom_heal_up[1]/[2]/[3]
+_SUFFIX = re.compile(r'\[[^\]]*\]$')
+
 
 
 def _icon(path: str) -> str:
@@ -53,6 +63,20 @@ def _num(v) -> int:
 
 
 def _skills(c: dict) -> list:
+    """技能：``id`` 来自快照，图标/名字按资源包里的**带后缀 id** 补正
+
+    森空岛 player/info 把公共技能的等级后缀剥掉了（只给 ``skcom_heal_up``），
+    而官方 CDN 上只有 ``skcom_heal_up[1]/[2]/[3].png`` —— 直接拿裸 id 拼地址
+    必 404，整列空一格（2026-11-29 用户报的「部分图标丢失」）。资源包里
+    ``chars[].skills`` 是 character_table 的原样 id（带后缀），拿它对一遍即可；
+    对不上（旧包 / 新干员）就退回裸 id，最差是占位块，不会崩。
+    """
+    pack_ids = [s for s in (_pack_char(c.get('charId')) or {}).get('skills') or []
+                if isinstance(s, str) and s]
+    by_base = {}
+    for pid in pack_ids:
+        by_base.setdefault(_SUFFIX.sub('', pid), pid)
+
     out = []
     for s in c.get('skills') or []:
         if not isinstance(s, dict):
@@ -60,14 +84,30 @@ def _skills(c: dict) -> list:
         sid = (s.get('id') or '').strip()
         if not sid:
             continue
+        real = sid if sid in pack_ids else by_base.get(sid) or sid
+        name = (s.get('name') or '').strip()
+        if not name or name == sid:
+            # 快照里公共技能没有名字（updater 查表查不到就写了 id），
+            # 资源包技能表里有「治疗强化·γ型」这种正式名
+            name = (resources.skill_table().get(real) or '').strip() or real
         out.append({
-            'id': sid,
-            'name': s.get('name') or sid,
+            'id': real,
+            'name': name,
             # specializeLevel：0 = 没专精，1/2/3 = 专一/专二/专三
             'mastery': max(0, min(3, _num(s.get('mastery')))),
-            'icon': _skill_icon(sid),
+            'icon': _skill_icon(real),
         })
     return out
+
+
+def _pack_char(char_id: str) -> dict:
+    if not char_id:
+        return {}
+    try:
+        return (resources.char_table().get(char_id) or {})
+    except Exception:          # 资源包坏了/没有也不该让整页挂掉
+        return {}
+
 
 
 def _modules(c: dict) -> list:

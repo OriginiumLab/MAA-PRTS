@@ -2483,6 +2483,29 @@ potential / skillLevel / favor`，`skills[]` 是 `{id, name, mastery}`（mastery
 > 「精英化后人人都有、恒 1 级」的东西，没有独立图。`training._modules()` 直接
 > 按 `kind == '证章'` 滤掉，模组列只放真模组；否则满屏灰块还 404 刷日志。
 
+### 公共技能的等级后缀（2026-11-29 用户报「部分图标丢失」）
+
+技能 id 不能直接用快照里的，得用**资源包**里的那份：
+
+| 来源 | `skcom_heal_up` 这类公共技能长什么样 |
+|---|---|
+| 森空岛 `player/info`（快照） | `skcom_heal_up`（**后缀被剥掉了**） |
+| `character_table.json`（资源包 `chars[].skills`） | `skcom_heal_up[3]` |
+| 官方 CDN | 只有 `skcom_heal_up[1]/[2]/[3].png`，裸 id 一律 404 |
+
+所以 `training._skills()` 先拿快照 id 去资源包的 `chars[charId].skills` 里对，
+对不上就按去掉 `[...]` 的基底再对一遍，命中就用包里的 id 拼图标；技能名同理
+（快照里这类技能的名字就是 id 本身，包里技能表才有「治疗强化·γ型」）。
+
+背景：公共技能在官方数据里是 α/β/γ **三条不同记录**，游戏客户端按 character_table
+的 id 直接取图；森空岛为了统一展示把后缀抹平了，于是「同一个干员的技能只有第一格
+是空的」——`skchr_*` 都在，缺的全是 `skcom_*`。资源包里 103 条带后缀的 id 就是
+这批。判据很简单：某个号缺的图标如果全是 `skcom_` 开头，就是这个原因，不是 token、
+不是网络。
+
+`make_pack.py` 生成 `chars[].skills` 时**必须原样保留方括号**（它是文件名的组成
+部分，不是可选的修饰）。旧包没有这个字段时 `_skills()` 退回裸 id，最差是占位块。
+
 ### 统计口径
 
 - `total / sixStar / e2 / mastery3 / module3 / moduleCount / favorMax` 全部
@@ -2517,7 +2540,6 @@ potential / skillLevel / favor`，`skills[]` 是 `{id, name, mastery}`（mastery
 前端 `acctAvatarUrl(a)` 是唯一出口，侧栏账号卡、设置页预览、顶部大头像三处都
 走它；两样数据都没有（MAA 导入的号）就退昵称首字，`img onerror` 自删。
 
-## 定时任务（`scheduler.py`，2026-11-22）
 ## 定时任务（`scheduler.py`，2026-11-22）
 
 设置里的「定时任务」页：到点启动外部程序，支持链式启动。只做「把用户的程序

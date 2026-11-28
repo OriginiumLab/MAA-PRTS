@@ -10213,6 +10213,9 @@ def check_training(tmp):
     - **干员练度表**：纯读账号快照的 chars 段，不发网络请求（MAA 导入的号也能
       看）；技能/模组图标按官方 CDN 拼地址，安装包零增长；「证章」
       （``uniequip_001_*``）不进模组列——CDN 没图、恒 1 级，摆出来只是灰块。
+    - **公共技能的等级后缀**（2026-11-29 补）：快照给的是被剥掉后缀的裸 id
+      （``skcom_heal_up``），CDN 上只有 ``skcom_heal_up[1]/[2]/[3].png``，
+      必须用资源包 ``chars[].skills`` 补正，否则整格空着。
     """
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
@@ -10222,8 +10225,9 @@ def check_training(tmp):
     main_src = open(os.path.join(repo, 'backend', 'main.py'), encoding='utf-8').read()
     api_src = open(os.path.join(repo, 'backend', 'core', 'api.py'), encoding='utf-8').read()
     tr_src = open(os.path.join(repo, 'backend', 'core', 'training.py'), encoding='utf-8').read()
+    pack_src = open(os.path.join(repo, 'resources', 'make_pack.py'), encoding='utf-8').read()
 
-    from core import accounts, settings, training
+    from core import accounts, resources, settings, training
 
     # 1) 头像设置：默认游戏内，非法值回游戏内
     assert settings.DEFAULTS.get('acctAvatar') == 'game', '账号头像默认值必须是游戏内'
@@ -10297,6 +10301,37 @@ def check_training(tmp):
     assert v['hasToken'] is True and v['syncedAt'].startswith('2026-11-29')
     assert v['account']['avatar'].endswith('/avatar/sp.png')
 
+    # 3.1) 公共技能：快照里是被剥掉等级后缀的裸 id（skcom_heal_up），而官方 CDN
+    #      上只有 skcom_heal_up[1]/[2]/[3].png——裸 id 拼地址必 404，整格空着
+    #      （2026-11-29 用户报的「部分图标丢失」）。资源包 chars[].skills 是
+    #      character_table 原样 id，用它补图标，顺带把技能正式名补回来。
+    snap2 = {'account': {'uid': '2', 'nickName': '丙号'},
+             'chars': [{'charId': 'char_c', 'name': '丙', 'rarity': 5, 'elite': 2,
+                        'level': 80,
+                        'skills': [{'id': 'skcom_heal_up', 'name': 'skcom_heal_up',
+                                    'mastery': 0}]}]}
+    keep_ct, keep_stt = resources.char_table, resources.skill_table
+    try:
+        resources.char_table = lambda: {'char_c': {'name': '丙',
+                                                   'skills': ['skcom_heal_up[3]']}}
+        resources.skill_table = lambda: {'skcom_heal_up[3]': '治疗强化·γ型'}
+        accounts.get_account = lambda f: snap2
+        v2 = training.view('y.json')
+    finally:
+        resources.char_table, resources.skill_table = keep_ct, keep_stt
+        accounts.get_account = keep_acc
+    s2 = v2['chars'][0]['skills'][0]
+    assert s2['id'] == 'skcom_heal_up[3]', '没按资源包补全等级后缀：%r' % s2['id']
+    assert 'char_skill/skcom_heal_up%5B3%5D.png' in s2['icon'], s2['icon']
+    assert s2['name'] == '治疗强化·γ型', '技能名还停在裸 id：%r' % s2['name']
+    # 资源包里确实带着带后缀的技能 id（make_pack 生成、随包发布）
+    _ids = [s for c in resources.char_table().values()
+            for s in (c.get('skills') or []) if isinstance(s, str)]
+    assert _ids, '资源包没带干员技能 id（重跑 make_pack / sync_pack）'
+    assert any('[' in s for s in _ids), '资源包里没有 skcom_xxx[n] 这种带后缀的 id'
+    assert "'skills': [str(s.get('skillId')" in pack_src, \
+        'make_pack 没把干员技能 id 写进资源包'
+
     # 4) 界面与接口：tab / 面板 / 刷新按钮 / 两个接口 / 通用图标代理
     assert 'data-mod="training"' in html and 'id="mod-training"' in html, '干员练度 tab 没接上'
     assert 'id="btn-tr-refresh"' in html, '练度页缺刷新按钮'
@@ -10307,6 +10342,9 @@ def check_training(tmp):
     assert 'function acctAvatarUrl' in js and "=== 'secretary'" in js, '头像没按设置取图'
     # 默认值钉在 js 里：设置里没这个键（老用户）时也得走游戏内头像
     assert "'game')" in js and 'acctAvatar' in js
+    # 图标偶发失败要重试一次再放弃：直接 remove 会让「偶尔超时」变成「永久缺一格」
+    assert 'function trImgFail' in js and 'onerror="trImgFail(this)"' in js, \
+        '练度图标失败没重试，偶发断流就永久少一张'
     assert "m.get('kind') == '证章'" in tr_src, '证章没被挡在模组列外'
     assert '.tr-skill' in css and '.tr-mod' in css and '--tr-cols' in css
 

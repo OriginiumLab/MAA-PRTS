@@ -88,7 +88,11 @@ GitHub Actions  .github/workflows/pack.yml
       "name": "跃跃", "rarity": 3,            // 0 基：3 = 四星
       "profession": "SNIPER",                // 英文枚举，界面再翻中文
       "subProfessionId": "loopshooter",
-      "isNotObtainable": false               // true = 剧情 NPC，不计入图鉴
+      "isNotObtainable": false,              // true = 剧情 NPC，不计入图鉴
+      "skills": ["skcom_quickattack[1]"],    // 该干员自己的技能 id，**带等级后缀**
+                                             //   公共技能在官方资源里是 [1]/[2]/[3] 三条
+                                             //   （α/β/γ 型），森空岛接口会把后缀剥掉，
+                                             //   只拿裸 id 拼 CDN 图标必然 404（练度表用）
     }
   },
   "skills": { "skchr_xxx_2": "技能名" },

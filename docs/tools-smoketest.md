@@ -997,5 +997,13 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
   `game` 是兜底；
 - **样式**：`--mint-rgb` 在两个主题里都定义了，`rgba(var(--mint),` 这种非法写法
   一个都不许留（分页高亮曾经因此一直不生效）。
+- **公共技能的等级后缀**（2026-11-29 补，用户报「部分图标丢失」）：喂一个技能 id
+  是裸 `skcom_heal_up` 的快照 + 一个 `char_table` 里给 `skcom_heal_up[3]` 的桩，
+  断言出来的 `id/icon/name` 都变成带后缀那份（`skcom_heal_up%5B3%5D.png`、
+  「治疗强化·γ型」）；同时检查 `resources.char_table()` 里真有带 `[` 的 id、
+  `make_pack.py` 里有生成 `chars[].skills` 的代码——只修一半（改了客户端没改
+  资源包）照样满屏空格；
+- **图标重试**：`trImgFail` 必须存在且挂在 `onerror` 上——直接 `remove()` 会把
+  偶发超时变永久缺图。
 
 全部打桩，不联网、不写真账号。

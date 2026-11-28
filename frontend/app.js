@@ -6674,11 +6674,22 @@ function trUrl(u, s) {
   return u ? `/api/garrison/img?u=${encodeURIComponent(u)}&s=${s || 96}` : '';
 }
 
+/* 图挂了先重试一次再放弃：一屏几十上百张图同时走本地代理，CDN 偶发断流是
+   常态（实测同一地址上一次超时、下一次 200）。直接 remove 会让「偶发」变成
+   「永久缺一格」，用户看到的就是随机几个空位。加 &r=1 只换浏览器缓存键，
+   后端的缓存键还是 u+s，重试不会真的重新下载已经存好的图。 */
+function trImgFail(el) {
+  if (!el) return;
+  if (el.dataset.retried) { if (el.parentNode) el.remove(); return; }
+  el.dataset.retried = '1';
+  el.src = el.src + (el.src.indexOf('?') >= 0 ? '&r=1' : '?r=1');
+}
+
 /* 一个方形图标格子：底下放首字兜底，图盖在上面；图挂了自然露出首字，
    跟头像块同一套思路，不用记状态 */
 function trIco(cls, url, fallback, badge, tip, size) {
   const img = url
-    ? `<img src="${trUrl(url, size || 96)}" alt="" loading="lazy" onerror="this.remove()">`
+    ? `<img src="${trUrl(url, size || 96)}" alt="" loading="lazy" onerror="trImgFail(this)">`
     : '';
   return `<span class="${cls}"${tip ? ` title="${esc(tip)}"` : ''}>`
     + `<i>${esc(fallback)}</i>${img}${badge || ''}</span>`;

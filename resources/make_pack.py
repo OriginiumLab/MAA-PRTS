@@ -115,6 +115,12 @@ def build(excel_dir, subprof_path=None, base_path=None, game_version='',
             'profession': v.get('profession') or '',
             'subProfessionId': v.get('subProfessionId') or '',
             'isNotObtainable': bool(v.get('isNotObtainable')),
+            # 这个干员自己的技能 id，**带等级后缀**（公共技能在官方资源里是
+            # skcom_charge_cost[1]/[2]/[3] 三条不同的记录，对应 α/β/γ 型）。
+            # 森空岛的 player/info 把后缀剥了，干员练度表只拿快照拼图标就会
+            # 404（2026-11-29 用户报「部分图标丢失」），所以由资源包给出正解。
+            'skills': [str(s.get('skillId') or '') for s in (v.get('skills') or [])
+                       if s.get('skillId')],
         }
 
     skills = {}
