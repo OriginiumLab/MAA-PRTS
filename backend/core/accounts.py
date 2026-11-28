@@ -71,6 +71,9 @@ def list_accounts():
             # 有没有可用的森空岛 token：抽卡统计/签到都要它，MAA 导入的账号没有
             'hasToken': bool(_dict(snap.get('skd')).get('data')),
             'secretary': a.get('secretary') or {},
+            # 游戏内头像（森空岛 player/info 的 status.avatar.url，官方 CDN 直链）。
+            # 设置里选「游戏内」时界面用它；拿不到（MAA 导入的号）就退首字。
+            'avatar': a.get('avatar') or '',
             'maaProfile': _dict(snap.get('maa')).get('profile') or '',
             # MAA 切号名：官服是手机号掩码（181****5505），B 服是游戏内用户名。
             # 存下来就不用每次挂机都问一遍——这是唯一必须问用户的字段，

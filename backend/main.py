@@ -219,6 +219,23 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, data, api.MIME.get('.' + ext, 'application/octet-stream'),
                    cache='public, max-age=604800')
 
+    def _gasset_img(self, q):
+        """官方 CDN 图标代理：/api/gasset/img?u=<CDN 地址>&s=<边长>
+
+        森空岛把图标地址（盟约/策略/装备/称号、干员头像、技能、模组）都发在
+        资源接口里，前端直接把地址转进来取——后端下载一次、压成 WebP 落盘，
+        之后走本地。地址白名单在 gasset 里卡死，取不到就 404，前端出占位块。
+        卫戍协议那套走的是 /api/garrison/img 这个老名字，两个路径同一份实现。
+        """
+        from core import gasset
+        try:
+            data, ext = gasset.fetch(q.get('u'), q.get('s'))
+        except Exception:
+            self._send(404, b'not found', 'text/plain; charset=utf-8')
+            return
+        self._send(200, data, api.MIME.get('.' + ext, 'image/webp'),
+                   cache='public, max-age=604800')
+
     def do_GET(self):
         if not trusted_request(self.headers, self.server.server_address):
             self._reject()
@@ -226,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
         q, path = self._query()
         if path.startswith('/themes/'):
             self._theme(path)
+            return
+        if path in ('/api/garrison/img', '/api/gasset/img'):
+            self._gasset_img(q)
             return
         if path.startswith('/api/avatar/'):
             self._avatar(path)

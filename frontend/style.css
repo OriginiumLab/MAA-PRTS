@@ -22,6 +22,8 @@
   --text-2: #98a1b6;
   --text-3: #5f677b;
   --mint: #5eead4;
+  --mint-rgb: 94, 234, 212;   /* 半透明的薄荷色一律写 rgba(var(--mint-rgb), a)——
+                                 --mint 是十六进制，套进 rgba() 是非法值 */
   --mint-dim: rgba(94, 234, 212, 0.12);
   --indigo: #8b93ff;
   --amber: #f5b955;
@@ -267,7 +269,9 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 /* 渠道服在账号栏里要一眼分得出来：B 站服用粉色，官服给亮一点的白色。
    其它渠道（小米/华为…）保持原来的灰，不做区分 */
 .acct-ch { color: inherit; }
-.acct-ch.official { color: #f6f9ff; }
+/* 官服原来写死近白 #f6f9ff：浅色主题下整段看不见（2026-11-28 截图暴露）。
+   用 var(--text) 在两个主题下都比副标题亮一档，语义不变 */
+.acct-ch.official { color: var(--text); }
 .acct-ch.bili { color: #ff9dd1; }
 /* 删除 ✕：平时不占视觉，悬停卡片才出现（span 而非 button——卡片本身
    是 button，HTML 不允许按钮嵌按钮） */
@@ -917,6 +921,541 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .gar-empty code { font-family: var(--mono); font-size: 11px; color: var(--mint); word-break: break-all; }
 .gar-empty .ghost-btn { margin-top: 16px; }
 
+/* ---------------------------------------------------------- 卫戍协议·战绩
+   小黑盒那种纵向信息流搬到桌面上：左栏放生涯与偏好（跟着滚动不动），
+   右栏是对局列表。所有底色都走 rgba(var(--tint), a)，浅色主题才不会出现黑板。 */
+.gar-tabs {
+  display: inline-flex; gap: 2px;
+  margin-left: 4px; padding: 3px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: rgba(var(--tint), 0.035);
+  flex: 0 0 auto;
+}
+.gar-tab {
+  height: 28px; padding: 0 15px;
+  border-radius: 8px;
+  font-size: 12.5px; font-weight: 600;
+  color: var(--text-3);
+  transition: .15s ease;
+}
+.gar-tab:hover { color: var(--text-2); background: rgba(var(--tint), 0.05); }
+.gar-tab.active {
+  color: #071410;
+  background: linear-gradient(140deg, var(--mint), #4fd7c8);
+}
+.sign-head .sign-tools { margin-left: auto; }
+
+.gar-pane {
+  display: flex; flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;          /* 高度必须传下去，否则内部 .sign-scroll 不会滚动 */
+}
+.gar-pane[hidden] { display: none; }
+/* 战绩页比速刷页长得多（100 场对局）：滚动容器必须以「剩余空间」为准 */
+#gar-pane-stat .sign-scroll,
+#gar-pane-quick .sign-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+
+.gs-scroll { padding-right: 4px; }
+.gs-empty, .gs-loading {
+  padding: 56px 20px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+  border-radius: 16px;
+  border: 1px dashed var(--line-strong);
+  background: rgba(var(--tint), 0.015);
+}
+.gs-loading b { display: block; font-size: 14px; color: var(--text-2); margin-bottom: 8px; }
+/* 拉取失败的「重新拉取」：错误块里唯一的出路，别让人只能切走再切回来 */
+.gs-retry-wrap { margin-top: 14px; }
+.gs-spin {
+  width: 26px; height: 26px; margin: 0 auto 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--tint), 0.14);
+  border-top-color: var(--mint);
+  animation: gs-spin .8s linear infinite;
+}
+@keyframes gs-spin { to { transform: rotate(360deg); } }
+
+.gs-layout {
+  display: grid;
+  grid-template-columns: minmax(0, clamp(238px, 30%, 302px)) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .gs-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.gs-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.gs-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* 玩家条：赛季底色当背景，压一层暗罩保证字永远看得清 */
+.gs-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 15px 16px;
+  border-radius: 15px;
+  border: 1px solid var(--line);
+  background: linear-gradient(150deg, rgba(var(--tint), 0.09), rgba(var(--tint), 0.02));
+}
+.gs-hero-bg {
+  position: absolute; inset: 0;
+  background-size: cover; background-position: center;
+  opacity: .22;
+  filter: saturate(.9);
+  pointer-events: none;
+}
+.gs-hero::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(160deg, rgba(var(--shade), .62), rgba(var(--shade), .93));
+  pointer-events: none;
+}
+.gs-hero > * { position: relative; z-index: 1; }
+.gs-hero-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.gs-hero-av {
+  width: 46px; height: 46px; flex: 0 0 auto;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid rgba(var(--tint), 0.14);
+  background: rgba(var(--tint), 0.06);
+}
+.gs-hero-info { min-width: 0; flex: 1 1 auto; }
+.gs-hero-name {
+  font-size: 15px; font-weight: 650; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gs-hero-meta {
+  margin-top: 4px;
+  font-size: 11px; color: var(--text-3);
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+}
+.gs-hero-meta i {
+  font-style: normal;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(var(--tint), 0.07);
+  color: var(--text-2);
+}
+.gs-hero-season {
+  margin-top: 12px;
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11.5px; color: var(--text-3);
+}
+.gs-hero-season b { font-size: 13px; color: var(--text-2); font-weight: 600; }
+
+.gs-trophy {
+  flex: 0 0 auto;
+  text-align: right;
+  padding-left: 6px;
+}
+.gs-trophy b {
+  display: block;
+  font-size: 22px; font-weight: 700; line-height: 1.1;
+  color: var(--mint);
+  font-variant-numeric: tabular-nums;
+}
+.gs-trophy span { font-size: 10.5px; color: var(--text-3); }
+
+/* 生涯四宫格 */
+.gs-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+.gs-metric {
+  padding: 12px 13px;
+  background: rgba(var(--shade), 0.8);
+}
+.gs-metric .k { font-size: 10.5px; color: var(--text-3); }
+.gs-metric .v {
+  margin-top: 5px;
+  font-size: 17px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  letter-spacing: -.2px;
+}
+.gs-metric .v small { font-size: 11.5px; font-weight: 500; color: var(--text-3); margin-left: 3px; }
+.gs-metric .s { margin-top: 3px; font-size: 10.5px; color: var(--text-3); }
+.gs-metric .s b { color: var(--mint); font-weight: 600; }
+
+/* 侧栏区块 */
+.gs-sec {
+  padding: 13px 14px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(165deg, rgba(var(--shade), 0.8), rgba(var(--shade), 0.9));
+}
+.gs-sec-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 11px;
+}
+.gs-sec-head b { font-size: 13px; font-weight: 650; color: var(--text); }
+.gs-sec-head span { font-size: 10.5px; color: var(--text-3); }
+
+/* 常用策略 / 常用盟约：等宽格子，放得下几个就几个，不强行挤一行 */
+.gs-chip-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.gs-chip {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding: 8px 2px 7px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: rgba(var(--tint), 0.025);
+  transition: .15s ease;
+  min-width: 0;
+}
+.gs-chip:hover { border-color: var(--line-strong); background: rgba(var(--tint), 0.055); }
+.gs-chip-ic {
+  width: 50px; height: 50px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgba(var(--tint), 0.05);
+}
+/* 盟约图标是游戏里给深色 HUD 画的白色线稿，浅色主题下不加暗底就看不见 */
+.gs-chip-ic.sq { border-radius: 9px; }
+.gs-bond-ic {
+  width: 50px; height: 50px;
+  border-radius: 50%;
+  object-fit: cover;
+  padding: 5px;
+  background: #123a30;
+  box-sizing: border-box;
+  filter: brightness(1.25) contrast(1.08);
+}
+.gs-chip-n {
+  font-size: 12px; color: var(--text-2);
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gs-chip-sub {
+  font-size: 9.5px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  display: flex; flex-direction: column; align-items: center;
+  line-height: 1.4;
+  white-space: nowrap;
+  letter-spacing: -.1px;
+}
+.gs-chip-sub b { color: var(--text-2); font-weight: 600; }
+
+/* 近 10 场叠层折线 */
+.gs-chart { position: relative; height: 132px; margin-top: 2px; }
+.gs-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.gs-chart-tip {
+  position: absolute; pointer-events: none;
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 10.5px;
+  color: var(--text);
+  background: rgba(var(--shade), 0.96);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+  white-space: nowrap;
+  transform: translate(-50%, -140%);
+  opacity: 0;
+  transition: opacity .12s ease;
+  z-index: 3;
+}
+.gs-chart-pt { cursor: pointer; }
+.gs-chart-pt:hover + .gs-chart-tip,
+.gs-chart-pt:focus + .gs-chart-tip { opacity: 1; }
+
+/* 筛选栏 */
+.gs-list-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 0 2px 2px;
+}
+.gs-list-head b { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.gs-list-head .gs-count { font-size: 11px; color: var(--text-3); }
+.gs-filters { margin-left: auto; display: flex; gap: 2px; padding: 3px; border-radius: 10px;
+  border: 1px solid var(--line); background: rgba(var(--tint), 0.035); }
+.gs-filter {
+  height: 25px; padding: 0 12px; border-radius: 7px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-3);
+  transition: .15s ease;
+}
+.gs-filter:hover { color: var(--text-2); }
+.gs-filter.active { color: #071410; background: rgba(var(--mint-rgb), 0.9); }
+
+/* 对局卡 */
+.gs-rec {
+  padding: 12px 14px 11px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(165deg, rgba(var(--shade), 0.82), rgba(var(--shade), 0.92));
+  cursor: pointer;
+  transition: .15s ease;
+}
+.gs-rec:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.gs-rec.fail { border-left: 2px solid rgba(var(--tint), 0.22); }
+.gs-rec.ok { border-left: 2px solid rgba(var(--mint-rgb), 0.55); }
+
+.gs-rec-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gs-tag {
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 10.5px; font-weight: 600;
+  color: #071410;
+  background: rgba(var(--mint-rgb), 0.92);
+}
+.gs-tag.fail { color: var(--text-2); background: rgba(var(--tint), 0.12); }
+.gs-rec-mode { font-size: 11px; color: var(--text-3); }
+.gs-rec-mode b { font-weight: 600; color: var(--text-2); }
+.gs-rec-mode b.d-fast { color: var(--mint); }
+.gs-rec-mode b.d-hard { color: #e0863c; }
+.gs-rec-mode b.d-abyss { color: #9d7ce8; }
+.gs-rec-mode b.d-funny { color: #d9a83a; }
+.gs-rec-trophy { margin-left: auto; display: flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 650; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.gs-rec-trophy svg { width: 13px; height: 13px; color: var(--mint); }
+.gs-fav { color: var(--gold, #e8b44a); }
+
+.gs-rec-body { margin-top: 9px; display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.gs-rounds { flex: 0 0 auto; text-align: center; width: 40px; }
+.gs-rounds b { display: block; font-size: 21px; font-weight: 700; color: var(--text);
+  line-height: 1; font-variant-numeric: tabular-nums; }
+.gs-rounds span { display: block; margin-top: 2px; font-size: 10px; color: var(--text-3); }
+
+.gs-rec-strategy { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 150px; }
+.gs-rec-strategy img { width: 40px; height: 40px; border-radius: 8px; object-fit: cover;
+  background: rgba(var(--tint), 0.05); }
+.gs-rec-strategy div { min-width: 0; }
+.gs-rec-strategy .k { font-size: 9.5px; color: var(--text-3); }
+.gs-rec-strategy .v { font-size: 12px; color: var(--text-2); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-rec-strategy .s { margin-top: 1px; font-size: 9.5px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.gs-opers { flex: 1 1 auto; display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.gs-oper {
+  position: relative;
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(var(--tint), 0.06);
+  border: 1px solid rgba(var(--tint), 0.1);
+  flex: 0 0 auto;
+}
+/* 首字兜底层压在最下面：头像 onerror 只是隐藏 img，不删节点 */
+.gs-oper .gs-fallback {
+  position: absolute; inset: 0; z-index: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; color: var(--text-3);
+}
+.gs-oper img { position: relative; z-index: 1;
+  width: 100%; height: 100%; object-fit: cover; display: block; }
+.gs-oper.gs-more {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--text-3);
+  background: rgba(var(--tint), 0.035);
+}
+.gs-tier {
+  position: absolute; left: 1px; top: 1px;
+  min-width: 14px; height: 14px;
+  padding: 0 3px;
+  border-radius: 4px;
+  font-size: 9px; font-weight: 800; line-height: 14px;
+  text-align: center;
+  color: #0a1210;
+  background: var(--tier, #a8a8a8);
+}
+.gs-golden {
+  position: absolute; left: 50%; bottom: 0;
+  width: 22px; height: 11px;
+  transform: translateX(-50%);
+  color: #f3c64e;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .65));
+}
+.gs-rec-bonds { margin-top: 9px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gs-bond-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 2px;
+  border-radius: 999px;
+  background: rgba(var(--tint), 0.04);
+}
+.gs-bond-pill img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover;
+  padding: 3px; background: #123a30; box-sizing: border-box;
+  filter: brightness(1.25) contrast(1.08); }
+.gs-bond-pill b { font-size: 11px; font-weight: 650; color: var(--text-2);
+  font-variant-numeric: tabular-nums; }
+.gs-bond-pill.dim { opacity: .45; }
+.gs-rec-foot { margin-top: 9px; display: flex; align-items: center; gap: 8px;
+  font-size: 10.5px; color: var(--text-3); }
+.gs-rec-foot .gs-dot { opacity: .5; }
+
+.gs-pager { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 0 2px; }
+.gs-page-btn {
+  min-width: 28px; height: 28px; padding: 0 9px;
+  border-radius: 8px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-3);
+  border: 1px solid var(--line);
+  transition: .15s ease;
+}
+.gs-page-btn:hover { color: var(--text-2); border-color: var(--line-strong); }
+.gs-page-btn.active { color: #071410; background: rgba(var(--mint-rgb), .9); border-color: transparent; }
+.gs-page-btn[disabled] { opacity: .35; cursor: default; }
+.gs-page-info { margin-left: 6px; font-size: 11px; color: var(--text-3); }
+
+/* 单局详情：右侧抽屉，比整屏弹窗更贴桌面阅读习惯 */
+.gs-drawer-mask {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, .42);
+  z-index: 70;
+}
+.gs-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(560px, 94vw);
+  z-index: 71;
+  display: flex; flex-direction: column;
+  border-left: 1px solid var(--line-strong);
+  background: rgba(var(--shade), 0.985);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, .45);
+  transform: translateX(28px);
+  opacity: 0;
+  transition: transform .2s ease, opacity .2s ease;
+}
+.gs-drawer.on { transform: none; opacity: 1; }
+.gs-drawer-head {
+  flex: 0 0 auto;
+  padding: 15px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.gs-drawer-head h3 { font-size: 17px; font-weight: 700; color: var(--text); line-height: 1.25; }
+.gs-drawer-head .sub { margin-top: 5px; font-size: 11.5px; color: var(--text-3);
+  display: flex; gap: 8px; flex-wrap: wrap; }
+.gs-drawer-head .sub b { color: var(--text-2); font-weight: 600; }
+.gs-drawer-close {
+  margin-left: auto; flex: 0 0 auto;
+  width: 30px; height: 30px; border-radius: 9px;
+  color: var(--text-3);
+  border: 1px solid var(--line);
+}
+.gs-drawer-close:hover { color: var(--text); border-color: var(--line-strong); }
+.gs-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 18px 26px; }
+
+.gs-dt-sec { margin-bottom: 18px; }
+.gs-dt-sec:last-child { margin-bottom: 0; }
+.gs-dt-title {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px; font-weight: 650; color: var(--text-2);
+}
+.gs-dt-title span { font-size: 10.5px; font-weight: 400; color: var(--text-3); }
+.gs-dt-title::before {
+  content: ''; width: 3px; height: 12px; border-radius: 2px;
+  background: var(--mint); flex: 0 0 auto;
+}
+.gs-dt-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.gs-dt-stat {
+  padding: 9px 11px; border-radius: 10px;
+  background: rgba(var(--tint), 0.035);
+  border: 1px solid var(--line);
+}
+.gs-dt-stat .k { font-size: 10px; color: var(--text-3); }
+.gs-dt-stat .v { margin-top: 3px; font-size: 16px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums; }
+.gs-dt-stat .v small { font-size: 10.5px; color: var(--text-3); font-weight: 400; }
+
+/* 策略与盟约（详情） */
+.gs-dt-strategy { display: flex; align-items: center; gap: 11px; }
+.gs-dt-strategy img { width: 60px; height: 60px; border-radius: 11px; object-fit: cover;
+  background: rgba(var(--tint), 0.05); }
+.gs-dt-strategy .n { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.gs-dt-strategy .d { margin-top: 3px; font-size: 10.5px; line-height: 1.6; color: var(--text-3); }
+.gs-dt-bond-row { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
+.gs-dt-bond {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px 3px 3px;
+  border-radius: 999px;
+  background: rgba(var(--tint), 0.04);
+  border: 1px solid var(--line);
+}
+.gs-dt-bond img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover;
+  padding: 4px; background: #123a30; box-sizing: border-box; }
+.gs-dt-bond .n { font-size: 11px; color: var(--text-2); }
+.gs-dt-bond .l { font-size: 11px; font-weight: 700; color: var(--mint);
+  font-variant-numeric: tabular-nums; }
+.gs-dt-bond.dim { opacity: .45; }
+
+/* 通关干员（详情）：大头像 + 阶数 + 精锐 + 等级 + 装备/技能/模组 */
+.gs-dt-opers { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+.gs-dt-oper {
+  padding: 7px 7px 8px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: rgba(var(--tint), 0.022);
+  text-align: center;
+}
+.gs-dt-oper .av {
+  position: relative;
+  width: 100%; aspect-ratio: 1 / 1;
+  border-radius: 9px;
+  overflow: hidden;
+  background: rgba(var(--tint), 0.05);
+}
+.gs-dt-oper .av .gs-fallback {
+  position: absolute; inset: 0; z-index: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 600; color: var(--text-3);
+}
+.gs-dt-oper .av img { position: relative; z-index: 1;
+  width: 100%; height: 100%; object-fit: cover; display: block; }
+.gs-dt-oper .av .gs-tier { left: 4px; top: 4px; height: 18px; min-width: 18px;
+  line-height: 18px; font-size: 10.5px; }
+.gs-dt-oper .av .gs-golden { width: 30px; height: 15px; }
+.gs-dt-oper .nm { margin-top: 6px; font-size: 12px; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-dt-oper .lv { margin-top: 3px; font-size: 10.5px; color: var(--text-3);
+  font-variant-numeric: tabular-nums; }
+.gs-dt-oper .lv b { color: var(--text-2); font-weight: 600; }
+.gs-dt-oper .marks { margin-top: 6px; display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; }
+.gs-mark {
+  width: 29px; height: 29px; border-radius: 5px; object-fit: cover;
+  background: rgba(var(--tint), 0.06);
+  border: 1px solid var(--line);
+}
+.gs-mark.sq { border-radius: 4px; }
+.gs-dt-oper .eqs { margin-top: 5px; display: flex; justify-content: center; gap: 5px; }
+.gs-dt-oper .eqs img { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; }
+.gs-dt-oper .eqs .up { box-shadow: 0 0 0 1px rgba(var(--mint-rgb), .6); }
+
+.gs-dt-boss { display: flex; gap: 9px; flex-wrap: wrap; }
+.gs-dt-boss-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px 6px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(var(--tint), 0.025);
+}
+.gs-dt-boss-item img { width: 30px; height: 30px; border-radius: 7px; object-fit: cover; }
+.gs-dt-boss-item .n { font-size: 11.5px; color: var(--text-2); }
+.gs-dt-boss-item .s { font-size: 10px; color: var(--text-3); }
+.gs-dt-boss-item .s b { color: var(--mint); font-weight: 600; }
+.gs-dt-boss-item .s b.miss { color: var(--rose); }
+.gs-dt-boss-item.hidden-b { border-color: rgba(var(--rose), .35); }
+
+.gs-dt-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.gs-dt-tag {
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: rgba(var(--tint), 0.045);
+  border: 1px solid var(--line);
+}
+.gs-dt-tag b { color: var(--mint); font-weight: 650; }
+.gs-dt-note { margin-top: 8px; font-size: 10.5px; line-height: 1.7; color: var(--text-3); }
+
+
 .gar-badge-row { margin-top: 12px; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .gar-badge {
   flex: 0 0 auto;
@@ -1380,6 +1919,23 @@ input:focus, select:focus, button:focus-visible { outline: none; }
 .op-name.borrow { color: #b48cff; }
 .op-name.train { color: var(--amber); }
 .op-name.subbed { color: var(--mint); }
+
+/* ---- 作业详情弹窗：简介折叠 + 带头像的干员行 ---- */
+#op-desc { margin-bottom: 15px; }
+.op-desc-text { font-size: 12px; line-height: 1.75; color: var(--text-2);
+  white-space: pre-wrap; word-break: break-word; overflow: hidden;
+  max-height: 7.2em; padding: 9px 11px; border-radius: 10px;
+  border: 1px solid var(--line); background: rgba(var(--tint), 0.03); }
+.op-desc-text.open { max-height: none; }
+.op-desc-more { display: block; margin: 5px 0 0 auto; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 11.5px; color: var(--mint); cursor: pointer; }
+.op-desc-more:hover { text-decoration: underline; }
+.op-row { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 6px 0; border-bottom: 1px dashed rgba(var(--tint), 0.07); }
+.op-row:last-child { border-bottom: 0; }
+.op-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.op-row .op-av { width: 26px; height: 26px; border-radius: 6px; font-size: 11px; }
+.op-req { color: var(--text-3); font-size: 11.5px; text-align: right; }
 .op-name em { font-style: normal; font-size: 10.5px; opacity: .85; margin-left: 5px; }
 
 .op-top { display: flex; align-items: center; gap: 9px; padding-right: 44px; }
@@ -2864,3 +3420,211 @@ body.drawer-open .basket-fab { opacity: 0; pointer-events: none; transform: scal
 .mirror-box[hidden] { display: none; }
 .mirror-box .set-tip { margin-top: 6px; }
 .set-maarow-foot .set-tip { flex: 1 1 auto; margin: 0; }
+
+/* ============================================================ 干员练度 */
+/* 一屏一行一个干员：头像+身份 / 技能 / 信赖 / 模组。列宽用变量统一，
+   表头与行共用一套 grid，窗口变窄只挤「名字」那列 */
+/* 列宽按比例分剩下的空间：只给固定 px 的话，宽屏上名字列会把技能列推到
+   屏幕中间，左边一大片空——proportional 之后表头和内容一起铺开 */
+#mod-training { --tr-cols: 52px minmax(0, 1.3fr) minmax(140px, 1fr) 84px minmax(110px, .95fr); }
+
+.tr-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 0 2px 10px;
+  flex: 0 0 auto;
+}
+.tr-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.tr-chip {
+  height: 26px; padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 11.5px; color: var(--text-3);
+  transition: .14s ease;
+  white-space: nowrap;
+}
+.tr-chip:hover { color: var(--text-2); background: rgba(var(--tint), 0.05); }
+.tr-chip.on {
+  color: var(--mint);
+  border-color: rgba(94, 234, 212, 0.32);
+  background: rgba(94, 234, 212, 0.09);
+}
+.tr-chip:disabled { opacity: .4; }
+.tr-search {
+  display: flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: rgba(var(--shade), 0.55);
+  color: var(--text-3);
+  min-width: 180px;
+}
+.tr-search:focus-within { border-color: rgba(var(--mint-rgb), 0.45); }
+.tr-search svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.tr-search input {
+  border: 0; outline: 0; background: none;
+  font: inherit; font-size: 12px; color: var(--text);
+  width: 100%; min-width: 0;
+}
+.tr-count { margin-left: auto; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.tr-head {
+  display: grid; grid-template-columns: var(--tr-cols);
+  gap: 12px;
+  padding: 0 12px 8px;
+  font-size: 11px; color: var(--text-3);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.tr-head > span:first-child { grid-column: span 2; }
+.tr-head > span { letter-spacing: .04em; }
+
+.tr-scroll {
+  flex: 1 1 0; min-height: 0; overflow-y: auto;
+  padding: 4px 2px 0;
+}
+.tr-list { display: flex; flex-direction: column; }
+
+.tr-row {
+  display: grid; grid-template-columns: var(--tr-cols);
+  align-items: center; gap: 12px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border-bottom: 1px solid rgba(var(--tint), 0.04);
+  transition: background .12s ease;
+}
+.tr-row:hover { background: rgba(var(--tint), 0.045); }
+
+.tr-av { position: relative; width: 46px; height: 46px; flex: 0 0 auto; }
+.tr-avimg {
+  position: relative; display: block; width: 46px; height: 46px;
+  border-radius: 10px; overflow: hidden;
+  background: rgba(var(--tint), 0.06);
+  border: 1px solid var(--line);
+}
+.tr-avimg i, .tr-skill i, .tr-mod i {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font-style: normal; font-size: 15px; font-weight: 700;
+  color: var(--text-3);
+}
+.tr-avimg img, .tr-skill img, .tr-mod img {
+  position: relative; z-index: 1;
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+/* 精英化角标：精一青、精二金，跟卫戍协议的阶数角标同一套画法 */
+.tr-tier {
+  position: absolute; right: -3px; bottom: -3px;
+  min-width: 17px; height: 17px; padding: 0 3px;
+  border-radius: 5px;
+  font-style: normal; font-size: 10px; font-weight: 800; line-height: 17px;
+  text-align: center;
+  color: #0a1210;
+  background: var(--tier, #a8a8a8);
+  box-shadow: 0 0 0 2px var(--bg-soft);
+}
+
+.tr-id { min-width: 0; }
+.tr-name {
+  font-size: 13.5px; font-weight: 650; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tr-meta {
+  margin-top: 3px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 10.5px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden;
+}
+.tr-stars { font-size: 10px; font-weight: 700; letter-spacing: 0; }
+.tr-stars.r6 { color: var(--star); }
+.tr-stars.r5 { color: #e9d07a; }
+.tr-stars.r4 { color: #c9a7f0; }
+.tr-stars.r3 { color: #7fc4ff; }
+.tr-stars.r2 { color: #8fdca0; }
+.tr-stars.r1 { color: var(--text-3); }
+.tr-elite { color: var(--text-2); }
+.tr-lv b { color: var(--text-2); font-weight: 650; }
+.tr-pot { color: var(--amber); }
+
+.tr-skills, .tr-mods { display: flex; align-items: center; gap: 6px; }
+.tr-favors { display: flex; align-items: center; }
+.tr-favor {
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-2); font-weight: 600;
+}
+.tr-favor.max { color: var(--mint); }
+/* 技能 / 模组格子：40px 起，比战绩页那套再大一档，图标本身按 96 取图不糊 */
+.tr-skill, .tr-mod {
+  position: relative; display: block;
+  width: 42px; height: 42px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(var(--tint), 0.055);
+  border: 1px solid var(--line);
+}
+.tr-skill i, .tr-mod i { font-size: 13px; }
+/* 专精（M1/M2/M3）与模组等级压右下角，颜色分档 */
+.tr-mk {
+  position: absolute; right: 0; bottom: 0; z-index: 2;
+  min-width: 16px; height: 14px; padding: 0 3px;
+  border-radius: 4px 0 0 0;
+  font-size: 9px; font-weight: 800; line-height: 14px;
+  text-align: center;
+  color: #0a1210;
+  background: #7fb8ff;
+}
+.tr-mk.m2, .tr-mk.lv2 { background: #b79cff; }
+.tr-mk.m3, .tr-mk.lv3 { background: var(--star); }
+.tr-mk.lv1 { background: rgba(var(--tint), 0.45); color: #0c1017; }
+
+.tr-none { color: var(--text-3); font-size: 12px; }
+.tr-empty {
+  padding: 40px 16px; text-align: center;
+  font-size: 12px; color: var(--text-3); line-height: 1.9;
+}
+.tr-foot { flex: 0 0 auto; padding-bottom: 2px; }
+
+@media (max-width: 1080px) {
+  #mod-training { --tr-cols: 52px minmax(0, 1fr) 138px 58px 100px; }
+  .tr-skill, .tr-mod { width: 38px; height: 38px; }
+}
+
+/* 刷新练度：转起来表示在等后台同步 */
+#btn-tr-refresh.busy svg { animation: spin 1s linear infinite; }
+
+/* ============================================================ 账号头像设置 */
+.av-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.av-opt {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(var(--tint), 0.025);
+  text-align: left;
+  transition: .15s ease;
+}
+.av-opt:hover { border-color: var(--line-strong); background: rgba(var(--tint), 0.05); }
+.av-opt.on {
+  border-color: rgba(var(--mint-rgb), 0.42);
+  background: rgba(94, 234, 212, 0.07);
+}
+.av-pic {
+  position: relative;
+  width: 42px; height: 42px; flex: 0 0 auto;
+  border-radius: 11px; overflow: hidden;
+  display: grid; place-items: center;
+  font-size: 16px; font-weight: 700; color: var(--text-3);
+  background: rgba(var(--tint), 0.06);
+  border: 1px solid var(--line);
+}
+.av-pic img {
+  position: absolute; inset: 0; z-index: 1;
+  width: 100%; height: 100%; object-fit: cover;
+}
+.av-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.av-txt b { font-size: 12.5px; color: var(--text); font-weight: 650; }
+.av-txt span { font-size: 11px; color: var(--text-3); }
