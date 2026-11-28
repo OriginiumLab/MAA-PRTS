@@ -8,9 +8,9 @@ import traceback
 import urllib.parse
 
 from . import (accounts, agent, appupdate, asstlog, autostart, copilot, gacha,
-               garrison, maa, maaplan, mirror, multiacct, operbox, packsync,
-               paradox, resources, scheduler, settings, signin, skills, sklogin,
-               tasks, themes, updater, version, watch)
+               garrison, garrisonstat, maa, maaplan, mirror, multiacct, operbox,
+               packsync, paradox, resources, scheduler, settings, signin, skills,
+               sklogin, tasks, themes, training, updater, version, watch)
 
 WEB = settings.static_dir()
 
@@ -563,6 +563,9 @@ def api_op(q, _body):
         'content': content,
         'maaCode': 'maa://%s' % cid,
         'title': (content.get('doc') or {}).get('title'),
+        # 作业简介：作者写在 doc.details 里的自由文本（常夹群号/推广）。
+        # 原样交给前端，太长怎么折叠由前端按实际高度决定，这里不截断
+        'desc': ((content.get('doc') or {}).get('details') or '').strip(),
         'opers': copilot.detail_opers(content, owned),
         # 没选账号 / 账号没练度数据时 owned 是 None，前端就不标「缺谁」，
         # 否则整份作业都会被算成缺卡
@@ -749,6 +752,36 @@ def api_paradox_mark(_q, body):
     return {'file': file, 'imported': len(imp)}
 
 
+# ---------------------------------------------------------------- 干员练度
+def api_training(q, _body):
+    """干员练度表：等级/精英化/潜能/技能专精/模组/信赖
+
+    纯读账号快照，不发网络请求（MAA 导入的号也能看）；图标地址由后端拼好，
+    前端只负责调 /api/gasset/img 取图。
+    """
+    return training.view(_account_for(q.get('file')))
+
+
+def api_training_refresh(_q, body):
+    """按账号存的 token 重新同步一次练度（后台任务，前端轮询 /api/task）
+
+    同一个 token 下的多个角色会一起刷新——森空岛一次同步本来就是按 token
+    走绑定列表的，界面上说清楚就行。
+    """
+    file = _account_for((body or {}).get('file'))
+    token = accounts.token_for(file)
+    if not token:
+        raise ValueError('这个账号没有可用的森空岛 token（MAA 导入的号），'
+                         '刷不了练度；需要的话重新粘一次 token 同步')
+    nick = ''
+    try:
+        nick = ((accounts.get_account(file).get('account') or {}).get('nickName') or '')
+    except Exception:
+        pass
+    return {'taskId': accounts.start_refresh(
+        token=token, alias='', title='刷新练度 ' + (nick or file))}
+
+
 # ---------------------------------------------------------------- 卫戍协议
 def api_garrison_status(q, _body):
     """速刷面板状态：环境（Node/核心）+ 从 MAA 配置抄的默认值 + 运行态
@@ -757,6 +790,17 @@ def api_garrison_status(q, _body):
     核心缺失时附带下载进度（needsDownload / download），前端自动开始下载。
     """
     return garrison.status(_account_for(q.get('file')))
+
+
+def api_garrison_stat(q, _body):
+    """卫戍协议战绩：森空岛公开资源 + 登录版字典 + 个人对局，拼成一份
+
+    首次调用要拉 539KB 的资源字典，慢几秒属正常；之后走 6/12 小时缓存。
+    ``refresh=1`` 强制重拉（用户点刷新时用）。
+    """
+    if q.get('refresh'):
+        garrisonstat.invalidate()
+    return garrisonstat.stat(_account_for(q.get('file')))
 
 
 def api_garrison_download(_q, _body):
@@ -1132,6 +1176,9 @@ ROUTES = {
     '/api/signin/run': api_signin_run,
     # 卫戍协议·策略刻章速刷
     '/api/garrison/status': api_garrison_status,
+    '/api/garrison/stat': api_garrison_stat,
+    '/api/training': api_training,
+    '/api/training/refresh': api_training_refresh,
     '/api/garrison/download/start': api_garrison_download,
     '/api/garrison/opts': api_garrison_opts,
     '/api/garrison/test': api_garrison_test,

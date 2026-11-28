@@ -11,10 +11,24 @@ const S = {
   appUpdate: null, updateBusy: false,
   paradoxPending: [],
   authorNames: {},   // 作业站作者 id → 昵称（搜索时顺手学，黑名单弹窗显示用）
-  module: 'copilot', // 当前模块：copilot / gacha / signin / garrison（配置修改按需求去掉了）
+  module: 'copilot', // 当前模块：copilot / gacha / signin / garrison / training
+  tr: null,          // /api/training 的最近一次响应（当前账号那份）
+  trOf: {},          // file → 已加载过的练度表：切号/切 tab 回来直接复用
+  trBusy: false,     // 正在等 /api/training（或后台同步）
+  trProf: 'all',     // 职业筛选：all / 先锋 / 近卫 / …
+  trRar: 0,          // 稀有度筛选：0 全部 / 6 / 5 / 4 / 3(=三星及以下)
+  trQ: '',           // 搜索词（干员名 / 编号）
+  trPage: 1,         // 分页（一页 60 行：420 个干员全渲染会拖慢滚动）
   signBusy: '',      // 正在跑哪一块签到：''/all/one——同一 token 并发签到会被风控，只能一个一个来
   gar: null,         // /api/garrison/status 的最近一次响应（当前账号那份）
   garOpts: {},       // file → 用户改过的速刷连接选项（没改过的账号用后端从 MAA 抄的默认值）
+  garView: 'quick',  // 卫戍协议当前视图：quick 速刷 / stat 战绩查询
+  garStat: null,     // /api/garrison/stat 的最近一次响应（当前账号那份）
+  garStatOf: {},     // file → 已加载过的战绩：切号/切 tab 回来直接复用，不再等三秒
+  garStatBusy: '',   // 正在拉战绩的那个账号 file（不是布尔：换号要能立刻放行）
+  garFilter: 'all',  // 对局筛选：all 全部 / multi 多人 / single 单人 / fast 极速
+  garPage: 1,        // 对局列表分页（一页 20 场）
+  garDetail: '',     // 详情抽屉里躺着的那一局 id
   gacha: null,       // /api/gacha 的最近一次响应（当前账号那份）
   gachaOf: {},       // file → 已加载过的抽卡视图：切账号/切菜单回来直接复用，不再转圈
   lastOfGame: { arknights: '', endfield: '' },  // 每栏上次看的是哪个号（切回这一栏时还原）
@@ -195,6 +209,8 @@ function waitPywebview(ms = 2000) {
 }
 
 async function boot() {
+  // 支持 ?mod=xxx 直达：做快捷方式用（作业获取是默认页，不用列进来）
+  const MODS_LINKABLE = ['gacha', 'signin', 'chat', 'garrison', 'training'];
   try {
     const bridge = await waitPywebview();
     if (bridge) {
@@ -233,7 +249,12 @@ async function boot() {
     // ?mod=gacha 直接打开抽卡统计（做快捷方式用，和 ?q=TL-10 一样）
     // 其余情况模块显隐由 selectAccount → applyModuleAvailability 决定，别重复渲染
     const mod0 = new URLSearchParams(location.search).get('mod');
-    if (mod0 === 'gacha' || mod0 === 'signin' || mod0 === 'chat') setModule(mod0);
+    if (MODS_LINKABLE.includes(mod0)) setModule(mod0);
+    // ?mod=garrison&garview=stat 直接落在战绩查询上（快捷方式 / 截图自测用）
+    if (mod0 === 'garrison' && new URLSearchParams(location.search).get('garview') === 'stat') {
+      S.garView = 'stat';
+      paintGarView();
+    }
     startPing();
     setTimeout(scheduleWatch, 7000);
     // ?open=settings 直接展开设置（截图自测 / 给用户发链接用）
@@ -327,16 +348,31 @@ function setSideGame(g) {
   renderAccounts();
 }
 
-/* 账号头像：有看板娘就用看板娘（snap.account.secretary.charId），没有就退回
-   昵称首字。img 绝对定位盖在首字上，onerror 自删——加载失败/接口 404 都会
-   自然露出首字，前端不用记状态。MAA 导入的账号没有 secretary，永远走首字。 */
+/* 账号头像取哪张：设置 → 常规 → 账号头像（默认「游戏内」）。
+     game      森空岛 player/info 的 status.avatar.url（官方 CDN），
+     secretary 看板娘立绘头像（/api/avatar/<charId> 那套 PRTS 头像）。
+   游戏内头像走 /api/gasset/img 白名单代理（同卫戍协议图标的路子），
+   不直连 CDN：断网/被墙时统一 404，前端退首字，也不会漏掉 referer。
+   MAA 导入的账号两样都没有，永远走首字。 */
+function acctAvatarUrl(a) {
+  const mode = String((S.settings && S.settings.acctAvatar) || 'game').toLowerCase();
+  const secId = (a && a.secretary && a.secretary.charId) || '';
+  if (mode === 'secretary') {
+    return secId ? '/api/avatar/' + encodeURIComponent(secId) : '';
+  }
+  const game = (a && a.avatar) || '';
+  return game ? '/api/gasset/img?u=' + encodeURIComponent(game) + '&s=96' : '';
+}
+
+/* 账号头像：按上面的设置取图，没有就退回昵称首字。img 绝对定位盖在首字上，
+   onerror 自删——加载失败/接口 404 都会自然露出首字，前端不用记状态。 */
 function acctAvatar(a, cls) {
   const ch = (a.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
-  const id = (a.secretary && a.secretary.charId) || '';
-  const pic = id
-    ? `<img src="/api/avatar/${encodeURIComponent(id)}" alt="" loading="lazy" onerror="this.remove()">`
+  const src = acctAvatarUrl(a);
+  const pic = src
+    ? `<img src="${src}" alt="" loading="lazy" onerror="this.remove()">`
     : '';
-  return `<span class="avatar ${cls || ''}${id ? ' has-pic' : ''}">${pic}${esc(ch)}</span>`;
+  return `<span class="avatar ${cls || ''}${src ? ' has-pic' : ''}">${pic}${esc(ch)}</span>`;
 }
 
 function renderAccounts() {
@@ -565,14 +601,14 @@ function renderHero() {
   const a = d.account || {}, st = d.stats || {};
   const name = a.nickName || '未知账号';
   $('#hero-name').textContent = name;
-  // 顶部头像同账号卡：看板娘优先，取不到就留首字
+  // 顶部大头像同账号卡：跟着「账号头像」设置走，取不到就留首字
   const hInit = name.replace(/[#＃].*$/, '').slice(0, 1);
-  const hSec = (a.secretary && a.secretary.charId) || '';
+  const hSrc = acctAvatarUrl(a);
   const hBox = $('#hero-avatar');
-  hBox.innerHTML = (hSec
-    ? `<img src="/api/avatar/${encodeURIComponent(hSec)}" alt="" onerror="this.remove()">`
+  hBox.innerHTML = (hSrc
+    ? `<img src="${hSrc}" alt="" onerror="this.remove()">`
     : '') + esc(hInit);
-  hBox.classList.toggle('has-pic', !!hSec);
+  hBox.classList.toggle('has-pic', !!hSrc);
   hBox.classList.toggle('ef', ef);   // 终末地：头像配色跟着换
 
   if (ef) {
@@ -1771,6 +1807,7 @@ async function showOpDetail(op, variant) {
       <button class="btn-plain" id="ban-op"${opBanned ? ' disabled title="已在黑名单里，可在设置 → 作业黑名单移除"' : ''}>${opBanned ? '已拉黑作业' : '拉黑作业'}</button>
       ${op.uploaderId ? `<button class="btn-plain" id="ban-author"${banned ? ' disabled title="已在黑名单里，可在设置 → 作者黑名单移除"' : ''}>${banned ? '已拉黑作者' : '拉黑作者'}</button>` : ''}
     </div>
+    <div id="op-desc" hidden></div>
     <label class="field"><span>干员与要求</span></label>
     <div id="op-detail-body" style="font-size:12px;color:var(--text-2);line-height:1.9">
       <div class="loading-row"><span class="spinner"></span>拉取作业详情…</div>
@@ -1813,6 +1850,27 @@ async function showOpDetail(op, variant) {
       api(opUrl).then(d => {
         const body = d.content || {};
         const shown = visOpers(d.opers);
+        /* 作业简介：doc.details 是作者手写的自由文本，常有群号、推广链接。
+           不筛行（怕误删关键说明），超过 7 行折叠，点「展开全文」看全。
+           折叠判定必须等布局落地——弹窗刚插入时 clientHeight 还是 0 */
+        const desc = String(d.desc || '').trim();
+        if (desc) {
+          const box = $('#op-desc', el);
+          box.hidden = false;
+          box.innerHTML = `<label class="field"><span>作业简介</span></label>
+            <div class="op-desc-text" id="op-desc-text">${esc(desc)}</div>
+            <button class="op-desc-more" id="op-desc-more" hidden>展开全文</button>`;
+          const tx = $('#op-desc-text', box);
+          requestAnimationFrame(() => {
+            if (tx.scrollHeight - tx.clientHeight < 6) return;
+            const more = $('#op-desc-more', box);
+            more.hidden = false;
+            more.addEventListener('click', () => {
+              const open = tx.classList.toggle('open');
+              more.textContent = open ? '收起' : '展开全文';
+            });
+          });
+        }
         /* 缺谁：owned=false 是没这个人，owned && !ok 是练度不到。
            只有「差一人可借」这一档才说得出具体的借人对象（助战位只能带一个），
            其余情况分开列：没的人和练度不够的人不是一回事。
@@ -1838,9 +1896,9 @@ async function showOpDetail(op, variant) {
           const tail = isBorrow ? '<em>借</em>'
             : (isSub ? `<em>由${esc(o.sub.name)}${o.sub.skill || ''}替换</em>`
               : (o.owned === false ? '<em>没有</em>' : (o.ok === false ? '<em>练度不足</em>' : '')));
-          return `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed rgba(255,255,255,.06);padding:5px 0">
-            <span class="op-name${cls}">${esc(o.name)}${tail}</span>
-            <span style="color:var(--text-3);font-size:11.5px">${esc(bits.join(' · ') || '无特殊要求')}</span>
+          return `<div class="op-row">
+            <span class="op-who">${opAv(o.charId, o.name, o.stars)}<span class="op-name${cls}">${esc(o.name)}${tail}</span></span>
+            <span class="op-req">${esc(bits.join(' · ') || '无特殊要求')}</span>
           </div>`;
         }).join('');
         const flags =
@@ -3103,6 +3161,26 @@ function openSettings() {
   };
   const bl = blOf();
 
+  // 账号头像：软件级设置（不跟账号存），预览拿当前账号的两张图，
+  // 只预览不下载——img 挂了就露首字，和侧栏账号卡一个观感
+  const avMode = String(s.acctAvatar || 'game').toLowerCase() === 'secretary' ? 'secretary' : 'game';
+  const avAcc = (S.accounts || []).find(a => a.file === S.current) || (S.accounts || [])[0] || {};
+  const avCh = String(avAcc.nickName || '?').replace(/[#＃].*$/, '').slice(0, 1);
+  const avOpt = (val, name, desc) => {
+    const src = val === 'game'
+      ? (avAcc.avatar
+        ? '/api/gasset/img?u=' + encodeURIComponent(avAcc.avatar) + '&s=96' : '')
+      : ((avAcc.secretary && avAcc.secretary.charId)
+        ? '/api/avatar/' + encodeURIComponent(avAcc.secretary.charId) : '');
+    const on = avMode === val;
+    return `
+      <button class="av-opt${on ? ' on' : ''}" data-av="${val}" aria-pressed="${on ? 'true' : 'false'}">
+        <span class="av-pic">${src
+    ? `<img src="${src}" alt="" loading="lazy" onerror="this.remove()">` : ''}${esc(avCh)}</span>
+        <span class="av-txt"><b>${name}</b><span>${desc}</span></span>
+      </button>`;
+  };
+
   modal(`
     <div class="set-shell">
       <aside class="set-side">
@@ -3135,6 +3213,14 @@ function openSettings() {
               <input type="checkbox" id="set-theme-pet" ${petEnabled() ? 'checked' : ''}>
               <span>显示主题桌宠（右下角小人；只有带桌宠的主题才有，挡视线就关掉）</span>
             </label>
+
+            <div class="set-sub-title">账号头像</div>
+            <div class="av-grid">
+              ${avOpt('game', '游戏内', '森空岛同步的游戏内头像（默认）')}
+              ${avOpt('secretary', '看板娘', '该账号的看板娘头像')}
+            </div>
+            <div class="set-tip">左边是侧栏账号卡和顶部用的头图。两张图都不进安装包：游戏内头像走官方
+              CDN 现取，看板娘那套也是按 charId 按需下载。MAA 导入的号没有这两项数据，仍显示昵称首字。</div>
 
             <div class="set-sub-title">启动</div>
             <div class="set-card">
@@ -3731,6 +3817,24 @@ function openSettings() {
       }
 
       el.addEventListener('click', async ev => {
+        // 账号头像：立刻生效（侧栏 + 顶部大头像都跟设置走）
+        const avo = ev.target.closest('[data-av]');
+        if (avo) {
+          const v = avo.dataset.av === 'secretary' ? 'secretary' : 'game';
+          if (v === avMode) return;
+          $$('.av-opt', el).forEach(btn => {
+            const on = btn.dataset.av === v;
+            btn.classList.toggle('on', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          });
+          try {
+            await saveSettings({ acctAvatar: v });
+            renderAccounts();
+            renderHero();
+            toast(v === 'secretary' ? '账号头像已改为看板娘' : '账号头像已改为游戏内头像', 'ok');
+          } catch (e2) { toast('保存失败：' + e2.message, 'err'); }
+          return;
+        }
         const use = ev.target.closest('[data-theme-use]');        if (use) {
           await switchTheme(use.dataset.themeUse);
           repaintThemes();
@@ -5155,7 +5259,7 @@ function applyModuleAvailability() {
   const ef = currentGame() === 'endfield';
   // 终末地账号只留助手与抽卡统计：作业获取、森空岛签到、卫戍协议三枚 tab 都不显示
   // （签到本身支持终末地，全局签到照样会签，只是不给终末地账号开这块界面）
-  ['copilot', 'signin', 'garrison'].forEach(m => {
+  ['copilot', 'signin', 'garrison', 'training'].forEach(m => {
     const b = $('.modtab[data-mod="' + m + '"]');
     if (b) b.hidden = ef;
   });
@@ -5173,7 +5277,13 @@ function applyModuleAvailability() {
     renderSignin();                    // 签到面板上的「当前账号」跟着换
   } else if (S.module === 'garrison') {
     resetGarView();                    // 卫戍协议：换号重描面板（轮询不用重开）
-    renderGarrison();
+    S.garStat = S.garStatOf[S.current] || null;   // 战绩按账号取回自己那份
+    S.garPage = 1;
+    if (S.garView === 'stat') gsEnsure();
+    else renderGarrison();
+  } else if (S.module === 'training') {
+    S.trPage = 1;                      // 练度：换号回第 1 页，筛选条件留着
+    renderTraining();
   } else if (S.module === 'chat') {
     chatInit();                        // 换号后助手面板里的上下文提示要跟着变
     chatSideSwitch(S.current);         // 右栏进度日志也跟着换账号
@@ -5193,18 +5303,21 @@ function setModule(mod, byGame) {
   const cp = $('#mod-copilot'), gg = $('#mod-gacha'), sg = $('#mod-signin');
   const ct = $('#mod-chat');
   const ga = $('#mod-garrison');
+  const tr = $('#mod-training');
   if (cp) cp.hidden = mod !== 'copilot';
   if (gg) gg.hidden = mod !== 'gacha';
   if (sg) sg.hidden = mod !== 'signin';
   if (ct) ct.hidden = mod !== 'chat';
   if (ga) ga.hidden = mod !== 'garrison';
+  if (tr) tr.hidden = mod !== 'training';
   // 抽卡统计/签到/助手/卫戍协议都用不到右栏作业集：收掉第三列，主区拿满宽度
   $('#app').classList.toggle('no-basket', mod !== 'copilot');
   if (mod !== 'copilot') toggleBasket(false);
   if (mod === 'gacha') renderGacha();
   if (mod === 'signin') renderSignin();
-  if (mod === 'garrison') { resetGarView(); renderGarrison(); garStartPolling(); }
+  if (mod === 'garrison') { resetGarView(); paintGarView(); }
   else garStopPolling();
+  if (mod === 'training') renderTraining();
   if (mod === 'chat') enterChat(); else leaveChat();
 }
 
@@ -5539,12 +5652,18 @@ function hideGarEmpty() {
   if (logCard) logCard.hidden = false;
 }
 
-async function renderGarrison(force) {
-  const sub = $('#gar-sub');
+/* 页头的「账号 · 明日方舟」两个位置：速刷与战绩两个视图共用同一块 .sign-head。
+   两个视图各自渲染时都得调一次——只挂速刷那边的话，停在「战绩查询」切号，
+   页头会一直挂着上一个账号的名字。 */
+function garPaintHead() {
   const acc = currentAccount();
+  const sub = $('#gar-sub'), an = $('#gar-account');
   if (sub) sub.textContent = acc ? `${acc.nickName} · 明日方舟` : '未选择账号';
-  const an = $('#gar-account');
   if (an) an.textContent = acc ? acc.nickName : '未选择账号';
+}
+
+async function renderGarrison(force) {
+  garPaintHead();
   if (!S.current) {
     showGarEmpty({ error: '先在左侧选一个明日方舟账号，再回来开速刷。' }, '还没有账号');
     return;
@@ -5662,6 +5781,518 @@ async function garAction(kind) {
     garAppendLog([{ text: '✗ ' + e.message, err: true }]);
     if (tip) tip.textContent = '';
   }
+}
+
+/* ------------------------------------------------------------ 卫戍协议·战绩
+   数据全来自森空岛三个接口（后端 garrisonstat 拼好）：公开资源给干员头像/技能/
+   模组/赛季背景，登录版字典把 id 翻成名字与图标，info 给生涯统计与逐场对局。
+   图标一律走 /api/garrison/img 代理，后端下一次、压成 WebP 后本地复用——
+   安装包里一张游戏图都不带。 */
+const GS_ROMAN = { 1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V', 6: 'VI' };
+// 六档阶数配色取自游戏内等阶角标（灰/白/青绿/青蓝/金/橙）
+const GS_TIER = { 1: '#a8a8a8', 2: '#f0f0f0', 3: '#30d8a8', 4: '#30c0d8', 5: '#f0a800', 6: '#f07800' };
+const GS_PER = 20;
+const GS_FILTERS = [['all', '全部'], ['multi', '多人'], ['single', '单人'], ['fast', '极速']];
+// 精锐标记：游戏里干员头像底部那个金色双翼，用内联 SVG 画（省一张图）
+const GS_GOLDEN = '<svg class="gs-golden" viewBox="0 0 26 14" aria-hidden="true" fill="currentColor">'
+  + '<path d="M13 5.6c-1.5 0-2.7-1.1-3.3-3.1L8.7 5.9 3.3 4.1l2.5 3.5 4.6.7 2.6-2.7z"/>'
+  + '<path d="M13 5.6c1.5 0 2.7-1.1 3.3-3.1l1 3.4 5.4-1.8-2.5 3.5-4.6.7-2.6-2.7z"/>'
+  + '<circle cx="13" cy="8.9" r="1.7"/></svg>';
+const GS_TROPHY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
+  + 'stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v4a5 5 0 0 1-10 0z"/>'
+  + '<path d="M7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3"/><path d="M12 13v4M9 20h6"/></svg>';
+
+let _gsSeq = 0;
+
+function gsIco(u, s) {
+  return u ? `/api/garrison/img?u=${encodeURIComponent(u)}&s=${Number(s) || 48}` : '';
+}
+
+function gsImg(u, size, cls) {
+  if (!u) return `<span class="${cls || ''} gs-ph"></span>`;
+  return `<img class="${cls || ''}" src="${gsIco(u, size)}" alt="" loading="lazy" onerror="this.remove()">`;
+}
+
+/* 干员头像内胆：阶数角标压左上、精锐双翼压底部中央，取不到图退回首字。
+   外层容器（列表 40px / 详情随格子）由调用方决定，两种尺寸共用这一份 */
+function gsOperInner(o) {
+  const ch = String(o.name || '?').replace(/[#＃].*$/, '').slice(0, 1) || '?';
+  const tier = GS_ROMAN[o.tier]
+    ? `<i class="gs-tier" style="--tier:${GS_TIER[o.tier] || GS_TIER[1]}">${GS_ROMAN[o.tier]}</i>` : '';
+  const gold = o.golden ? GS_GOLDEN : '';
+  const img = o.charId
+    ? `<img src="/api/avatar/${encodeURIComponent(o.charId)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+    : '';
+  return `<span class="gs-fallback">${esc(ch)}</span>${img}${tier}${gold}`;
+}
+
+function gsOperTip(o) {
+  return `${o.name || '未知干员'}${o.tier ? ' · ' + GS_ROMAN[o.tier] + ' 阶' : ''}`
+    + `${o.golden ? ' · 精锐' : ''}${o.level ? ' · Lv.' + o.level : ''}`;
+}
+
+function gsOper(o) {
+  return `<span class="gs-oper" title="${esc(gsOperTip(o))}">${gsOperInner(o)}</span>`;
+}
+
+function gsTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  if (isNaN(d)) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function gsDur(sec) {
+  if (!sec || sec <= 0) return '';
+  const m = Math.floor(sec / 60);
+  const h = Math.floor(m / 60);
+  return h ? `${h} 小时 ${m % 60} 分` : `${m} 分钟`;
+}
+
+function paintGarView() {
+  const v = S.garView === 'stat' ? 'stat' : 'quick';
+  const quick = $('#gar-pane-quick'), stat = $('#gar-pane-stat');
+  if (quick) quick.hidden = v !== 'quick';
+  if (stat) stat.hidden = v !== 'stat';
+  $$('.gar-tab').forEach(b => {
+    const on = b.dataset.garview === v;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  if (v === 'stat') {
+    garStopPolling();          // 看战绩时别让速刷面板继续轮询
+    gsEnsure();
+  } else if (S.module === 'garrison') {
+    renderGarrison();
+    garStartPolling();
+  }
+}
+
+async function gsEnsure(force) {
+  const root = $('#gs-root');
+  if (!root) return;
+  garPaintHead();          // 页头是速刷/战绩共用的：停在战绩视图切号也得跟着换名
+  if (!S.current) {
+    root.innerHTML = '<div class="gs-empty">先在左侧选一个明日方舟账号，再回来看战绩。</div>';
+    return;
+  }
+  // 这次拉的是哪个号：请求期间用户可能又切了号，回来时得认账，
+  // 不能把 A 的战绩写进 B 的缓存里（以前按 S.current 写，切号就会串）
+  const want = S.current;
+  const acc = S.accounts.find(a => a.file === want);
+  if (acc && !acc.hasToken) {
+    root.innerHTML = '<div class="gs-empty">这个账号没有森空岛 token（MAA 导入的账号读不到战绩）。'
+      + '<br>在「设置 → 账号管理」里粘贴一次 token 再来。</div>';
+    return;
+  }
+  if (!force && S.garStatOf[want]) {
+    S.garStat = S.garStatOf[want];
+    S.garPage = 1;
+    paintGarStat();
+    return;
+  }
+  // 只拦「同一个号」的重复请求；换号之后要立刻放行，不然新号会卡在旧号的
+  // loading/旧数据上，等旧请求回来还会把别人的战绩画上去
+  if (S.garStatBusy === want) return;
+  S.garStatBusy = want;
+  const seq = ++_gsSeq;
+  if (force || !S.garStatOf[want]) {
+    root.innerHTML = '<div class="gs-loading"><div class="gs-spin"></div>'
+      + '<b>正在读森空岛战绩…</b>第一次要拉一份资源字典，约 3~5 秒；之后有缓存就快了。</div>';
+  }
+  try {
+    const q = '/api/garrison/stat?file=' + encodeURIComponent(want) + (force ? '&refresh=1' : '');
+    const d = await api(q);
+    if (want !== S.current || seq !== _gsSeq || S.module !== 'garrison') return;
+    S.garStatOf[want] = d;
+    S.garStat = d;
+    S.garPage = 1;
+    paintGarStat();
+  } catch (e) {
+    if (want !== S.current || seq !== _gsSeq) return;
+    const msg = String((e && e.message) || e || '未知错误');
+    // 只有真像是鉴权/凭证的问题才让人重贴 token；其他异常（接口字段变了、
+    // 某个干员的模组查不到之类）贴 token 是白折腾，别把人往错方向带
+    const auth = /token|401|403|cred|grant|凭证|登录|过期|授权/i.test(msg);
+    root.innerHTML = `<div class="gs-empty">拉取失败：${esc(msg)}<br>`
+      + (auth
+        ? 'token 过期就在「设置 → 账号管理」里重新粘贴一次。'
+        : '这是接口数据的问题，不是 token 的问题：点下面重拉一次，'
+          + '还不行把上面这句反馈给我。')
+      + '<div class="gs-retry-wrap"><button class="ghost-btn mint" id="gs-retry">重新拉取</button></div>'
+      + '</div>';
+    const rb = $('#gs-retry');
+    if (rb) rb.addEventListener('click', () => gsEnsure(true));
+  } finally {
+    if (S.garStatBusy === want) S.garStatBusy = false;
+  }
+}
+
+function gsFiltered() {
+  const all = (S.garStat && S.garStat.records) || [];
+  if (S.garFilter === 'multi') return all.filter(r => r.modeType === 'MULTI');
+  if (S.garFilter === 'single') return all.filter(r => r.modeType === 'SINGLE');
+  if (S.garFilter === 'fast') return all.filter(r => r.difficulty === 'FAST');
+  return all;
+}
+
+function gsPageOf(total) {
+  const pages = Math.max(1, Math.ceil(total / GS_PER));
+  return Math.min(Math.max(1, S.garPage || 1), pages);
+}
+
+function gsHero(d) {
+  const p = d.player || {}, s = d.season || {}, c = d.career || {};
+  const av = p.avatar
+    ? `<img class="gs-hero-av" src="${gsIco(p.avatar, 96)}" alt="" onerror="this.remove()">`
+    : `<span class="gs-hero-av"></span>`;
+  const bg = s.background ? `<span class="gs-hero-bg" style="background-image:url('${esc(gsIco(s.background, 128))}')"></span>` : '';
+  return `<section class="gs-hero">${bg}
+    <div class="gs-hero-row">
+      ${av}
+      <div class="gs-hero-info">
+        <div class="gs-hero-name" title="${esc(p.name || '')}">${esc(p.name || '未知博士')}</div>
+        <div class="gs-hero-meta">
+          <i>${esc(p.server || '官服')}</i>
+          <span>Lv.${p.level || '—'}</span>
+          ${p.uid ? `<span>uid ${esc(p.uid)}</span>` : ''}
+        </div>
+      </div>
+      <div class="gs-trophy"><b>${c.trophy || 0}</b><span>奖杯</span></div>
+    </div>
+    <div class="gs-hero-season">
+      <b>${esc(s.name || '规程')}</b>
+      ${s.phase ? `<span>${esc(s.phase)}</span>` : ''}
+      <span>· 更新于 ${gsTime(d.updatedAt)}</span>
+    </div>
+  </section>`;
+}
+
+function gsMetrics(c) {
+  const rate = c.completeRate == null ? '—' : c.completeRate;
+  const all = c.totalAll && c.totalAll !== c.total ? `生涯 ${c.totalAll} 场 · ` : '';
+  return `<div class="gs-metrics">
+    <div class="gs-metric"><div class="k">对局记录</div><div class="v">${c.total || 0}</div>
+      <div class="s">${all}多人 ${c.multi.total} · 单人 ${c.single.total}</div></div>
+    <div class="gs-metric"><div class="k">完成率</div><div class="v">${rate}${rate === '—' ? '' : '<small>%</small>'}</div>
+      <div class="s">多人胜 ${c.multi.wins} · 单人胜 ${c.single.wins}</div></div>
+    <div class="gs-metric"><div class="k">Boss 击杀</div><div class="v">${c.bossKills || 0}</div>
+      <div class="s">隐秘 <b>${c.hiddenBossKills || 0}</b></div></div>
+    <div class="gs-metric"><div class="k">游戏时长</div>
+      <div class="v">${c.duration ? (c.duration / 3600).toFixed(1) : '—'}${c.duration ? '<small>小时</small>' : ''}</div>
+      <div class="s">${c.beLike ? `已获赞 ${c.beLike}` : '按对局时长累加'}</div></div>
+  </div>`;
+}
+
+function gsChipRow(list, kind) {
+  if (!list || !list.length) return '<div class="gs-dt-note">这个赛季还没有记录。</div>';
+  return `<div class="gs-chip-row">${list.map(x => {
+    // 格子只有 50 来像素宽，两行短句比一行长句好读
+    const l1 = kind === 'band'
+      ? `${x.count} 场` : `${x.count} 场`;
+    const l2 = kind === 'band'
+      ? `胜率 ${x.winRate == null ? '—' : x.winRate + '%'}`
+      : `最高 ${x.maxLayer || 0}`;
+    const tip = kind === 'band' && x.skill ? `${x.name} · ${x.skill}` : x.name;
+    return `<div class="gs-chip" title="${esc(tip)}${x.desc ? '：' + esc(x.desc).slice(0, 80) : ''}">
+      ${gsImg(x.icon, 128, kind === 'band' ? 'gs-chip-ic sq' : 'gs-bond-ic')}
+      <div class="gs-chip-n">${esc(x.name)}</div>
+      <div class="gs-chip-sub"><span>${l1}</span><span>${l2}</span></div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+/* 近 10 场叠层折线：每个点就是那场的最高盟约层数，图标直接用盟约图标 */
+function gsChartSec(layers) {
+  if (!layers || !layers.length) {
+    return '<section class="gs-sec"><div class="gs-sec-head"><b>近 10 场叠层</b></div>'
+      + '<div class="gs-dt-note">还没有能画的对局。</div></section>';
+  }
+  // 272×132 对齐左栏内容宽度（300 - 两侧 padding），1:1 映射不变形
+  const W = 272, H = 148, padL = 15, padR = 15, padT = 32, padB = 24;
+  const max = Math.max(1, ...layers.map(l => l.layer || 0));
+  const n = layers.length;
+  const stepX = n > 1 ? (W - padL - padR) / (n - 1) : 0;
+  const pts = layers.map((l, i) => ({
+    ...l,
+    x: padL + stepX * i,
+    y: H - padB - ((l.layer || 0) / max) * (H - padT - padB),
+  }));
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const area = `${line} L${pts[n - 1].x.toFixed(1)} ${H - padB} L${pts[0].x.toFixed(1)} ${H - padB} Z`;
+  const gid = 'gsg' + (S.current || '').replace(/\W/g, '');
+  const dots = pts.map(p => {
+    const r = 13;
+    // 盟约图标是给深色 HUD 画的白色线稿，底圈必须用游戏同款墨绿，
+    // 半透明底在浅色主题下会直接看不见
+    const ico = p.icon
+      ? `<image href="${esc(gsIco(p.icon, 64))}" x="${(p.x - 10).toFixed(1)}" y="${(p.y - 10).toFixed(1)}"
+           width="20" height="20"/>`
+      : '';
+    return `<g class="gs-chart-pt">
+      <title>${esc(p.name || '无盟约')} ${p.layer || 0} 层 · ${gsTime(p.at)}</title>
+      <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r}"
+        fill="#123a30" stroke="${p.success ? 'rgba(var(--mint),0.9)' : 'rgba(var(--tint),0.34)'}"
+        stroke-width="1.6"/>
+      ${ico}
+      <text x="${p.x.toFixed(1)}" y="${(p.y - r - 4).toFixed(1)}" text-anchor="middle"
+        font-size="10" fill="rgba(var(--tint),0.78)" font-weight="600">${p.layer || 0}</text>
+    </g>`;
+  }).join('');
+  const avg = Math.round(pts.reduce((a, p) => a + (p.layer || 0), 0) / n);
+  const avgY = (H - padB - (avg / max) * (H - padT - padB)).toFixed(1);
+  return `<section class="gs-sec">
+    <div class="gs-sec-head"><b>近 10 场叠层</b><span>平均 ${avg} 层</span></div>
+    <div class="gs-chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img"
+      aria-label="近 10 场最高盟约层数">
+      <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="rgba(78,209,176,0.42)"/>
+        <stop offset="100%" stop-color="rgba(78,209,176,0)"/>
+      </linearGradient></defs>
+      <path d="${area}" fill="url(#${gid})"/>
+      <line x1="${padL}" y1="${avgY}" x2="${W - padR}" y2="${avgY}"
+        stroke="rgba(var(--tint),0.16)" stroke-width="1" stroke-dasharray="3 3"/>
+      <path d="${line}" fill="none" stroke="rgba(var(--mint),0.9)" stroke-width="2"
+        stroke-linejoin="round" stroke-linecap="round"/>
+      ${dots}
+    </svg></div>
+  </section>`;
+}
+
+function gsCard(r) {
+  const bonds = (r.bonds || []).filter(b => b.activate).slice(0, 6);
+  const opers = (r.opers || []).slice(0, 10).map(o => gsOper(o)).join('');
+  const more = (r.opers || []).length > 10 ? `<span class="gs-oper gs-more">+${r.opers.length - 10}</span>` : '';
+  const bondRow = bonds.length ? `<div class="gs-rec-bonds">${bonds.map(b =>
+    `<span class="gs-bond-pill" title="${esc(b.name)} ${b.layer} 层">
+      ${gsImg(b.icon, 64)}
+      <b>${b.layer || 0}</b></span>`).join('')}</div>` : '';
+  const fav = r.favored ? '<span class="gs-fav" title="已收藏">★</span>' : '';
+  return `<article class="gs-rec ${r.success ? 'ok' : 'fail'}" data-rid="${esc(r.id)}" tabindex="0">
+    <div class="gs-rec-top">
+      <span class="gs-tag${r.success ? '' : ' fail'}">${r.success ? '模拟完成' : '模拟中断'}</span>
+      <span class="gs-rec-mode"><b class="d-${esc((r.difficulty || '').toLowerCase())}">${esc(r.modeCn || '')}</b>${r.modeTypeCn ? ' · ' + esc(r.modeTypeCn) : ''}</span>
+      ${fav}
+      <span class="gs-rec-trophy">${GS_TROPHY}${r.trophyAfter || 0}
+        ${r.trophyAfter !== r.trophyBefore ? `<small>（${r.trophyAfter - r.trophyBefore > 0 ? '+' : ''}${r.trophyAfter - r.trophyBefore}）</small>` : ''}
+      </span>
+    </div>
+    <div class="gs-rec-body">
+      <div class="gs-rounds"><b>${r.rounds || 0}</b><span>回合</span></div>
+      <div class="gs-rec-strategy">
+        ${gsImg((r.band || {}).icon, 128)}
+        <div><div class="k">分队</div><div class="v">${esc((r.band || {}).name || '—')}</div>
+          ${(r.band || {}).skill ? `<div class="s">${esc(r.band.skill)}</div>` : ''}</div>
+      </div>
+      <div class="gs-opers">${opers}${more}</div>
+    </div>
+    ${bondRow}
+    <div class="gs-rec-foot">
+      <span>${gsTime(r.endTs)}</span>
+      ${r.dur ? `<span class="gs-dot">·</span><span>${gsDur(r.dur)}</span>` : ''}
+      ${r.title && r.title.name ? `<span class="gs-dot">·</span><span>${esc(r.title.name)}</span>` : ''}
+      ${r.killCnt ? `<span class="gs-dot">·</span><span>击杀 ${r.killCnt}</span>` : ''}
+    </div>
+  </article>`;
+}
+
+function gsPager(page, total, per, unit) {
+  per = per || GS_PER;
+  unit = unit || '场';
+  const pages = Math.max(1, Math.ceil(total / per));
+  if (pages <= 1) return '';
+  const nums = [];
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || Math.abs(i - page) <= 1) nums.push(i);
+    else if (nums[nums.length - 1] !== '…') nums.push('…');
+  }
+  return `<div class="gs-pager">
+    <button class="gs-page-btn" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>‹</button>
+    ${nums.map(n => n === '…' ? '<span class="gs-page-info">…</span>'
+      : `<button class="gs-page-btn${n === page ? ' active' : ''}" data-page="${n}">${n}</button>`).join('')}
+    <button class="gs-page-btn" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>›</button>
+    <span class="gs-page-info">第 ${page} / ${pages} 页 · 每页 ${per} ${unit}</span>
+  </div>`;
+}
+
+function paintGarStat() {
+  const root = $('#gs-root');
+  const d = S.garStat;
+  if (!root || !d) return;
+  const c = d.career || {};
+  const recs = gsFiltered();
+  const page = gsPageOf(recs.length);
+  const slice = recs.slice((page - 1) * GS_PER, page * GS_PER);
+  const filters = GS_FILTERS.map(([k, label]) =>
+    `<button class="gs-filter${S.garFilter === k ? ' active' : ''}" data-gfilter="${k}">${label}</button>`).join('');
+  root.innerHTML = `<div class="gs-layout">
+    <aside class="gs-side">
+      ${gsHero(d)}
+      ${gsMetrics(c)}
+      <section class="gs-sec">
+        <div class="gs-sec-head"><b>常用分队</b><span>按出场场次</span></div>
+        ${gsChipRow(c.topBands, 'band')}
+      </section>
+      <section class="gs-sec">
+        <div class="gs-sec-head"><b>常用盟约</b><span>括号内是最高层数</span></div>
+        ${gsChipRow(c.topBonds, 'bond')}
+      </section>
+      ${gsChartSec(c.layers)}
+    </aside>
+    <div class="gs-main">
+      <div class="gs-list-head">
+        <b>对局记录</b>
+        <span class="gs-count">本季 ${d.counts.current} 场 · 接口共返回 ${d.counts.all} 场</span>
+        <div class="gs-filters">${filters}</div>
+      </div>
+      ${slice.length ? slice.map(gsCard).join('') : '<div class="gs-empty">这个筛选下没有对局。</div>'}
+      ${gsPager(page, recs.length)}
+    </div>
+  </div>`;
+  gsBind(root);
+}
+
+function gsBind(root) {
+  $$('[data-gfilter]', root).forEach(b => b.addEventListener('click', () => {
+    if (S.garFilter === b.dataset.gfilter) return;
+    S.garFilter = b.dataset.gfilter;
+    S.garPage = 1;
+    paintGarStat();
+  }));
+  $$('[data-page]', root).forEach(b => b.addEventListener('click', () => {
+    const p = Number(b.dataset.page);
+    if (!p || p === S.garPage) return;
+    S.garPage = p;
+    paintGarStat();
+    const sc = $('.gs-scroll');
+    if (sc) sc.scrollTop = 0;
+  }));
+  $$('.gs-rec', root).forEach(el => {
+    const open = () => gsOpenDetail(el.dataset.rid);
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
+}
+
+function gsOpenDetail(rid) {
+  const d = S.garStat;
+  if (!d) return;
+  const r = (d.records || []).find(x => x.id === rid);
+  if (!r) return;
+  S.garDetail = rid;
+  let host = $('#gs-drawer-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'gs-drawer-host';
+    document.body.appendChild(host);
+  }
+  const bonds = (r.bonds || []);
+  const act = bonds.filter(b => b.activate);
+  const band = r.band || {};
+  const dtStats = `<div class="gs-dt-stats">
+    <div class="gs-dt-stat"><div class="k">本场奖杯</div><div class="v">${r.trophyAfter || 0}
+      ${r.trophyAfter !== r.trophyBefore ? `<small>(${r.trophyAfter - r.trophyBefore > 0 ? '+' : ''}${r.trophyAfter - r.trophyBefore})</small>` : ''}</div></div>
+    <div class="gs-dt-stat"><div class="k">击杀</div><div class="v">${r.killCnt || 0}</div></div>
+    <div class="gs-dt-stat"><div class="k">花费资金</div><div class="v">${r.coinCost || 0}</div></div>
+  </div>`;
+  const bondRow = bonds.length ? `<div class="gs-dt-bond-row">${bonds.map(b =>
+    `<span class="gs-dt-bond${b.activate ? '' : ' dim'}" title="${esc(b.desc || b.name)}">
+      ${gsImg(b.icon, 96)}<span class="n">${esc(b.name)}</span>
+      <span class="l">${b.layer || 0}</span></span>`).join('')}</div>` : '';
+  const operCards = (r.opers || []).map(o => {
+    const marks = [];
+    if (o.skill && o.skill.icon) {
+      marks.push(`<img class="gs-mark" src="${esc(gsIco(o.skill.icon, 96))}" alt="" loading="lazy"
+        title="技能：${esc(o.skill.name)}" onerror="this.remove()">`);
+    }
+    if (o.module && o.module.icon) {
+      marks.push(`<img class="gs-mark" src="${esc(gsIco(o.module.icon, 96))}" alt="" loading="lazy"
+        title="模组：${esc(o.module.name)}" onerror="this.remove()">`);
+    }
+    const eqs = (o.equips || []).map(e =>
+      `<img class="${e.upgraded ? 'up' : ''}" src="${esc(gsIco(e.icon, 96))}" alt="" loading="lazy"
+        title="${esc(e.name)}${e.upgraded ? '（已升级）' : ''}" onerror="this.remove()">`).join('');
+    return `<div class="gs-dt-oper" title="${esc(gsOperTip(o))}">
+      <div class="av">${gsOperInner(o)}</div>
+      <div class="nm">${esc(o.name)}</div>
+      <div class="lv">${o.tier ? `<b>${GS_ROMAN[o.tier]}</b> 阶` : ''}${o.level ? ` · Lv.${o.level}` : ''}</div>
+      ${marks.length ? `<div class="marks">${marks.join('')}</div>` : ''}
+      ${eqs ? `<div class="eqs">${eqs}</div>` : ''}
+    </div>`;
+  }).join('');
+  const opers = operCards ? `<div class="gs-dt-opers">${operCards}</div>` : '';
+  const bosses = (r.bosses || []).length ? `<div class="gs-dt-boss">${r.bosses.map(b =>
+    `<div class="gs-dt-boss-item${b.hidden ? ' hidden-b' : ''}">
+      <div class="n">${esc(b.name)}<div class="s">${b.hidden ? '隐秘核心' : '领袖'} ·
+        <b class="${b.killed ? '' : 'miss'}">${b.killed ? '已击败' : '未击败'}</b></div></div>
+    </div>`).join('')}</div>` : '';
+  const tags = [];
+  if (r.title && r.title.name) tags.push(`<span class="gs-dt-tag">称号 <b>${esc(r.title.name)}</b></span>`);
+  if (r.syncCnt) tags.push(`<span class="gs-dt-tag">同步 <b>${r.syncCnt}</b></span>`);
+  if (r.favored) tags.push('<span class="gs-dt-tag">已收藏</span>');
+  if (band.master) tags.push('<span class="gs-dt-tag">分队 <b>大师标识</b></span>');
+  else if (band.victor) tags.push('<span class="gs-dt-tag">分队 <b>胜利标识</b></span>');
+
+  host.innerHTML = `<div class="gs-drawer-mask" id="gs-mask"></div>
+  <aside class="gs-drawer" id="gs-drawer" role="dialog" aria-modal="true" aria-label="对局详情">
+    <div class="gs-drawer-head">
+      <div>
+        <h3>${r.success ? '模拟完成' : '模拟中断'}</h3>
+        <div class="sub">
+          <span><b>${esc(r.modeCn || '')}</b>${r.modeTypeCn ? ' · ' + esc(r.modeTypeCn) : ''}</span>
+          <span>通过 ${r.rounds || 0} 回合</span>
+          <span>${gsTime(r.endTs)}</span>
+          ${r.dur ? `<span>${gsDur(r.dur)}</span>` : ''}
+        </div>
+      </div>
+      <button class="gs-drawer-close" id="gs-drawer-close" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div class="gs-drawer-body">
+      ${dtStats}
+      <section class="gs-dt-sec">
+        <div class="gs-dt-title">分队与盟约 <span>${act.length} 个盟约生效</span></div>
+        <div class="gs-dt-strategy">
+          ${gsImg(band.icon, 128)}
+          <div><div class="n">${esc(band.name || '未记录分队')}</div>
+            ${(band.skill || band.hp) ? `<div class="d">${band.skill ? `技能：${esc(band.skill)}` : ''}${band.skill && band.hp ? ' · ' : ''}${band.hp ? `初始目标生命 ${band.hp}` : ''}</div>` : ''}
+            ${band.desc ? `<div class="d">${esc(band.desc).replace(/\n/g, '<br>')}</div>` : ''}</div>
+        </div>
+        ${bondRow}
+      </section>
+      <section class="gs-dt-sec">
+        <div class="gs-dt-title">通关干员 <span>共 ${(r.opers || []).length} 名 · 金框为精锐</span></div>
+        ${opers || '<div class="gs-dt-note">这一局没有记录干员。</div>'}
+      </section>
+      ${bosses ? `<section class="gs-dt-sec"><div class="gs-dt-title">首领</div>${bosses}</section>` : ''}
+      ${tags.length || (r.events || []).length ? `<section class="gs-dt-sec">
+        <div class="gs-dt-title">其他</div>
+        <div class="gs-dt-tags">${tags.join('')}</div>
+        ${(r.events || []).map(e => `<div class="gs-dt-note">${esc(e)}</div>`).join('')}
+      </section>` : ''}
+    </div>
+  </aside>`;
+  const close = () => {
+    const m = $('#gs-mask'), dr = $('#gs-drawer');
+    if (m) m.classList.remove('on');
+    if (dr) dr.classList.remove('on');
+    S.garDetail = '';
+    setTimeout(() => { if (host && !S.garDetail) host.innerHTML = ''; }, 200);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  const mask = $('#gs-mask'), dr = $('#gs-drawer');
+  if (mask) mask.addEventListener('click', close);
+  const btn = $('#gs-drawer-close');
+  if (btn) btn.addEventListener('click', close);
+  requestAnimationFrame(() => {
+    if (mask) mask.classList.add('on');
+    if (dr) dr.classList.add('on');
+  });
 }
 
 /* ------------------------------------------------------------ 抽卡统计 */
@@ -6028,6 +6659,274 @@ async function gachaSync() {
   }
 }
 
+/* ------------------------------------------------------------ 干员练度
+   数据是账号快照里的 chars 段（token 同步或 MAA 识别都会写），后端
+   /api/training 只做整理，不发网络请求；图标（头像/技能/模组）走官方 CDN
+   现取，安装包不带图。420 个干员全渲染会拖慢滚动，一页 60 行分页。 */
+const TR_PER = 60;
+const TR_ELITE = ['精零', '精一', '精二'];
+const TR_ELITE_COLOR = { 1: '#30c0d8', 2: '#f0a800' };
+const TR_PROF = ['先锋', '近卫', '重装', '狙击', '术师', '医疗', '辅助', '特种'];
+const TR_RAR = [[0, '全部'], [6, '六星'], [5, '五星'], [4, '四星'], [3, '三星及以下']];
+const TR_MARK = ['', 'M1', 'M2', 'M3'];
+
+function trUrl(u, s) {
+  return u ? `/api/garrison/img?u=${encodeURIComponent(u)}&s=${s || 96}` : '';
+}
+
+/* 一个方形图标格子：底下放首字兜底，图盖在上面；图挂了自然露出首字，
+   跟头像块同一套思路，不用记状态 */
+function trIco(cls, url, fallback, badge, tip, size) {
+  const img = url
+    ? `<img src="${trUrl(url, size || 96)}" alt="" loading="lazy" onerror="this.remove()">`
+    : '';
+  return `<span class="${cls}"${tip ? ` title="${esc(tip)}"` : ''}>`
+    + `<i>${esc(fallback)}</i>${img}${badge || ''}</span>`;
+}
+
+function trSkill(s) {
+  const badge = s.mastery > 0 ? `<b class="tr-mk m${s.mastery}">${TR_MARK[s.mastery]}</b>` : '';
+  const tip = `${s.name}${s.mastery > 0 ? ' · 专' + '一二三'[s.mastery - 1] : ''}`;
+  return trIco('tr-skill', s.icon, String(s.name || '技').slice(0, 1), badge, tip, 96);
+}
+
+function trModule(m) {
+  const badge = m.level > 0 ? `<b class="tr-mk lv${m.level}">${m.level}</b>` : '';
+  return trIco('tr-mod', m.icon, '模', badge, `${m.name} · ${m.level} 级`, 96);
+}
+
+function trRow(c) {
+  // 六颗小星星在 10px 下会糊成一条色块，直接写「6★」更清楚
+  const stars = (c.rarity || 0) + '★';
+  const elite = c.elite > 0
+    ? `<i class="tr-tier" style="--tier:${TR_ELITE_COLOR[c.elite] || TR_ELITE_COLOR[1]}">${
+      c.elite >= 2 ? 'Ⅱ' : 'Ⅰ'}</i>`
+    : '';
+  const av = `<span class="tr-av">${trIco('tr-avimg', c.avatar, String(c.name || '?').slice(0, 1), '', '', 96)}${elite}</span>`;
+  const skills = (c.skills || []).length
+    ? c.skills.map(trSkill).join('')
+    : '<span class="tr-none">—</span>';
+  const mods = (c.modules || []).length
+    ? c.modules.map(trModule).join('')
+    : '<span class="tr-none">—</span>';
+  const favor = c.favor >= 200
+    ? `<span class="tr-favor max" title="信赖已满">200</span>`
+    : `<span class="tr-favor" title="信赖 ${c.favor}/200">${c.favor || 0}</span>`;
+  return `<div class="tr-row" data-id="${esc(c.charId)}">
+    ${av}
+    <div class="tr-id">
+      <div class="tr-name">${esc(c.name)}</div>
+      <div class="tr-meta">
+        <span class="tr-stars r${c.rarity}">${stars}</span>
+        <span>${esc(c.profession || '—')}</span>
+        <span class="tr-elite">${TR_ELITE[c.elite] || '精零'}</span>
+        <span class="tr-lv">Lv<b>${c.level || 0}</b></span>
+        ${c.potential ? `<span class="tr-pot" title="潜能 ${c.potential}">潜${c.potential}</span>` : ''}
+      </div>
+    </div>
+    <div class="tr-skills">${skills}</div>
+    <div class="tr-favors">${favor}</div>
+    <div class="tr-mods">${mods}</div>
+  </div>`;
+}
+
+function trChip(label, on, attr, value) {
+  return `<button class="tr-chip${on ? ' on' : ''}" ${attr}="${esc(String(value))}"
+    aria-pressed="${on ? 'true' : 'false'}">${esc(label)}</button>`;
+}
+
+function trPaintChips() {
+  const prof = $('#tr-prof'), rar = $('#tr-rar');
+  if (prof) {
+    prof.innerHTML = trChip('全部', S.trProf === 'all', 'data-trprof', 'all')
+      + TR_PROF.map(p => trChip(p, S.trProf === p, 'data-trprof', p)).join('');
+  }
+  if (rar) {
+    rar.innerHTML = TR_RAR.map(([v, n]) => trChip(n, S.trRar === v, 'data-trrar', v)).join('');
+  }
+}
+
+function trFiltered() {
+  const d = S.tr || {};
+  const q = String(S.trQ || '').trim().toLowerCase();
+  return (d.chars || []).filter(c => {
+    if (S.trProf !== 'all' && c.profession !== S.trProf) return false;
+    if (S.trRar) {
+      if (S.trRar >= 4 ? c.rarity !== S.trRar : c.rarity > 3) return false;
+    }
+    if (!q) return true;
+    return String(c.name || '').toLowerCase().includes(q)
+      || String(c.charId || '').toLowerCase().includes(q);
+  });
+}
+
+function trPaint() {
+  const d = S.tr;
+  const sub = $('#tr-sub'), count = $('#tr-count'), list = $('#tr-list'), foot = $('#tr-foot');
+  const acc = currentAccount();
+  if (sub) {
+    if (!d) {
+      sub.textContent = S.trBusy ? '读取中…' : (acc ? acc.nickName : '未选择账号');
+    } else {
+      const st = d.stats || {}, a = d.account || {};
+      const head = [a.channelName || '', 'Lv' + (a.level || '?')];
+      // 没有干员数据时只留身份：一排「0」看着像出错
+      sub.textContent = st.total
+        ? [...head, `干员 ${st.total}`, `六星 ${st.sixStar}`,
+          `精二 ${st.e2}`, `专三 ${st.mastery3}`,
+          `模组 ${st.moduleCount}`, `满信赖 ${st.favorMax}`,
+          d.syncedAt ? '同步于 ' + fmtSync(d.syncedAt) : ''].filter(Boolean).join(' · ')
+        : head.filter(Boolean).join(' · ');
+    }
+  }
+  if (!list) return;
+
+  if (!d) {
+    list.innerHTML = `<div class="tr-empty">${S.trBusy ? '正在读取练度…'
+      : (acc ? '这个账号还没有练度数据。点右上角「刷新练度」从森空岛同步一次。'
+        : '先在左侧选一个账号。')}</div>`;
+    if (count) count.textContent = '';
+    if (foot) foot.innerHTML = '';
+    return;
+  }
+  if (!(d.chars || []).length) {
+    list.innerHTML = '<div class="tr-empty">这个账号没有干员数据：MAA 导入的号要先在 MAA 里识别一次干员，'
+      + '再点顶部「从 MAA 更新干员信息」。</div>';
+    if (count) count.textContent = '';
+    if (foot) foot.innerHTML = '';
+    return;
+  }
+
+  const rows = trFiltered();
+  const pages = Math.max(1, Math.ceil(rows.length / TR_PER));
+  if (S.trPage > pages) S.trPage = pages;
+  const slice = rows.slice((S.trPage - 1) * TR_PER, S.trPage * TR_PER);
+  list.innerHTML = slice.length ? slice.map(trRow).join('')
+    : '<div class="tr-empty">没有符合条件的干员，换个筛选或清掉搜索词。</div>';
+  if (count) {
+    count.textContent = rows.length === (d.chars || []).length
+      ? `共 ${rows.length} 人`
+      : `筛出 ${rows.length} / ${(d.chars || []).length} 人`;
+  }
+  if (foot) foot.innerHTML = gsPager(S.trPage, rows.length, TR_PER, '人');
+}
+
+async function trEnsure(force) {
+  const f = S.current;
+  if (!f) {
+    S.tr = null;
+    trPaint();
+    return;
+  }
+  if (!force && S.trOf[f]) {
+    S.tr = S.trOf[f];
+    trPaint();
+    return;
+  }
+  S.trBusy = true;
+  trPaint();
+  try {
+    const d = await api('/api/training?file=' + encodeURIComponent(f));
+    if (f !== S.current) return;          // 读的时候已经换号了，丢掉
+    S.trOf[f] = d;
+    S.tr = d;
+  } catch (e) {
+    if (f === S.current) toast('读取练度失败：' + e.message, 'err', 5000);
+  } finally {
+    S.trBusy = false;
+    if (f === S.current) trPaint();
+  }
+}
+
+function renderTraining() {
+  const acc = currentAccount();
+  const btn = $('#btn-tr-refresh');
+  if (btn) {
+    btn.disabled = !acc || !acc.hasToken || S.trBusy;
+    btn.title = !acc ? '先在左侧选一个账号'
+      : (!acc.hasToken ? '这个账号没有森空岛 token（MAA 导入的号），刷新练度用顶部的「从 MAA 更新干员信息」'
+        : '重新同步这个账号的练度（走森空岛，同 token 下的角色会一起刷新）');
+  }
+  trPaintChips();
+  // 缓存要跟账号快照的同步时间对一下：侧栏「同步全部」/「从 MAA 更新」之后
+  // syncedAt 变了，旧缓存就作废，不用等用户再点一次刷新
+  const cached = S.trOf[S.current];
+  const fresh = cached && (!acc || !acc.syncedAt || cached.syncedAt === acc.syncedAt);
+  if (cached && !fresh) delete S.trOf[S.current];
+  S.tr = fresh ? cached : null;
+  trPaint();
+  trEnsure(false);
+}
+
+/* 从森空岛重新同步练度：后台任务 + 轮询，完成后清掉这份缓存重读 */
+async function trRefresh() {
+  if (S.trBusy || !S.current) return;
+  const file = S.current;
+  const btn = $('#btn-tr-refresh'), tip = $('#tr-tip');
+  S.trBusy = true;
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  if (tip) tip.textContent = '正在从森空岛同步…';
+  try {
+    const { taskId } = await api('/api/training/refresh', { file });
+    await pollTask(taskId);
+    delete S.trOf[file];
+    const acc = await api('/api/accounts');
+    S.accounts = acc.accounts;
+    renderAccounts();
+    if (file === S.current) {
+      S.tr = null;
+      await selectAccount(file, true);      // 重读 detail：顶部统计与练度一起更新
+    }
+    toast('练度已更新');
+  } catch (e) {
+    toast('刷新练度失败：' + e.message, 'err', 7000);
+  } finally {
+    S.trBusy = false;
+    if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+    if (tip) tip.textContent = '';
+    trPaint();
+  }
+}
+
+function trBind() {
+  const box = $('#mod-training');
+  if (!box) return;
+  box.addEventListener('click', e => {
+    const p = e.target.closest('[data-trprof]');
+    if (p) {
+      S.trProf = p.dataset.trprof;
+      S.trPage = 1;
+      trPaintChips();
+      trPaint();
+      return;
+    }
+    const r = e.target.closest('[data-trrar]');
+    if (r) {
+      S.trRar = Number(r.dataset.trrar) || 0;
+      S.trPage = 1;
+      trPaintChips();
+      trPaint();
+      return;
+    }
+    const pg = e.target.closest('#tr-foot [data-page]');
+    if (pg && !pg.disabled) {
+      S.trPage = Math.max(1, Number(pg.dataset.page) || 1);
+      trPaint();
+      $('#tr-scroll').scrollTop = 0;
+      return;
+    }
+    if (e.target.closest('#btn-tr-refresh')) trRefresh();
+  });
+  const q = $('#tr-search');
+  if (q) {
+    q.addEventListener('input', () => {
+      S.trQ = q.value;
+      S.trPage = 1;
+      trPaint();
+    });
+  }
+}
+
 /* ------------------------------------------------------------ 事件绑定 */
 function bindGlobal() {
   $('#btn-next').addEventListener('click', () => {
@@ -6063,6 +6962,15 @@ function bindGlobal() {
 
   $('#btn-sign-one').addEventListener('click', () => signinRun('one'));
 
+  trBind();   // 干员练度：职业/稀有度筛选、搜索、分页、刷新
+
+  // 卫戍协议：速刷 / 战绩查询两个视图
+  $$('.gar-tab').forEach(b => b.addEventListener('click', () => {
+    const v = b.dataset.garview === 'stat' ? 'stat' : 'quick';
+    if (S.garView === v) return;
+    S.garView = v;
+    paintGarView();
+  }));
   // 卫戍协议：四个动作 + 表单改动随手记（不提交就切号也不丢）
   $('#gar-test').addEventListener('click', () => garAction('test'));
   $('#gar-start').addEventListener('click', () => garAction('start'));

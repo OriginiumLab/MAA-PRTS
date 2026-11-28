@@ -8960,8 +8960,14 @@ def main():
                 lambda: check_icon_cache_refresh(tmp))
         r.check('B84 干员头像按需下载（缓存优先 / 索引决定走镜像 / 兜底 / 负缓存）',
                 lambda: check_avatar_cache(tmp))
-        r.check('B85 账号头像走看板娘（无 secretary 退回首字 / 资源统一 pack-data）',
+        r.check('B85 账号头像（设置决定游戏内/看板娘 / 都没有退首字 / 资源统一 pack-data）',
                 lambda: check_account_avatar(tmp))
+        r.check('B86 作业详情带简介与干员头像（简介原样下传 / charId 来自资源包）',
+                lambda: check_op_detail_desc(tmp))
+        r.check('B87 卫戍协议战绩（图标零打包 / 三个接口拼装 / 界面结构）',
+                lambda: check_garrison_stat(tmp))
+        r.check('B88 干员练度 + 账号头像设置（快照直读 / 图标零打包 / 非法值回默认）',
+                lambda: check_training(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -9844,9 +9850,10 @@ def check_account_avatar(tmp):
 
     2026-11-28 加。用户提的三件事，各钉一条：
 
-    - **账号头像不许再是首字**：森空岛同步时已经存了 ``account.secretary``
-      （charId / 皮肤），列表页要拿它去 ``/api/avatar/<charId>`` 取图；
-      没有 secretary 的账号（MAA 导入的、终末地的）才退回昵称首字；
+    - **账号头像不许再是首字**：森空岛同步时存了两样东西——``account.avatar``
+      （游戏内头像直链）和 ``account.secretary``（看板娘 charId / 皮肤）。
+      取哪张由设置 ``acctAvatar`` 决定（2026-11-29 起默认游戏内，可切看板娘），
+      两样都没有的账号（MAA 导入的）才退回昵称首字；
     - **头像资源只走 pack-data**：之前单独开了 ``avatar-data`` 分支，是因为
       pack.yml 强推会冲掉它。现在 pack.yml 改成「继承整条分支再覆盖自己那
       三个文件」，头像和主题都住 pack-data，客户端不该再认别的分支名；
@@ -9885,14 +9892,15 @@ def check_account_avatar(tmp):
     finally:
         settings.ACCOUNTS_DIR = keep_dir
 
-    # 2) 前端三处头像都走同一个 helper，不许再各自拼首字
-    assert 'function acctAvatar(' in js, 'app.js 没有 acctAvatar'
-    assert "a.secretary && a.secretary.charId" in js, '没读 secretary'
-    assert "`<img src=\"/api/avatar/${encodeURIComponent(id)}\" alt=\"\" loading=\"lazy\" onerror=\"this.remove()\">`" in js, \
-        'acctAvatar 里的 img 不完整（要么缺 lazy，要么缺 onerror 自删）'
+    # 2) 前端三处头像都走同一个 helper，按设置的来源取图，不许各自拼首字
+    assert 'function acctAvatar(' in js and 'function acctAvatarUrl(' in js, 'app.js 缺头像 helper'
+    assert "a.secretary.charId" in js and "a.avatar" in js, '两种头像来源没都读'
+    assert "=== 'secretary'" in js, '看板娘分支没了'
+    assert "'/api/gasset/img?u='" in js, '游戏内头像没走白名单代理（直连 CDN 会漏 referer）'
+    assert 'onerror="this.remove()"' in js, '头像 img 缺 onerror 自删（加载失败会裂图）'
     assert js.count('${acctAvatar(a, cls)}') == 2, \
         '侧栏/设置页应该都用 acctAvatar，实际 %d 处' % js.count('${acctAvatar(a, cls)}')
-    assert "hBox.classList.toggle('has-pic', !!hSec)" in js, '顶部头像没用看板娘'
+    assert "hBox.classList.toggle('has-pic', !!hSrc)" in js, '顶部头像没跟设置走'
     assert "classList.remove('ef', 'has-pic')" in js, '删光账号后头像状态没清干净'
 
     # 3) 样式：图片铺满 + 裁边
@@ -9909,6 +9917,403 @@ def check_account_avatar(tmp):
     from core import avatarcache
     src = open(avatarcache.__file__, encoding='utf-8').read()
     assert 'avatar_urls' not in src, 'avatarcache 还在用 avatar_urls'
+
+
+def check_op_detail_desc(tmp):
+    """B86 作业详情弹窗：作业简介 + 干员头像
+
+    2026-11-28 加。用户截图里那份弹窗只有「干员与要求」，两个诉求各钉一条：
+
+    - **作业简介**：作者写在 ``doc.details`` 里的自由文本，之前只有搜索列表
+      截 400 字给 ``briefOf`` 用，详情弹窗拿不到全文。改成 ``/api/op`` 原样
+      下传，前端超 7 行折叠——不筛行，怕把「这个位置要手动下干员」这类关
+      键说明当推广删掉；
+    - **干员头像**：``detail_opers`` 从资源包索引里补 ``charId`` / ``stars``，
+      前端复用抽卡那套 ``opAv()``。名字对不上资源包（改名、异格）时 charId
+      为空，img 不渲染，退回首字底块，不会裂图。
+
+    这两条都是「字段有没有从头传到尾」，桩掉网络请求直接查返回值最稳。
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(repo, 'frontend', 'style.css'), encoding='utf-8').read()
+
+    from core import api, copilot
+
+    content = {
+        'stage_name': 'act46side_01',
+        'doc': {'title': 'OS-1 - 呼号声中',
+                'details': '原作者：萧然Q\n作业交流群 123456\n站位见图'},
+        'opers': [{'name': '艾雅法拉'}, {'name': '这个人不存在'}],
+        'actions': [{'type': 'Deploy'}, {'type': 'Skill'}],
+    }
+    keep = copilot.operation_detail
+    try:
+        copilot.operation_detail = lambda cid: {'meta': {'id': cid}, 'content': content}
+        d = api.api_op({'id': '73176'}, None)
+    finally:
+        copilot.operation_detail = keep
+
+    # 1) 简介原样下传（含换行，不截断）
+    assert d['desc'] == content['doc']['details'], repr(d.get('desc'))
+    assert d['desc'].count('\n') == 2, '简介的换行丢了（前端靠 pre-wrap 排版）'
+
+    # 2) 干员带上 charId / 星级；认不出的名字留空（前端退回首字）
+    o1, o2 = d['opers']
+    assert o1['charId'].startswith('char_'), o1.get('charId')
+    assert o1['stars'] == 6, o1.get('stars')
+    assert o2['charId'] == '', '认不出的干员不该瞎编 charId：%r' % o2.get('charId')
+    # 详情_opers 的展示字段没被这轮改动挤掉
+    assert 'req' in o1, 'req 丢了'
+
+    # 3) 前端：简介块 + 折叠 + 头像行
+    assert '<div id="op-desc" hidden></div>' in js, '弹窗里没有简介占位'
+    assert '作业简介' in js, '没有「作业简介」标题'
+    assert 'String(d.desc || \'\')' in js, '没读 /api/op 的 desc'
+    assert "classList.toggle('open')" in js, '「展开全文」没有展开态'
+    assert '<div class="op-row">' in js, '干员行没用 op-row'
+    assert '${opAv(o.charId, o.name, o.stars)}' in js, '干员行没接头像'
+    assert 'rgba(255,255,255' not in js.split('function check_op_detail_desc')[0][-4000:], \
+        '干员行还在写死白色边框'
+
+    # 4) 样式：折叠高度 + 头像尺寸
+    assert '.op-desc-text.open { max-height: none; }' in css, '展开后没解除高度限制'
+    assert '.op-row .op-av {' in css, '弹窗里的头像没单独定尺寸'
+    assert 'white-space: pre-wrap' in css, '简介不保留换行会挤成一坨'
+
+
+def check_garrison_stat(tmp):
+    """B87 卫戍协议战绩（图标零打包 / 三个接口拼装 / 界面结构）
+
+    2026-11-28 加。这一页的立论是「官方资源接口把图标 CDN 直链发下来」，
+    所以安装包一张图都不用带；底下几条都是这轮踩过的坑，各钉一行：
+
+    - **图标白名单**：``/api/garrison/img`` 的 url 由前端传，不卡白名单就成了
+      任意 URL 代理（SSRF）。只放行鹰角两个 CDN，其它一律空串，前端回落占位块；
+    - **分队名 vs 技能名**：分队名是带队的干员 / NPC（登录版 ``name``、公开版
+      ``initiatorName``，例如「复奏」）；「二重奏」是分队技能（``effectName``）。
+      2026-11-28 这两个字段反过一次，整排分队都显示成技能名；
+    - **没生效的盟约不算常用**：``layer=0`` 或 ``activate=0`` 的条目也算场次，
+      结果「最高 0」混进常用盟约；
+    - **首领名**：资源没给名字时按 enemyId 查映射，别把 enemy_1521_dslily
+      直接甩到界面上；
+    - **盟约图标绿底**：白线稿配黑底在浅色主题下几乎看不见，用 ``#123a30``。
+    - **证章不是模组**：``uniequip_001_*`` 公开资源里不列、CDN 也没图，查不到时
+      变量是 None 还去 ``.get`` 会让整页「拉取失败」（2026-11-29 用户撞上）；
+      查不到的一律按 id 拼 CDN 图兜底，证章直接当没有。
+    - **切号要认账**：页头 ``#gar-sub`` 是速刷/战绩共用的，战绩视图也得刷；
+      战绩请求按发起时的账号记，别拿 ``S.current`` 写缓存（中途切号会串）。
+
+    三件事都靠桩掉网络请求来查返回值（真接口要 token，跑不了 CI）。
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(repo, 'frontend', 'style.css'), encoding='utf-8').read()
+    html = open(os.path.join(repo, 'frontend', 'index.html'), encoding='utf-8').read()
+    main_src = open(os.path.join(repo, 'backend', 'main.py'), encoding='utf-8').read()
+    api_src = open(os.path.join(repo, 'backend', 'core', 'api.py'), encoding='utf-8').read()
+
+    from core import accounts, garrisonstat, gasset
+
+    # 1) 图标地址白名单：只放行鹰角 CDN，其余一律空串
+    assert gasset.normalize('https://web.hycdn.cn/a/b.png?v=1') == 'https://web.hycdn.cn/a/b.png?v=1'
+    assert gasset.normalize('http://bbs.hycdn.cn/x.png') == 'https://bbs.hycdn.cn/x.png', \
+        'http 要能归一成 https'
+    for bad in ('', None, 'ftp://web.hycdn.cn/a.png', 'https://evil.com/a.png',
+                'https://web.hycdn.cn.evil.com/a.png', 'https://127.0.0.1/a.png'):
+        assert gasset.normalize(bad) == '', '白名单漏了：%r' % (bad,)
+
+    # 2) 富文本清洗：HTML 标签吃掉，<战斗中> 这种语义标签换成书名号保留
+    assert garrisonstat.text('<b>加血</b> 20%') == '加血 20%'
+    assert garrisonstat.text('<color=#ff0000>红字</color>') == '红字'
+    t = garrisonstat.text('回合<战斗中>额外资金</>')
+    assert '〈战斗中〉' in t and '<' not in t, '语义标签没换成书名号：%r' % t
+
+    # 3) 三个接口拼装（桩掉 token / guide / resource / info）
+    guide = {
+        'versionInfo': {'seasonId': 'act3autochess', 'versionId': 'v1'},
+        'image': [{'backgroundPc': 'https://web.hycdn.cn/bg.png'}],
+        'chars': [{
+            'charId': 'char_291_justl', 'name': '能天使',
+            'halfBodyUrl': 'https://web.hycdn.cn/char/half.png',
+            'professionIconUrl': 'https://web.hycdn.cn/p.png',
+            'skills': [{'skillId': 'sk1', 'name': '过载模式',
+                        'iconUrl': 'https://web.hycdn.cn/sk1.png'}],
+            'modules': [],
+        }],
+        'strategies': [{'strategyId': 'band1', 'name': '二重奏',
+                        'effect': '每回合额外获得资金', 'initiatorName': '复奏', 'hp': 23}],
+        'bonds': [{'bondId': 'b1', 'name': '不屈', 'effect': '生命 +20%'},
+                  {'bondId': 'b2', 'name': '精准', 'effect': '攻击 +15%'},
+                  {'bondId': 'b3', 'name': '绝技', 'effect': '技能伤害 +100%'}],
+    }
+    res = {
+        'versionInfo': {'activityId': 'act3autochess', 'seasonName': '卫戍协议·第三期',
+                        'phaseName': '正赛'},
+        'bandInfo': {'band1': {'id': 'band1', 'name': '复奏',
+                               'icon': 'https://web.hycdn.cn/band1.png',
+                               'desc': '发起人演示', 'totalHp': 23}},
+        'bondInfo': {'b1': {'id': 'b1', 'icon': 'https://web.hycdn.cn/b1.png', 'activeCount': 3},
+                     'b2': {'id': 'b2', 'icon': 'https://web.hycdn.cn/b2.png'},
+                     'b3': {'id': 'b3', 'icon': 'https://web.hycdn.cn/b3.png'}},
+        'chessInfo': {'c1': {'chessLevel': 6, 'evolvePhase': 2, 'charName': '能天使',
+                             'charLevel': 60, 'charProfession': 'SNIPER', 'id': 'c1'}},
+        'bossInfo': {'bz1': {'enemyId': 'enemy_1521_dslily'}},
+        'equipInfo': {}, 'titleInfo': {},
+    }
+    rec1 = {
+        'id': 'r1', 'activityId': 'act3autochess', 'completeState': 1, 'bandId': 'band1',
+        'bondInfo': [{'bondId': 'b1', 'layer': 385, 'activate': 1},
+                     {'bondId': 'b2', 'layer': 0, 'activate': 1},     # 层数 0：没生效
+                     {'bondId': 'b3', 'layer': 5, 'activate': 0}],     # 没激活
+        'chessSquad': [{'charId': 'char_291_justl', 'chessId': 'c1', 'skillId': 'sk1',
+                        'chessInfo': {'charName': '能天使', 'charLevel': 60,
+                                      'evolvePhase': 2, 'chessLevel': 6}}],
+        'acBossInfo': [{'bossId': 'bz1', 'isHidden': 1, 'isKilled': 1}],
+        'gameStartTs': 1000, 'gameEndTs': 1000 + 2940,
+        'trophyBefore': 570, 'trophyAfter': 581, 'killCnt': 297, 'coinCost': 189,
+        'modeDifficulty': 'ABYSS', 'modeType': 'MULTI', 'passRound': 14,
+    }
+    rec2 = {'id': 'r2', 'activityId': 'act3autochess', 'completeState': 0, 'bandId': 'band1',
+            'bondInfo': [], 'acBossInfo': [],
+            'chessSquad': [
+                # 证章（uniequip_001_*）+ 资源里查不到的技能：曾经这里 .get(None) 崩整页
+                {'charId': 'char_291_justl', 'moduleId': 'uniequip_001_gravel',
+                 'skillId': 'sk_vonly'},
+                # 资源里查不到的模组：按 id 拼 CDN 图兜底，别整行没图标
+                {'charId': 'char_291_justl', 'moduleId': 'uniequip_002_unknown',
+                 'skillId': 'sk1'},
+                None,                       # 列表里夹 null 是见过的
+            ],
+            'gameStartTs': 500, 'gameEndTs': 900,
+            'modeDifficulty': 'FAST', 'modeType': 'SINGLE', 'passRound': 7}
+    raw = {'gameUserInfo': {'name': '测试博士', 'level': 120,
+                            'avatar': {'url': 'https://web.hycdn.cn/av.png'}},
+           'career': {'totalSingleBattleCnt': 10, 'totalSingleBattleWinCnt': 5,
+                      'totalMultiBattleCnt': 20, 'totalMultiBattleWinCnt': 12,
+                      'totalTrophyCnt': 574,
+                      'bandBadges': [{'id': 'band1', 'masterVictor': 1}],
+                      'normalTitles': [], 'specialTitles': [], 'titleTypeCnt': {'BOND': 2}},
+           'history': {'records': [rec1, rec2], 'favourRecords': []}}
+
+    class _FakeSk:
+        def garrison_info(self, uid, activity_id=None):
+            assert uid, 'uid 没传下去'
+            return raw
+
+    keep = (accounts.token_for, accounts.get_account, garrisonstat.guide,
+            garrisonstat.resources, garrisonstat._session)
+    try:
+        accounts.token_for = lambda f: 'tok'
+        accounts.get_account = lambda f: {'account': {'uid': 58061849, 'channelMasterId': '1'}}
+        garrisonstat.guide = lambda force=False: guide
+        garrisonstat.resources = lambda sk, force=False: [res]
+        garrisonstat._session = lambda token: _FakeSk()
+        d = garrisonstat.stat('x.json')
+    finally:
+        (accounts.token_for, accounts.get_account, garrisonstat.guide,
+         garrisonstat.resources, garrisonstat._session) = keep
+
+    c = d['career']
+    # 统计口径：总场次/完成率按返回的对局算，生涯总数单独放 totalAll
+    assert c['total'] == 2 and c['totalAll'] == 30, (c['total'], c['totalAll'])
+    assert c['completeRate'] == 50.0, c['completeRate']
+    assert d['counts'] == {'current': 2, 'all': 2}, d['counts']
+    assert d['player']['name'] == '测试博士' and d['player']['uid'] == '58061849'
+    assert d['season']['name'] == '卫戍协议·第三期'
+
+    # 分队名是带队的干员（「复奏」），「二重奏」是分队技能名，别搞反
+    band = d['records'][0]['band']
+    assert band['name'] == '复奏', '分队名取成技能名了：%r' % band['name']
+    assert band['skill'] == '二重奏', '技能名没带出来：%r' % band['skill']
+    assert band['initiator'] == '复奏'
+    assert band['icon'].startswith('https://web.hycdn.cn/'), band['icon']
+    assert band['master'] is True
+
+    # 常用盟约只算「激活且层数 > 0」的，且最高层数取得对
+    assert [b['id'] for b in c['topBonds']] == ['b1'], c['topBonds']
+    assert c['topBonds'][0]['maxLayer'] == 385
+    assert c['topBonds'][0]['icon'].startswith('https://'), '盟约图标没带上'
+
+    # 首领名按 enemyId 查映射，别直接显示 enemy id
+    boss = d['records'][0]['bosses'][0]
+    assert boss['name'] == '盐风主教昆图斯', boss['name']
+    assert boss['hidden'] is True and boss['killed'] is True
+    assert c['bossKills'] == 1 and c['hiddenBossKills'] == 1
+
+    # 干员：阶数 / 精英化 / 技能名 / 立绘都在，精锐标记靠 chessId 判定
+    o = d['records'][0]['opers'][0]
+    assert (o['tier'], o['phase'], o['level']) == (6, 2, 60), (o['tier'], o['phase'], o['level'])
+    assert o['golden'] is False, '没有 goldenChessId 不该判成精锐'
+    assert o['skill']['name'] == '过载模式'
+    assert o['halfBody'].startswith('https://web.hycdn.cn/'), o['halfBody']
+
+    # 单场基础字段
+    r = d['records'][0]
+    assert (r['id'], r['success'], r['dur']) == ('r1', True, 2940), (r['id'], r['success'], r['dur'])
+    assert r['modeCn'] == '深潜模拟' and r['modeTypeCn'] == '多人'
+
+    # 4) 界面结构：两个 tab + 战绩面板 + 详情抽屉
+    assert 'data-garview="quick"' in html and 'data-garview="stat"' in html, '卫戍协议没分 tab'
+    assert 'id="gar-pane-quick"' in html and 'id="gar-pane-stat"' in html
+    assert 'id="gs-root"' in html, '战绩面板没挂载点'
+    assert 'gs-dt-opers' in js, '详情里的干员卡漏了网格容器（会一张撑满一行）'
+    assert 'function gsOpenDetail(' in js and 'class="gs-drawer"' in js
+    assert 'GS_GOLDEN' in js, '精锐标记没用内联 SVG（会多一张图）'
+    assert "'/api/garrison/stat'" in api_src, '战绩接口没注册'
+    assert '/api/garrison/img' in main_src, '图标代理没注册'
+
+    # 5) 盟约图标绿底（黑底在浅色主题下看不清）
+    assert css.count('background: #123a30') >= 3, '盟约图标底不是绿底'
+    for old in ('#1a2028', '#1d242c'):
+        assert old not in css, '盟约图标还留着黑底 %s' % old
+    assert 'filter: brightness(1.25) contrast(1.08)' in css, '白线稿没提亮'
+    # 近 10 场叠层的点也一样：半透明底会把白线稿吃得看不见
+    assert 'fill="#123a30"' in js, '叠层图的点没铺绿底'
+
+    # 6) 分队名 / 技能名的叫法：分队 = 带队的干员，「常用分队」不是「常用策略」
+    assert '常用分队' in js and '常用策略' not in js, '左栏标题还叫策略'
+    assert '分队与盟约' in js and '策略与盟约' not in js, '详情标题还叫策略'
+    assert '技能：' in js, '详情没把分队技能名单独标出来'
+
+    # 7) 证章 / 资源里查不到的技能与模组：不能崩，也不能把证章摆成模组
+    #    （2026-11-29：某个号 100 场里有 11 次带 uniequip_001_gravel，
+    #     skill/module 变量是 None 还去 .get，整页变成「拉取失败」）
+    ops2 = d['records'][1]['opers']
+    assert ops2[0]['module'] is None, '证章被当成模组了（CDN 没图、恒 1 级）'
+    assert ops2[0]['skill']['id'] == 'sk_vonly' and \
+        ops2[0]['skill']['icon'].endswith('/char_skill/sk_vonly.png'), ops2[0]['skill']
+    assert ops2[1]['module']['icon'].endswith('/uniequip/uniequip_002_unknown.png'), \
+        '资源里查不到的模组没按 id 拼 CDN 图兜底'
+    assert ops2[2]['name'] == '未知干员', 'chessSquad 里夹 null 没兜住'
+    assert garrisonstat._module_view('uniequip_001_x', {'name': '证章'}) is None
+    assert garrisonstat._module_view('', None) is None
+    assert garrisonstat._skill_view('', None) is None
+
+    # 8) 切号：页头是速刷/战绩共用的，两个视图都得刷；战绩请求按「发起时的号」记账
+    assert 'function garPaintHead(' in js, '页头没抽成一个函数，两个视图各写一遍会漏'
+    assert 'garPaintHead();' in js.split('async function gsEnsure')[1][:400], \
+        '战绩视图不刷页头：停在「战绩查询」切号，页头还挂着上一个账号的名字'
+    assert 'garStatBusy === want' in js, \
+        '战绩忙标志还是布尔值：换号会被旧请求挡住，旧响应还会把成绩写进新号'
+    assert 'S.garStatOf[want] = d' in js, '战绩按 S.current 写缓存，请求期间切号会串号'
+    assert '这是接口数据的问题，不是 token' in js, \
+        '非鉴权异常还劝人重贴 token（这次就是被这句话带偏的）'
+
+
+def check_training(tmp):
+    """B88 干员练度表 + 账号头像设置（读快照 / 图标零打包）
+
+    2026-11-29 加。两块东西：
+
+    - **账号头像设置**（设置 → 常规）：``acctAvatar`` 默认 ``game``（森空岛给的
+      游戏内头像，``status.avatar.url`` 官方 CDN 直链），可切 ``secretary``
+      （看板娘）。默认值写错等于一夜之间把所有用户的头像换掉，钉死在这里；
+      两个值之外一律回 ``game``（手改 settings.json 写坏了不能让界面没头像）。
+    - **干员练度表**：纯读账号快照的 chars 段，不发网络请求（MAA 导入的号也能
+      看）；技能/模组图标按官方 CDN 拼地址，安装包零增长；「证章」
+      （``uniequip_001_*``）不进模组列——CDN 没图、恒 1 级，摆出来只是灰块。
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(repo, 'frontend', 'style.css'), encoding='utf-8').read()
+    themes = open(os.path.join(repo, 'frontend', 'themes.css'), encoding='utf-8').read()
+    html = open(os.path.join(repo, 'frontend', 'index.html'), encoding='utf-8').read()
+    main_src = open(os.path.join(repo, 'backend', 'main.py'), encoding='utf-8').read()
+    api_src = open(os.path.join(repo, 'backend', 'core', 'api.py'), encoding='utf-8').read()
+    tr_src = open(os.path.join(repo, 'backend', 'core', 'training.py'), encoding='utf-8').read()
+
+    from core import accounts, settings, training
+
+    # 1) 头像设置：默认游戏内，非法值回游戏内
+    assert settings.DEFAULTS.get('acctAvatar') == 'game', '账号头像默认值必须是游戏内'
+    assert settings.save({'acctAvatar': 'Secretary'})['acctAvatar'] == 'secretary', \
+        '大小写没归一'
+    assert settings.save({'acctAvatar': '看板娘'})['acctAvatar'] == 'game', \
+        '写坏的值必须回 game，不能留一个界面认不出的取值'
+    settings.save({'acctAvatar': 'game'})
+
+    # 2) 账号列表把游戏内头像带出来（前端 acctAvatarUrl 要用）
+    keep_dir = accounts._accounts_dir
+    acc_dir = os.path.join(tmp, 'acc-avatar')
+    os.makedirs(acc_dir, exist_ok=True)
+    with open(os.path.join(acc_dir, 'a.json'), 'w', encoding='utf-8') as f:
+        json.dump({'account': {'uid': '1', 'nickName': '甲#0001', 'avatar':
+                               'https://web.hycdn.cn/arknights/game/assets/avatar/a.png',
+                               'secretary': {'charId': 'char_2025_shu'}},
+                   'stats': {'charCount': 1}}, f, ensure_ascii=False)
+    try:
+        accounts._accounts_dir = lambda: acc_dir
+        rows = accounts.list_accounts()
+    finally:
+        accounts._accounts_dir = keep_dir
+    assert rows and rows[0]['avatar'].endswith('/avatar/a.png'), rows
+    assert rows[0]['secretary']['charId'] == 'char_2025_shu', rows
+
+    # 3) 练度表：证章不进模组列、图标地址拼得对、统计口径不混
+    snap = {
+        'account': {'uid': '1', 'nickName': '测试博士', 'level': 120,
+                    'channelName': '官服',
+                    'avatar': 'https://web.hycdn.cn/arknights/game/assets/avatar/sp.png',
+                    'secretary': {'charId': 'char_2025_shu'}},
+        'skd': {'data': 'x'},
+        'sync': {'syncedAt': '2026-11-29T00:12:30+08:00'},
+        'chars': [
+            {'charId': 'char_a', 'name': '甲', 'rarity': 6, 'profession': '术师',
+             'subProfession': '核心术师', 'elite': 2, 'level': 90, 'potential': 5,
+             'skillLevel': 7, 'favor': 200,
+             'skills': [{'id': 'skcom_atk_up[2]', 'name': '攻击力强化·β型', 'mastery': 3},
+                        {'id': 'skchr_a_2', 'name': '爆发', 'mastery': 0}],
+             'modules': [{'id': 'uniequip_002_a', 'name': '模组甲', 'level': 3, 'kind': '模组'},
+                         {'id': 'uniequip_003_a', 'name': '模组乙', 'level': 1, 'kind': '模组'},
+                         {'id': 'uniequip_001_a', 'name': '甲证章', 'level': 1, 'kind': '证章'}]},
+            {'charId': 'char_b', 'name': '乙', 'rarity': 4, 'profession': '医疗',
+             'elite': 1, 'level': 60, 'favor': 120,
+             'skills': [{'id': 'skchr_b_1', 'name': '回血', 'mastery': 1}],
+             'modules': []},
+        ],
+    }
+    keep_acc = accounts.get_account
+    try:
+        accounts.get_account = lambda f: snap
+        v = training.view('x.json')
+    finally:
+        accounts.get_account = keep_acc
+
+    st = v['stats']
+    assert (st['total'], st['sixStar'], st['e2']) == (2, 1, 1), st
+    assert st['mastery3'] == 1 and st['favorMax'] == 1, st
+    # 证章不算模组：甲只有 2 个真模组，全账号 2 个，满级 1 个
+    assert (st['moduleCount'], st['module3']) == (2, 1), st
+    a = v['chars'][0]
+    assert a['name'] == '甲', '默认序必须是星级优先：%r' % a['name']
+    assert a['avatar'].endswith('/char/avatar/char_a.png'), a['avatar']
+    # 方括号技能 id 必须转义，否则 CDN 直接 404
+    assert 'char_skill/skcom_atk_up%5B2%5D.png' in a['skills'][0]['icon'], a['skills'][0]['icon']
+    assert a['skills'][0]['mastery'] == 3
+    # 模组：证章被滤掉、按等级降序
+    assert [m['name'] for m in a['modules']] == ['模组甲', '模组乙'], a['modules']
+    assert 'uniequip/uniequip_002_a.png' in a['modules'][0]['icon']
+    assert v['hasToken'] is True and v['syncedAt'].startswith('2026-11-29')
+    assert v['account']['avatar'].endswith('/avatar/sp.png')
+
+    # 4) 界面与接口：tab / 面板 / 刷新按钮 / 两个接口 / 通用图标代理
+    assert 'data-mod="training"' in html and 'id="mod-training"' in html, '干员练度 tab 没接上'
+    assert 'id="btn-tr-refresh"' in html, '练度页缺刷新按钮'
+    assert 'id="tr-search"' in html and 'id="tr-prof"' in html and 'id="tr-rar"' in html
+    assert "'/api/training'" in api_src and "'/api/training/refresh'" in api_src, '练度接口没注册'
+    assert "'/api/gasset/img'" in main_src, '通用图标代理路径没注册'
+    assert '#mod-training' in css, '练度页样式没挂到面板上'
+    assert 'function acctAvatarUrl' in js and "=== 'secretary'" in js, '头像没按设置取图'
+    # 默认值钉在 js 里：设置里没这个键（老用户）时也得走游戏内头像
+    assert "'game')" in js and 'acctAvatar' in js
+    assert "m.get('kind') == '证章'" in tr_src, '证章没被挡在模组列外'
+    assert '.tr-skill' in css and '.tr-mod' in css and '--tr-cols' in css
+
+    # 5) 半透明薄荷：--mint 是十六进制，套进 rgba() 是非法值（分页高亮曾经因此失效）
+    assert '--mint-rgb' in css and '--mint-rgb' in themes, '缺 --mint-rgb 三元组'
+    assert 'rgba(var(--mint),' not in css, '还有非法的 rgba(var(--mint)) 写法'
+    assert '.gs-page-btn.active' in css and 'rgba(var(--mint-rgb)' in css
 
 
 if __name__ == '__main__':

@@ -257,3 +257,28 @@ class Skland:
         if d.get('code') != 0:
             raise RuntimeError('取玩家数据失败: %s' % (d.get('msg') or d))
         return d['data']
+
+    # ---------------- 卫戍协议 ----------------
+    def garrison_resources(self, activity_id=None):
+        """当期字典：棋子阶数/精英化/精锐、策略、盟约、装备、称号、首领
+
+        不传 activityId 就是当前赛季，返回里带全部赛季的字典。
+        """
+        q = ''
+        if activity_id:
+            q = '?activityId=' + urllib.parse.quote(str(activity_id))
+        d = self._get('/api/ms/game/arknights/garrison/resource' + q)
+        if d.get('code') != 0:
+            raise RuntimeError('取卫戍协议资源失败: %s' % (d.get('message') or d))
+        return d['data'] or {}
+
+    def garrison_info(self, uid: str, activity_id=None):
+        """个人战绩：生涯统计 + 对局列表（history.records / favourRecords）"""
+        q = {'uid': str(uid)}
+        if activity_id:
+            q['activityId'] = str(activity_id)
+        d = self._get('/api/ms/game/arknights/garrison/info?'
+                      + urllib.parse.urlencode(q))
+        if d.get('code') != 0:
+            raise RuntimeError('取卫戍协议战绩失败: %s' % (d.get('message') or d))
+        return d['data'] or {}
