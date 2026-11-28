@@ -2666,6 +2666,30 @@ def plan_groups(rows, spec_base=None):
     return list(groups.items())
 
 
+def _ensure_env(g, r, d, log):
+    """这台模拟器/adb 准备好了没有；没开就替用户启动
+
+    ``skills.run_skill`` 起任务前有这层闸（:mod:`envcheck`），但**多账号排程 /
+    一键长草走的是另一条链**（``run_plan`` → ``_run_group`` → ``run_core``），
+    原先直接从 adb 连，模拟器没开就只报一句「连不上模拟器」。
+
+    2026-11-29 用户报「之前他都会帮我开模拟器，现在不会了」——之前用的是助手
+    里带作业/导航的路（过 skills），换成「一键长草」后闸就没了。这里补上，
+    两条链口径一致：正常时零日志，只有真替你启动了才说话。
+
+    检查本身出异常不算「环境不行」（配置读崩了不该把任务堵死），交给后面的
+    ``run_core`` 去报真正连不上的原因。
+    """
+    try:
+        from . import envcheck
+        return envcheck.ensure(log, maa_dir=d or None,
+                               profile=(r.get('profile') or None),
+                               address=(g.get('address') or None))
+    except Exception as e:                       # noqa: BLE001
+        log('环境检查没做成（%s: %s），直接去连' % (type(e).__name__, e))
+        return True, ''
+
+
 def _run_group(g, spec_base, tid, log):
     """一个模拟器上的账号排队跑（组内串行）"""
     out = []
@@ -2675,6 +2699,7 @@ def _run_group(g, spec_base, tid, log):
     # 组只保证串行，组里可能混着绑不同 MAA 目录的号（2026-11-26），
     # 所以每个号按自己的目录跑、各自的目录先关一次 MAA。
     closed = set()
+    env_ready = {}
     for i, r in enumerate(g['rows'], 1):
         d = str(r.get('maaDir') or d0)
         if d and d not in closed:
@@ -2687,6 +2712,20 @@ def _run_group(g, spec_base, tid, log):
         log('模拟器 %s（%s）；切号名 %s'
             % (g['address'] or '默认', d or '默认 MAA',
                r.get('accountName') or '无'))
+        # 开跑前先确认模拟器在不在（不在就替用户开）。同一个 (MAA 目录, 档案,
+        # 地址) 只查一次：同一台设备的第二个号没必要再问一遍 adb。
+        k_env = (d, str(r.get('profile') or ''), str(g.get('address') or ''))
+        if k_env not in env_ready:
+            env_ready[k_env] = _ensure_env(g, r, d, log)
+        ok_env, why_env = env_ready[k_env]
+        if not ok_env:
+            log('这一台没准备好：%s' % why_env)
+            out.append({'name': r.get('name') or '',
+                        'file': r.get('file') or '',
+                        'emulator': g['address'] or '',
+                        'ok': False,
+                        'error': '环境没准备好：%s' % why_env})
+            continue
         cp = []
         if r.get('ops'):
             log('准备 %d 份作业…' % len(r['ops']))

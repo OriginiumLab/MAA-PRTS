@@ -8968,6 +8968,8 @@ def main():
                 lambda: check_garrison_stat(tmp))
         r.check('B88 干员练度 + 账号头像设置（快照直读 / 图标零打包 / 非法值回默认）',
                 lambda: check_training(tmp))
+        r.check('B89 多账号排程/一键长草也要过环境闸（模拟器没开先替你开）',
+                lambda: check_plan_env_gate(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -8979,6 +8981,80 @@ def main():
         return 1
     print('结果：全部通过')
     return 0
+
+
+def check_plan_env_gate(tmp):
+    """B89 多账号排程 / 一键长草也要过环境闸（模拟器没开就替用户开）
+
+    2026-11-29 用户报「之前他都会帮我开模拟器，现在不会了」。原因不是闸坏了：
+    ``skills.run_skill`` 起任务前有 :mod:`envcheck` 这层闸，而「一键长草」和
+    多账号排程走的是另一条链（``run_plan`` → ``_run_group`` → ``run_core``），
+    原样直连 adb，模拟器没开就只报一句「连不上模拟器 emulator-5556」。
+
+    这里钉三件事：闸拦下时**一次 run_core 都不许调**（否则还是等两小时超时）、
+    同一台设备只查一次（别给每个号重复问 adb）、闸自己崩了不许把任务堵死。
+    """
+    sys.path.insert(0, os.path.join(REPO, 'backend'))
+    from unittest import mock
+    from core import envcheck, maaplan
+
+    rows = [{'name': 'A号', 'file': 'a.json', 'accountName': 'aaa',
+             'profile': 'moren'},
+            {'name': 'B号', 'file': 'b.json', 'accountName': 'bbb',
+             'profile': 'moren'}]
+    group = {'dir': 'D:/maa', 'address': 'emulator-5556', 'rows': rows}
+    calls = {'core': 0, 'ensure': 0}
+    logs = []
+
+    def fake_core(spec, tid=None, timeout=None):
+        calls['core'] += 1
+        return {'ok': True, 'tasks': []}
+
+    with mock.patch.object(maaplan, 'run_core', fake_core), \
+            mock.patch.object(maaplan, 'prepare_copilot', lambda *a, **k: []), \
+            mock.patch.object(maaplan.maa, 'running_in', lambda d: False):
+
+        # 1) 模拟器没开、也启动不了：拦住，别去连 adb
+        def bad_ensure(log=None, **k):
+            calls['ensure'] += 1
+            return False, '指定的模拟器「emulator-5556」没在线'
+        with mock.patch.object(envcheck, 'ensure', bad_ensure):
+            out = maaplan._run_group(group, {'maaDir': 'D:/maa'}, None,
+                                     logs.append)
+        assert calls['core'] == 0, '闸没拦住，还是去连 adb 了'
+        assert calls['ensure'] == 1, '同一台设备查了 %d 次' % calls['ensure']
+        assert len(out) == 2 and all(not o['ok'] for o in out), out
+        assert all('环境没准备好' in o['error'] for o in out), out
+        assert any('没准备好' in l for l in logs), logs
+
+        # 2) 替用户启动起来了：照常跑，第二个号不再重复查 adb
+        calls.update(core=0, ensure=0)
+        logs.clear()
+
+        def good_ensure(log=None, **k):
+            calls['ensure'] += 1
+            return True, 'adb 正常'
+        with mock.patch.object(envcheck, 'ensure', good_ensure):
+            out = maaplan._run_group(group, {'maaDir': 'D:/maa'}, None,
+                                     logs.append)
+        assert calls['core'] == 2 and calls['ensure'] == 1, calls
+        assert all(o['ok'] for o in out), out
+
+        # 3) 闸自己崩了：放行，交给 run_core 报真因
+        calls.update(core=0, ensure=0)
+        logs.clear()
+
+        def boom(*a, **k):
+            raise RuntimeError('配置读崩了')
+        with mock.patch.object(envcheck, 'ensure', boom):
+            maaplan._run_group(group, {'maaDir': 'D:/maa'}, None, logs.append)
+        assert calls['core'] == 2, '闸崩了却把任务堵死了'
+        assert any('环境检查没做成' in l for l in logs), logs
+
+    # 4) 闸要按「这台设备」查：地址原样传下去，别退成档案里的那台
+    src = open(os.path.join(REPO, 'backend', 'core', 'maaplan.py'),
+               encoding='utf-8').read()
+    assert 'address=(g.get(\'address\') or None)' in src, '环境闸没按组地址查'
 
 
 def check_emulator_group(tmp):
@@ -9623,13 +9699,19 @@ def check_daily_longgrass(tmp):
         # ⑤2 逐号 spec：任务清单 / 关卡 / 参数 / 档案 / 客户端类型都不能共用一份
         seen = []
         orig_core, orig_running = maaplan.run_core, maa.running_in
+        from core import envcheck
+        orig_ensure = envcheck.ensure
         try:
             maaplan.run_core = lambda spec, tid=None: seen.append(dict(spec)) or {'ok': True}
             maa.running_in = lambda d: None
+            # 这一步验的是「逐号 spec 别共用一份」；环境闸会连真 adb，这里
+            # 放行（闸本身由 B89 单独盯，别在这儿重复验）
+            envcheck.ensure = lambda *a, **k: (True, '')
             maaplan.run_plan(p1['rows'], {'tasks': list(daily.ORDER),
                                           'maaDir': tmp}, None)
         finally:
             maaplan.run_core, maa.running_in = orig_core, orig_running
+            envcheck.ensure = orig_ensure
         assert len(seen) == 2, seen
         a0, a1 = seen
         assert a0['tasks'] == keys and a0['stages'] == ['OS-8'], a0
