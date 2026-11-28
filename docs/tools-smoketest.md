@@ -919,12 +919,14 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
 
 打桩 `settings.CONFIG_DIR`、`avatar_index`、`_from_mirrors`、`_from_prts`，不联网、不写真缓存。
 
-### B85 账号头像走看板娘（2026-11-28）
+### B85 账号头像（2026-11-28，2026-11-29 改口径）
 
-森空岛同步时本来就存了 `account.secretary.charId`，列表页不再拼昵称首字。
-B85 钉三条：后端 `list_accounts` 把 `secretary` 带出来（没有的账号给空对象，
-不是缺键）；前端侧栏 / 设置页 / 顶部三处统一走 `acctAvatar()`，图片规则必须
-带 `loading="lazy"` 与 `onerror="this.remove()"`（拿不到图就露出首字，不裂图）；
+森空岛同步时本来就存了两样：`account.avatar`（游戏内头像直链）和
+`account.secretary`（看板娘 charId）。B85 钉三条：后端 `list_accounts` 把
+`secretary` 带出来（没有的账号给空对象，不是缺键）；前端侧栏 / 设置页 / 顶部
+三处统一走 `acctAvatarUrl()` + `acctAvatar()`，按设置 `acctAvatar` 选来源
+（`secretary` 走 `/api/avatar/<charId>`，默认 `game` 走 `/api/gasset/img?u=`），
+图片规则必须带 `onerror="this.remove()"`（拿不到图就露出首字，不裂图）；
 头像只认 `pack-data`，`packrepo` 不许再留 `AVATAR_BRANCH` / `avatar_urls` 这条岔路。
 
 ### B86 作业详情带简介与干员头像（2026-11-28）
@@ -939,3 +941,61 @@ B85 钉三条：后端 `list_accounts` 把 `secretary` 带出来（没有的账�
   + `.op-av`，边框用 `rgba(var(--tint), a)`，不许再写死白色（浅色主题会露黑线）。
 
 打桩 `copilot.operation_detail` 返回假 content，不联网。
+
+### B87 卫戍协议战绩（2026-11-28）
+
+这一页的立论是「官方资源接口把图标 CDN 直链发下来」，所以整页的图一张都不进
+安装包。B87 把立论和这轮踩的坑一起钉住：
+
+- **图标白名单**：`gasset.normalize()` 只放行 `web.hycdn.cn` / `bbs.hycdn.cn`，
+  `http://` 归一成 `https://`；`ftp://`、`evil.com`、`web.hycdn.cn.evil.com`、
+  `127.0.0.1`、空串一律返回空串（这个 url 由前端传，不卡就是 SSRF）；
+- **富文本清洗**：`<b>` / `<color=…>` 洗掉，`<战斗中>` 换成 `〈战斗中〉` 保留；
+- **分队名 vs 技能名**：分队名是带队的干员 / NPC（「复奏」），「二重奏」是分队
+  技能；两个字段反过，整排分队都会显示成技能名；
+- **没生效的盟约不算常用**：`activate=0` 或 `layer=0` 的条目必须被排除，
+  否则「最高 0」会混进常用盟约；
+- **首领名**：资源没名字时按 `enemyId` 查 `BOSS_NAMES`，不许把
+  `enemy_1521_dslily` 甩到界面上；
+- **统计口径**：`total` / `completeRate` 按返回的对局算，生涯总数单独放
+  `totalAll`（样例：2 场、50%、生涯 30 场）；
+- **界面结构**：两个 tab（`data-garview`）+ `#gs-root`；详情干员卡必须有
+  `.gs-dt-opers` 网格容器（漏了会一张卡撑满一行、立绘撑成方块）；精锐标记用
+  内联 SVG（`GS_GOLDEN`）；
+- **盟约绿底**：`#123a30` 至少三处，旧的黑底取值一个都不许留；近 10 场叠层的
+  点也要铺绿底（`fill="#123a30"`），半透明底会把白色线稿吃掉；
+- **叫法**：左栏是「常用分队」、详情是「分队与盟约」，不许再出现「常用策略」；
+  详情里分队技能要单独标「技能：」；
+- **证章不是模组**（2026-11-29 补）：样例里塞一场带 `uniequip_001_gravel` 的
+  对局，`module` 必须是 `None`；资源里查不到的技能 / 模组要按 id 拼 CDN 图兜底
+  （`/char_skill/sk_vonly.png`、`/uniequip/uniequip_002_unknown.png`），
+  `chessSquad` 里夹 `null` 退成「未知干员」——原先 `None.get()` 直接让整页
+  变成「拉取失败」；
+- **切号**（2026-11-29 补）：`garPaintHead()` 必须存在且 `gsEnsure()` 开头就调
+  （页头是速刷 / 战绩共用的，只知道在速刷那边刷，停在战绩切号名字不变）；
+  `garStatBusy === want` 与 `S.garStatOf[want] = d` 钉住「请求期间切号不串号」；
+  文案里必须有「这是接口数据的问题，不是 token」，不许再把非鉴权异常说成 token；
+
+打桩 `accounts.token_for` / `get_account` / `garrisonstat.guide` / `resources` /
+`_session`，不联网，也不写真缓存。
+
+
+### B88 干员练度 + 账号头像设置（2026-11-29）
+
+两块东西一起钉：
+
+- **头像设置**：`settings.DEFAULTS['acctAvatar'] == 'game'`（默认游戏内）；
+  `save({'acctAvatar': 'Secretary'})` 要归一成小写，写别的（`看板娘`）必须回
+  `game`——写坏的值让界面认不出，头像会整片空掉；`list_accounts` 要把
+  `account.avatar` 带出来，前端才有游戏内头像可用；
+- **练度表**：桩掉 `accounts.get_account` 喂一份快照，查 `training.view()`：
+  证章（`kind == '证章'`）不进模组列、模组按等级降序、技能 id 里的方括号转义成
+  `%5B/%5D`（不转 CDN 直接 404）、`moduleCount` 只数真模组、默认序星级优先；
+- **界面与接口**：`data-mod="training"` + `#mod-training` + `#btn-tr-refresh` +
+  `#tr-search`；`/api/training` 与 `/api/training/refresh` 已注册；
+  `/api/gasset/img` 通用代理路径存在；`acctAvatarUrl` 有 `secretary` 分支且
+  `game` 是兜底；
+- **样式**：`--mint-rgb` 在两个主题里都定义了，`rgba(var(--mint),` 这种非法写法
+  一个都不许留（分页高亮曾经因此一直不生效）。
+
+全部打桩，不联网、不写真账号。

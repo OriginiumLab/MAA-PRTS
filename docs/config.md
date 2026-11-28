@@ -240,6 +240,7 @@ config/themes/<id>/
   "autoStartMaa": true,
   "launchAtLogin": false,
   "theme": "dark",
+  "acctAvatar": "game",
   "autoUpdatePack": true,
   "autoCheckAppUpdate": true,
   "acceptPrerelease": false,
@@ -263,6 +264,7 @@ config/themes/<id>/
 | `emulatorAutoStart` | 任务开跑前发现模拟器没启动，是否替用户启动，默认开（见 `docs/backend.md` 的「开跑前的环境闸」）。关掉后只提示不动手 |
 | `launchAtLogin` | 开机自动启动，**默认 `false`，代码里不许改成默认开**（用户明确要求：没经过同意不许自启）。勾上才写 `HKCU\...\Run` 的 `MAA-PRTS` 一条，取消就删掉；源码运行不生效 |
 | `theme` | 界面主题 id：`dark`（默认）/ `light` 内置，其他（如 `closure` 卫戍协议）要下载主题包。存的是被删掉的主题时会自动退回 `dark` |
+| `acctAvatar` | 账号头像用哪张：`game`（默认，森空岛同步的游戏内头像）/ `secretary`（看板娘）。两张都不进安装包，按需从官方 CDN 取；MAA 导入的号两样都没有，显示昵称首字。写别的值一律按 `game` 处理 |
 
 这个文件可以直接手改；改完要重启程序生效（程序启动时读一次并缓存）。
 删掉它等于恢复默认：引导会重新出现，需要再填一次 MAA 目录。

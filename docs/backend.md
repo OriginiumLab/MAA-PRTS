@@ -2371,6 +2371,153 @@ MAA 的 `gui.new.json` 里 `ConnectSettings` 抄（MuMu→`mumu`+Extras 快速�
 **推论**：以后核心升到 v1.2.0、v2.0.0 都不用改代码；只有把包挪到非
 `medal-farm-v*` 的目录结构时才需要动 `core_dir()`。
 
+## 卫戍协议战绩（`garrisonstat.py` / `gasset.py`，2026-11-28）
+
+速刷是「让软件替你打」，这一节是「打完的战绩给你看」，两条链路互不相干
+（速刷走小黑盒核心 + MAA，战绩只读森空岛接口）。
+
+### 三个接口各管一段
+
+| 接口 | 登录 | 给什么 |
+|---|---|---|
+| `GET zonai.skland.com/web/v1/game/garrison/guide/resource` | **否** | 赛季信息、218 个干员（头像 / 技能 / 模组图标 / 立绘）、61 条策略、26 个盟约、70 件装备、赛季背景图。**每项都带官方 CDN 完整 URL** |
+| `GET /api/ms/game/arknights/garrison/resource` | 是 | `chessInfo`（阶数 / 精英化 / 精锐 id）、`bandInfo`、`bondInfo`、`equipInfo`、`titleInfo`、`bossInfo` 这些**字典**（键是 id） |
+| `GET /api/ms/game/arknights/garrison/info?uid=&activityId=` | 是 | `career` 生涯统计 + `history.records` / `favourRecords` 对局列表 |
+
+公开接口那条是**免登录**的，所以图标、名字、描述全都不需要 token；只有
+「这个号打了什么」才要签名。`skland.Skland` 现成的 `_get` 会补 cred + sign，
+两个新方法 `garrison_resources()` / `garrison_info()` 只是拼 URL。
+
+缓存：`guide()` 6 小时、`resources()` 12 小时（一次请求能拿到**所有赛季**的
+字典，不用按 activityId 挨个拉），都落在 `config/cache/`；拉失败回旧缓存，
+不把页面清空。`invalidate()` 是「刷新」按钮，内存 + 磁盘一起作废。
+
+### 安装包零增长（`gasset.py`）
+
+图标一张都不进包，走 `/api/garrison/img?u=<官方CDN>&s=<边长>`：
+
+- **白名单**：`ALLOWED_HOSTS = ('web.hycdn.cn', 'bbs.hycdn.cn')`。这个 url 是
+  前端传的，不卡就是任意 URL 代理（SSRF）。`normalize()` 只留 http(s) + 白名单
+  host，拒绝 `web.hycdn.cn.evil.com`、`127.0.0.1`、`ftp://`；
+- **尺寸**只认 `SIZES = (32, 48, 64, 96, 128)`，免得被人当压图机；
+- 下回来压成 WebP 存 `config/cache/garrison/`（键 `sha1(url|size)[:20]`），
+  失败就存原图；压图失败不致命；
+- 取不到 → 404，前端 `img onerror` 自杀并露出首字/占位块，不裂图。
+
+### 拼装里的五个坑
+
+1. **分队名 ≠ 技能名，别拿反。** 编队这个东西游戏里叫「策略」，但**分队名是
+   带队的干员 / NPC**（登录版 `bandInfo[id].name`、公开版 `initiatorName`，
+   例如「复奏」）；「二重奏」是**分队技能**（`effectName`，也就是 guide 的
+   `name`）。`_band_view` 现在同时给 `name`（分队）与 `skill`（技能），
+   界面主名字一律用 `name`。2026-11-28 这两个字段反过一次，整排分队都
+   显示成了技能名。
+2. **没生效的盟约不算常用。** `activate=0` 或 `layer=0` 的条目也会出现在
+   `bondInfo` 里，直接计场次会冒出「最高 0」这种条目。统计前先
+   `if not activate or layer <= 0: continue`。
+3. **首领名会只有 enemyId。** 资源里不一定有名字，`BOSS_NAMES`（13 条）按
+   `handbookEnemyId` / `enemyId` 兜底，否则界面显示 `enemy_1521_dslily`。
+4. **富文本别当 HTML。** 官方文案带 `<color=…>` 这类标签，还夹着 `<战斗中>`
+   这种语义强调。`text()` 洗掉前者、把后者换成 `〈战斗中〉`保留下来。
+5. **查不到的技能 / 模组不许崩整页。** 公开资源里 218 个干员是齐的，但**模组
+   不齐**：`uniequip_001_*` 是**证章**（精英化自带、恒 1 级），资源里本来就不列，
+   CDN 上也没有图（和 `training.py` 同一个口径）。2026-11-29 用户撞上的
+   `AttributeError: 'NoneType' object has no attribute 'get'` 就是这个：
+   `next(...)` 查不到返回 `None`，代码却只判断了 id 在不在（`if mod_id`），
+   然后直接 `module.get()`。现在统一走 `_skill_view()` / `_module_view()`：
+   证章直接当没有，其余按 id 拼 CDN 图兜底（`char_skill/<id>.png`、`uniequip/<id>.png`，
+   技能 id 的方括号要 `quote(safe='')`），`chessSquad` 里夹 `null` 也先 `or {}`。
+
+**前端别把「不是 token 的错」说成 token。** 那天界面上写死的是「token 过期就在
+设置里重贴一次」，用户拿着好 token 反复重贴。现在只有消息里出现
+`token/401/403/cred/grant/凭证/登录/过期/授权` 才提重贴，其余一律说明是接口
+数据的问题并给一个「重新拉取」按钮。
+
+### 统计口径（对齐小黑盒）
+
+- `career.total` / `completeRate` 按**接口这次返回的对局**算（用户一眼能对上
+  号），生涯总数单独放 `career.totalAll`，两个数不混；
+- `records` 把 `history.records` 与 `favourRecords` 合并按 id 去重，再按
+  `gameEndTs` 倒序；`activityId` 对不上的记录会被剔掉，除非一条都不剩；
+- `career.layers` 是「近 10 场」每场最高的激活盟约，给折线图用。
+
+### 输出与接口
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/garrison/stat?file=<账号>` | 整页数据：`player / season / career / records / counts / updatedAt` |
+| 同上 `&refresh=1` | 先 `invalidate()` 再拉，对应界面上的刷新 |
+| `GET /api/garrison/img?u=&s=` | 图标代理（见上） |
+
+`stat()` 里 `uid` 从 `account.uid` 取，不是顶层 `uid`——账号结构是
+`{"account": {...}}`，读错会一直报「账号里没有 uid」。
+
+## 干员练度（`training.py`，2026-11-29）
+
+「谁精二了、谁专三了、谁有模组」这一屏。数据**完全来自账号快照**（token 同步
+写进账号 json 的 `chars` 段，`updater.build_snapshot`），这个模块只做三件事：
+挑字段、拼图标地址、分档统计——**不发任何网络请求**，所以断网能看，MAA 导入
+的号（练度来自 OperBoxData 识别）也能看。
+
+### 快照里本来就有这些
+
+`chars[]` 每项已经带齐：`rarity / profession / subProfession / elite / level /
+potential / skillLevel / favor`，`skills[]` 是 `{id, name, mastery}`（mastery 就是
+专精 0~3），`modules[]` 是 `{id, name, level, kind}`。**之前只是没给界面用**，
+不需要新接口新登录。
+
+### 图标零打包，统一走 `/api/gasset/img`
+
+官方 CDN 路径是死规律，按 id 现拼：
+
+| 图标 | 路径 |
+|---|---|
+| 干员头像 | `char/avatar/{charId}.png` |
+| 技能 | `char_skill/{skillId}.png`（`skcom_atk_up[2]` 的方括号要 `quote(safe='')` 转义成 `%5B/%5D`，不转就 404） |
+| 模组 | `uniequip/{moduleId}.png` |
+
+前端只调 `/api/gasset/img?u=&s=`，下载/压 WebP/负缓存都在 `gasset` 里（跟卫戍
+协议图标同一份实现，`/api/garrison/img` 是它的老名字，两个路径指向同一段代码）。
+
+> **滑档提醒**：`uniequip/uniequip_001_*.png`（证章）在 CDN 上是 404——它是
+> 「精英化后人人都有、恒 1 级」的东西，没有独立图。`training._modules()` 直接
+> 按 `kind == '证章'` 滤掉，模组列只放真模组；否则满屏灰块还 404 刷日志。
+
+### 统计口径
+
+- `total / sixStar / e2 / mastery3 / module3 / moduleCount / favorMax` 全部
+  **按真实模组算**（已滤掉证章）。注意 `stats.moduleCount`（updater 写的那个）
+  是**含证章**的，数字会大一个量级，两个别混着显示；
+- 默认序：星级 → 精英化 → 等级 → 名字。快照可能被旧版写过，这里不依赖它的顺序。
+
+### 接口
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/training?file=<账号>` | 整页数据：`account / chars / stats / filters / hasToken / syncedAt` |
+| `POST /api/training/refresh` | 用该账号存的 token 重新同步一次（后台任务，前端轮询 `/api/task`） |
+
+`refresh` 走的是现成的 `accounts.start_refresh(token=...)`，和侧栏「同步全部」
+同一条链路：`alias=''` 交给 `merge_preserved` 保留用户备注，`skd` 段不重写。
+**同一个 token 下的多个角色会一起刷新**——森空岛本来就是按 token 走绑定列表的。
+
+## 账号头像设置（`acctAvatar`，2026-11-29）
+
+森空岛的 `player/info` 其实一直给了两样东西，以前只用了一样：
+
+| 字段 | 长什么样 | 界面入口 |
+|---|---|---|
+| `status.avatar.url` | `https://web.hycdn.cn/arknights/game/assets/avatar/avatar_special_01.png`（游戏内头像，官方 CDN） | `/api/gasset/img?u=&s=96` 代理 |
+| `secretary.charId` | 看板娘（如 `char_2025_shu`），走 PRTS 那套头像 | `/api/avatar/<charId>` |
+
+设置 → 常规新增「账号头像」二选一，键是 `settings.acctAvatar`：`game`（默认）
+/ `secretary`。`settings.save()` 只认这两个值，写别的（手改 settings.json 写坏）
+一律回 `game`——界面上不能出现「认不出的取值」导致头像整片空掉。
+
+前端 `acctAvatarUrl(a)` 是唯一出口，侧栏账号卡、设置页预览、顶部大头像三处都
+走它；两样数据都没有（MAA 导入的号）就退昵称首字，`img onerror` 自删。
+
+## 定时任务（`scheduler.py`，2026-11-22）
 ## 定时任务（`scheduler.py`，2026-11-22）
 
 设置里的「定时任务」页：到点启动外部程序，支持链式启动。只做「把用户的程序

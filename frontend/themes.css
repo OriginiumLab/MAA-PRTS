@@ -48,6 +48,7 @@ html[data-theme="light"] {
   --text-2: #55617a;
   --text-3: #8a94a8;
   --mint: #0e9d8c;
+  --mint-rgb: 14, 157, 140;
   --mint-dim: rgba(14, 157, 140, 0.12);
   --indigo: #5a63d8;
   --amber: #b9761a;
@@ -75,6 +76,11 @@ html[data-theme="light"] .avatar {
 html[data-theme="light"] .modal-mask,
 html[data-theme="light"] .sheet-mask {
   background: rgba(17, 24, 39, 0.34);
+}
+
+/* 侧边抽屉的压暗也跟着变浅 */
+html[data-theme="light"] .gs-drawer {
+  box-shadow: -24px 0 60px rgba(0, 0, 0, .22), 0 0 0 100vmax rgba(17, 24, 39, .34);
 }
 
 /* 徽章 / 状态灯这类小色块，浅色下把亮度压下来一点 */
