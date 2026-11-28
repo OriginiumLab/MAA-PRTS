@@ -1005,5 +1005,12 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
   资源包）照样满屏空格；
 - **图标重试**：`trImgFail` 必须存在且挂在 `onerror` 上——直接 `remove()` 会把
   偶发超时变永久缺图。
+- **精英化 / 专精图标**（2026-11-29 换 PRTS 那套）：`frontend/img/elite-0/1/2.png`
+  三张素材要在（每张 >500 字节，缺一张角标就是空白）；`eliteIco` / `ELITE_COLOR`
+  在 js 里；`url(img/elite-N.png)` 与 `-webkit-mask-image` 在 css 里（只写标准
+  `mask-image` 在 Chromium 上不生效）；`.tr-tier` 的块里必须有 `z-index: 3`——
+  头像 `<img>` 带 z-index:1，不压住的话剑形只有露在头像外的一角可见；
+  专精改成三圆花后 `TR_MARK`（M1/M2/M3 文字）不许再出现，`.tr-mk .on/.off`
+  两种点态都在。
 
 全部打桩，不联网、不写真账号。

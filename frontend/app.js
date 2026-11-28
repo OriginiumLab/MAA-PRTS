@@ -5798,6 +5798,17 @@ const GS_GOLDEN = '<svg class="gs-golden" viewBox="0 0 26 14" aria-hidden="true"
   + '<path d="M13 5.6c-1.5 0-2.7-1.1-3.3-3.1L8.7 5.9 3.3 4.1l2.5 3.5 4.6.7 2.6-2.7z"/>'
   + '<path d="M13 5.6c1.5 0 2.7-1.1 3.3-3.1l1 3.4 5.4-1.8-2.5 3.5-4.6.7-2.6-2.7z"/>'
   + '<circle cx="13" cy="8.9" r="1.7"/></svg>';
+
+/* 精英化三档图标（PRTS 编辑器同款剑形）：E0 暗、E1 青、E2 金。
+   素材是 frontend/img/elite-N.png 的白色字形，靠 CSS mask 配 --tier 上色，
+   深浅主题共用一份，不用各存一套配色。卫戍战绩的干员卡和练度表都用它。 */
+const ELITE_NAME = ['精零', '精一', '精二'];
+const ELITE_COLOR = ['#8b93a1', '#30c0d8', '#f0a800'];
+function eliteIco(lv, cls) {
+  const n = Math.max(0, Math.min(2, Number(lv) || 0));
+  return `<i class="e-ico e${n}${cls ? ' ' + cls : ''}"`
+    + ` style="--tier:${ELITE_COLOR[n]}" title="${ELITE_NAME[n]}"></i>`;
+}
 const GS_TROPHY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
   + 'stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v4a5 5 0 0 1-10 0z"/>'
   + '<path d="M7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3"/><path d="M12 13v4M9 20h6"/></svg>';
@@ -5827,8 +5838,9 @@ function gsOperInner(o) {
 }
 
 function gsOperTip(o) {
+  const ph = ELITE_NAME[o.phase] || '';
   return `${o.name || '未知干员'}${o.tier ? ' · ' + GS_ROMAN[o.tier] + ' 阶' : ''}`
-    + `${o.golden ? ' · 精锐' : ''}${o.level ? ' · Lv.' + o.level : ''}`;
+    + `${ph ? ' · ' + ph : ''}${o.golden ? ' · 精锐' : ''}${o.level ? ' · Lv.' + o.level : ''}`;
 }
 
 function gsOper(o) {
@@ -6216,7 +6228,7 @@ function gsOpenDetail(rid) {
     return `<div class="gs-dt-oper" title="${esc(gsOperTip(o))}">
       <div class="av">${gsOperInner(o)}</div>
       <div class="nm">${esc(o.name)}</div>
-      <div class="lv">${o.tier ? `<b>${GS_ROMAN[o.tier]}</b> 阶` : ''}${o.level ? ` · Lv.${o.level}` : ''}</div>
+      <div class="lv">${eliteIco(o.phase, 'gs-e')}${o.tier ? `<b>${GS_ROMAN[o.tier]}</b> 阶` : ''}${o.level ? ` · Lv.${o.level}` : ''}</div>
       ${marks.length ? `<div class="marks">${marks.join('')}</div>` : ''}
       ${eqs ? `<div class="eqs">${eqs}</div>` : ''}
     </div>`;
@@ -6664,11 +6676,9 @@ async function gachaSync() {
    /api/training 只做整理，不发网络请求；图标（头像/技能/模组）走官方 CDN
    现取，安装包不带图。420 个干员全渲染会拖慢滚动，一页 60 行分页。 */
 const TR_PER = 60;
-const TR_ELITE = ['精零', '精一', '精二'];
-const TR_ELITE_COLOR = { 1: '#30c0d8', 2: '#f0a800' };
+// 精英化图标与专精花都在卫戍段定义（eliteIco / masteryIco），两页共用
 const TR_PROF = ['先锋', '近卫', '重装', '狙击', '术师', '医疗', '辅助', '特种'];
 const TR_RAR = [[0, '全部'], [6, '六星'], [5, '五星'], [4, '四星'], [3, '三星及以下']];
-const TR_MARK = ['', 'M1', 'M2', 'M3'];
 
 function trUrl(u, s) {
   return u ? `/api/garrison/img?u=${encodeURIComponent(u)}&s=${s || 96}` : '';
@@ -6695,24 +6705,32 @@ function trIco(cls, url, fallback, badge, tip, size) {
     + `<i>${esc(fallback)}</i>${img}${badge || ''}</span>`;
 }
 
+/* 专精是三颗圆点拼的花（PRTS 编辑器同款）：专一 / 专二 / 专三分别点亮 1/2/3
+   颗，比 M1/M2/M3 占地方小，扫一眼就知道满没满；未点亮的用半透明白垫着，
+   压在彩色技能图上也不糊。 */
+const TR_MK_DOT = [[50, 27], [76, 71], [24, 71]];
+function masteryIco(lv) {
+  const n = Math.max(1, Math.min(3, Number(lv) || 0));
+  const dots = TR_MK_DOT.map((d, i) =>
+    `<circle cx="${d[0]}" cy="${d[1]}" r="21" class="${i < n ? 'on' : 'off'}"/>`).join('');
+  return `<svg class="tr-mk" viewBox="0 0 100 100" aria-hidden="true">${dots}</svg>`;
+}
+
 function trSkill(s) {
-  const badge = s.mastery > 0 ? `<b class="tr-mk m${s.mastery}">${TR_MARK[s.mastery]}</b>` : '';
+  const badge = s.mastery > 0 ? masteryIco(s.mastery) : '';
   const tip = `${s.name}${s.mastery > 0 ? ' · 专' + '一二三'[s.mastery - 1] : ''}`;
   return trIco('tr-skill', s.icon, String(s.name || '技').slice(0, 1), badge, tip, 96);
 }
 
 function trModule(m) {
-  const badge = m.level > 0 ? `<b class="tr-mk lv${m.level}">${m.level}</b>` : '';
+  const badge = m.level > 0 ? `<b class="tr-mv lv${m.level}">${m.level}</b>` : '';
   return trIco('tr-mod', m.icon, '模', badge, `${m.name} · ${m.level} 级`, 96);
 }
 
 function trRow(c) {
   // 六颗小星星在 10px 下会糊成一条色块，直接写「6★」更清楚
   const stars = (c.rarity || 0) + '★';
-  const elite = c.elite > 0
-    ? `<i class="tr-tier" style="--tier:${TR_ELITE_COLOR[c.elite] || TR_ELITE_COLOR[1]}">${
-      c.elite >= 2 ? 'Ⅱ' : 'Ⅰ'}</i>`
-    : '';
+  const elite = eliteIco(c.elite, 'tr-tier');
   const av = `<span class="tr-av">${trIco('tr-avimg', c.avatar, String(c.name || '?').slice(0, 1), '', '', 96)}${elite}</span>`;
   const skills = (c.skills || []).length
     ? c.skills.map(trSkill).join('')
@@ -6730,7 +6748,7 @@ function trRow(c) {
       <div class="tr-meta">
         <span class="tr-stars r${c.rarity}">${stars}</span>
         <span>${esc(c.profession || '—')}</span>
-        <span class="tr-elite">${TR_ELITE[c.elite] || '精零'}</span>
+        <span class="tr-elite">${ELITE_NAME[c.elite] || '精零'}</span>
         <span class="tr-lv">Lv<b>${c.level || 0}</b></span>
         ${c.potential ? `<span class="tr-pot" title="潜能 ${c.potential}">潜${c.potential}</span>` : ''}
       </div>

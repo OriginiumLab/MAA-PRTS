@@ -10216,6 +10216,9 @@ def check_training(tmp):
     - **公共技能的等级后缀**（2026-11-29 补）：快照给的是被剥掉后缀的裸 id
       （``skcom_heal_up``），CDN 上只有 ``skcom_heal_up[1]/[2]/[3].png``，
       必须用资源包 ``chars[].skills`` 补正，否则整格空着。
+    - **精英化 / 专精图标**（2026-11-29 换 PRTS 那套）：三档剑形是本地素材
+      （``frontend/img/elite-0/1/2.png``，mask 上色、随包走），专精是内联 SVG
+      三圆花；``.tr-tier`` 必须压过头像 ``img`` 的 z-index，否则剑形只露一角。
     """
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     js = open(os.path.join(repo, 'frontend', 'app.js'), encoding='utf-8').read()
@@ -10348,7 +10351,23 @@ def check_training(tmp):
     assert "m.get('kind') == '证章'" in tr_src, '证章没被挡在模组列外'
     assert '.tr-skill' in css and '.tr-mod' in css and '--tr-cols' in css
 
-    # 5) 半透明薄荷：--mint 是十六进制，套进 rgba() 是非法值（分页高亮曾经因此失效）
+    # 5) 精英化 / 专精图标（2026-11-29 换的 PRTS 那套）
+    #   剑形三档是本地素材（约 2~3KB，跟包走，不走 CDN）；专精是内联 SVG 三圆花,
+    #   不能再退回 M1/M2/M3 文字角标——用户就是嫌那三个字母占地方。
+    for _lv in (0, 1, 2):
+        _p = os.path.join(repo, 'frontend', 'img', 'elite-%d.png' % _lv)
+        assert os.path.isfile(_p) and os.path.getsize(_p) > 500, '缺精英化图标素材：%s' % _p
+    assert 'function eliteIco' in js and 'const ELITE_COLOR' in js, '精英化图标生成函数没了'
+    assert 'function masteryIco' in js and 'TR_MK_DOT' in js, '专精花没了'
+    assert 'TR_MARK' not in js, '专精还留着 M1/M2/M3 文字角标'
+    for _lv in (0, 1, 2):
+        assert 'url(img/elite-%d.png)' % _lv in css, 'E%d 剑形没挂到样式上' % _lv
+    assert '-webkit-mask-image' in css, 'Chromium 还要 -webkit-mask-image'
+    assert '.tr-mk .on' in css and '.tr-mk .off' in css, '专精点亮/未点亮没分色'
+    # 头像角标必须压过 .tr-avimg img 的 z-index，否则只露出外面那一角（本次踩过）
+    assert '.tr-tier {' in css and 'z-index: 3' in css, '精英角标会被头像图盖住'
+
+    # 6) 半透明薄荷：--mint 是十六进制，套进 rgba() 是非法值（分页高亮曾经因此失效）
     assert '--mint-rgb' in css and '--mint-rgb' in themes, '缺 --mint-rgb 三元组'
     assert 'rgba(var(--mint),' not in css, '还有非法的 rgba(var(--mint)) 写法'
     assert '.gs-page-btn.active' in css and 'rgba(var(--mint-rgb)' in css
