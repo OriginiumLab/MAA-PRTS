@@ -18,6 +18,7 @@ import io
 import os
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -90,14 +91,28 @@ def _kind(data: bytes) -> str:
 
 
 def _get(url: str) -> bytes:
+    """取原图：网络层失败重试一次
+
+    一屏练度表会同时发几百个 icon 请求，CDN 偶发断流/超时是常态（实测同一个
+    地址前一次 TimeoutError、后一次就 200）。404 这类有应答的错误不重试——
+    那是真没有；网络层错误重试一次能把「偶尔少一张图」压掉大半。
+    """
     from .version import app_version
     req = urllib.request.Request(url, headers={
         'User-Agent': 'MAA-PRTS/%s' % app_version(),
         'Accept': 'image/webp,image/png,image/*;q=0.8',
         'Referer': 'https://www.skland.com/',
     })
-    with net.open(req, timeout=TIMEOUT) as r:
-        return r.read(MAX_BYTES + 1)
+    for attempt in (1, 2):
+        try:
+            with net.open(req, timeout=TIMEOUT) as r:
+                return r.read(MAX_BYTES + 1)
+        except urllib.error.HTTPError:
+            raise                      # 有状态码：没有再试的意义
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+            if attempt == 2:
+                raise
+            time.sleep(0.35)
 
 
 def _to_webp(raw: bytes, size: int) -> bytes:

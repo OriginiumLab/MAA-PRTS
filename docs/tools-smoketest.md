@@ -997,5 +997,20 @@ v2.8.7 装好后桌面快捷方式还是旧图。`install.ps1` 换完文件直�
   `game` 是兜底；
 - **样式**：`--mint-rgb` 在两个主题里都定义了，`rgba(var(--mint),` 这种非法写法
   一个都不许留（分页高亮曾经因此一直不生效）。
+- **公共技能的等级后缀**（2026-11-29 补，用户报「部分图标丢失」）：喂一个技能 id
+  是裸 `skcom_heal_up` 的快照 + 一个 `char_table` 里给 `skcom_heal_up[3]` 的桩，
+  断言出来的 `id/icon/name` 都变成带后缀那份（`skcom_heal_up%5B3%5D.png`、
+  「治疗强化·γ型」）；同时检查 `resources.char_table()` 里真有带 `[` 的 id、
+  `make_pack.py` 里有生成 `chars[].skills` 的代码——只修一半（改了客户端没改
+  资源包）照样满屏空格；
+- **图标重试**：`trImgFail` 必须存在且挂在 `onerror` 上——直接 `remove()` 会把
+  偶发超时变永久缺图。
+- **精英化 / 专精图标**（2026-11-29 换 PRTS 那套）：`frontend/img/elite-0/1/2.png`
+  三张素材要在（每张 >500 字节，缺一张角标就是空白）；`eliteIco` / `ELITE_COLOR`
+  在 js 里；`url(img/elite-N.png)` 与 `-webkit-mask-image` 在 css 里（只写标准
+  `mask-image` 在 Chromium 上不生效）；`.tr-tier` 的块里必须有 `z-index: 3`——
+  头像 `<img>` 带 z-index:1，不压住的话剑形只有露在头像外的一角可见；
+  专精改成三圆花后 `TR_MARK`（M1/M2/M3 文字）不许再出现，`.tr-mk .on/.off`
+  两种点态都在。
 
 全部打桩，不联网、不写真账号。
